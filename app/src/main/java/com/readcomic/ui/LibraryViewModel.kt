@@ -57,6 +57,13 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     )
     val orientation: StateFlow<OrientationLock> = _orientation.asStateFlow()
 
+    /** The library as a wall of shelves (true) or a plain grid of covers. */
+    private val _shelfMode = MutableStateFlow(prefs.getBoolean(KEY_SHELF_MODE, true))
+    val shelfMode: StateFlow<Boolean> = _shelfMode.asStateFlow()
+
+    /** Where the shelves were scrolled to, to come back there after reading. */
+    var shelfScroll = Float.NaN
+
     init {
         viewModelScope.launch(Dispatchers.IO) {
             var list = store.load()
@@ -156,6 +163,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putString(KEY_READING_MODE, mode.name) }
     }
 
+    fun setShelfMode(enabled: Boolean) {
+        _shelfMode.value = enabled
+        prefs.edit { putBoolean(KEY_SHELF_MODE, enabled) }
+    }
+
     fun setOrientation(lock: OrientationLock) {
         _orientation.value = lock
         prefs.edit { putString(KEY_ORIENTATION, lock.name) }
@@ -223,6 +235,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_BACKGROUND = "background"
         private const val KEY_READING_MODE = "reading_mode"
         private const val KEY_ORIENTATION = "orientation"
+        private const val KEY_SHELF_MODE = "shelf_mode"
         const val COVER_WIDTH = 360
         const val COVER_HEIGHT = 560
     }

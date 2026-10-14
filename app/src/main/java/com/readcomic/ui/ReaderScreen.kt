@@ -2,6 +2,7 @@ package com.readcomic.ui
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.opengl.GLSurfaceView
 import android.util.LruCache
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -592,7 +593,7 @@ private fun VolumeKeys(onKey: (next: Boolean) -> Unit) {
 
 /** GLSurfaceView has to be paused and resumed together with the activity. */
 @Composable
-private fun GlLifecycle(view: PageCurlView?) {
+internal fun GlLifecycle(view: GLSurfaceView?) {
     if (view == null) return
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(view, lifecycle) {

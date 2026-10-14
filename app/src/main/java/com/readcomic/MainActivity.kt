@@ -86,6 +86,7 @@ private fun App(viewModel: LibraryViewModel) {
     val backgroundTint by viewModel.backgroundTint.collectAsStateWithLifecycle()
     val readingMode by viewModel.readingMode.collectAsStateWithLifecycle()
     val orientation by viewModel.orientation.collectAsStateWithLifecycle()
+    val shelfMode by viewModel.shelfMode.collectAsStateWithLifecycle()
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     MessagesEffect(viewModel.messages, snackbar)
@@ -131,6 +132,10 @@ private fun App(viewModel: LibraryViewModel) {
                 busy = busy,
                 snackbar = snackbar,
                 coverFile = viewModel::coverFile,
+                shelfMode = shelfMode,
+                shelfScroll = viewModel.shelfScroll,
+                onShelfModeChange = viewModel::setShelfMode,
+                onShelfScroll = { viewModel.shelfScroll = it },
                 onAdd = { picker.launch(arrayOf("*/*")) },
                 onOpen = { openId = it.id },
                 onRemove = viewModel::remove,

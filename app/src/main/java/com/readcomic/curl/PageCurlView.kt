@@ -16,9 +16,6 @@ import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
-import javax.microedition.khronos.egl.EGL10
-import javax.microedition.khronos.egl.EGLConfig
-import javax.microedition.khronos.egl.EGLDisplay
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
@@ -57,7 +54,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     init {
         setEGLContextClientVersion(3)
-        setEGLConfigChooser(ConfigChooser())
+        setEGLConfigChooser(GlConfigChooser())
         preserveEGLContextOnPause = true
         renderer = CurlRenderer(context.assets, controller, textures, ::requestRender)
         setRenderer(renderer)
@@ -349,45 +346,5 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     private companion object {
         /** A fling is considered still running this long after it started. */
         const val FLING_STOP_WINDOW_MS = 700L
-    }
-
-    /** Prefers ES 3 with 4x MSAA for smooth page edges, falls back gracefully. */
-    private class ConfigChooser : EGLConfigChooser {
-        override fun chooseConfig(egl: EGL10, display: EGLDisplay): EGLConfig {
-            val attempts = listOf(
-                attributes(EGL_OPENGL_ES3_BIT, 4),
-                attributes(EGL_OPENGL_ES3_BIT, 0),
-                attributes(EGL_OPENGL_ES2_BIT, 4),
-                attributes(EGL_OPENGL_ES2_BIT, 0),
-            )
-            for (attributes in attempts) {
-                val configs = arrayOfNulls<EGLConfig>(1)
-                val count = IntArray(1)
-                if (egl.eglChooseConfig(display, attributes, configs, 1, count) && count[0] > 0) {
-                    configs[0]?.let { return it }
-                }
-            }
-            throw IllegalStateException("No suitable EGL config")
-        }
-
-        private fun attributes(renderable: Int, samples: Int): IntArray {
-            val list = mutableListOf(
-                EGL10.EGL_RED_SIZE, 8,
-                EGL10.EGL_GREEN_SIZE, 8,
-                EGL10.EGL_BLUE_SIZE, 8,
-                EGL10.EGL_DEPTH_SIZE, 16,
-                EGL10.EGL_RENDERABLE_TYPE, renderable,
-            )
-            if (samples > 0) {
-                list += listOf(EGL10.EGL_SAMPLE_BUFFERS, 1, EGL10.EGL_SAMPLES, samples)
-            }
-            list += EGL10.EGL_NONE
-            return list.toIntArray()
-        }
-
-        private companion object {
-            const val EGL_OPENGL_ES2_BIT = 0x0004
-            const val EGL_OPENGL_ES3_BIT = 0x0040
-        }
     }
 }
