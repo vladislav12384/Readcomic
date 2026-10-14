@@ -8,7 +8,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.view.Choreographer
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -17,7 +16,6 @@ import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
@@ -54,43 +52,14 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     )
     private val renderer: CurlRenderer
 
-    // region Frame pacing
-
-    /*
-     * Frames are drawn once per display refresh, started by the Choreographer, and every frame
-     * knows which refresh it is for. Animations then advance by exactly the time between
-     * refreshes, and the fingers are read at that moment (see TouchTrack): no uneven steps.
-     */
-    private val choreographer = Choreographer.getInstance()
-
-    @Volatile
-    private var vsyncNanos = 0L
-    private val pacing = AtomicBoolean(false)
-
-    @Volatile
-    private var touching = false
-
-    /** No frames while the activity is paused: the surface would not show them anyway. */
-    @Volatile
-    private var paused = false
-
-    private val frameCallback = object : Choreographer.FrameCallback {
-        override fun doFrame(frameTimeNanos: Long) {
-            vsyncNanos = frameTimeNanos
-            super@PageCurlView.requestRender()
-            pacing.set(false)
-            if (renderer.wantsFrames || touching) requestFrame()
-        }
-    }
-
-    private val startPacing = Runnable { choreographer.postFrameCallback(frameCallback) }
+    private val pacer = FramePacer(render = { requestRender() }, wantsFrames = { renderer.wantsFrames })
 
     init {
         setEGLContextClientVersion(3)
         setEGLConfigChooser(GlConfigChooser())
         preserveEGLContextOnPause = true
         renderer = CurlRenderer(context.assets, controller, textures) { requestFrame() }
-        renderer.frameClock = { vsyncNanos }
+        renderer.frameClock = { pacer.frameNanos }
         renderer.beforeFrame = ::followFingers
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY
@@ -106,13 +75,8 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         }
     }
 
-    /** Asks for a frame at the next display refresh (and keeps them coming while anything moves). Any thread. */
-    private fun requestFrame() {
-        if (paused || !pacing.compareAndSet(false, true)) return
-        if (Looper.myLooper() == Looper.getMainLooper()) startPacing.run() else mainHandler.post(startPacing)
-    }
-
-    // endregion
+    /** A frame at the next display refresh (frames keep coming while anything moves). Any thread. */
+    private fun requestFrame() = pacer.requestFrame()
 
     // region Public API (UI thread)
 
@@ -166,22 +130,17 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     override fun onPause() {
         super.onPause()
-        paused = true
-        choreographer.removeFrameCallback(frameCallback)
-        mainHandler.removeCallbacks(startPacing)
-        pacing.set(false)
+        pacer.pause()
     }
 
     override fun onResume() {
         super.onResume()
-        paused = false
-        requestFrame()
+        pacer.resume()
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        choreographer.removeFrameCallback(frameCallback)
-        mainHandler.removeCallbacks(startPacing)
+        pacer.stop()
         scope.cancel()
     }
 
@@ -349,7 +308,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
                 downX = event.x
                 downY = event.y
                 mode = Mode.NONE
-                touching = true
+                pacer.touching = true
                 renderer.touching = true
                 track.clear()
                 record(event, pointerId)
@@ -463,7 +422,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     private fun finishTouch(tracker: VelocityTracker) {
         mode = Mode.NONE
         pointerId = MotionEvent.INVALID_POINTER_ID
-        touching = false
+        pacer.touching = false
         renderer.touching = false
         tracker.recycle()
         velocityTracker = null

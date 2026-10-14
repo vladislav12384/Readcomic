@@ -3,6 +3,7 @@ package com.readcomic.shelf
 import android.content.res.AssetManager
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
+import android.os.Process
 import com.readcomic.curl.GlProgram
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -45,7 +46,22 @@ class ShelfRenderer(
     @Volatile
     var wallColor = floatArrayOf(0.17f, 0.22f, 0.17f)
 
+    /** The display refresh the frame is drawn for (System.nanoTime clock), 0 when unknown. */
+    var frameClock: () -> Long = { 0L }
+
+    /** Called at the start of every frame with its time, to apply the finger's current position. */
+    var beforeFrame: ((frameNanos: Long) -> Unit)? = null
+
+    @Volatile
+    var touching = false
+
+    /** Set at the end of every frame: whether the next one is needed. */
+    @Volatile
+    var wantsFrames = false
+        private set
+
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
         program = GlProgram.fromAssets(assets, "shelf.vert", "shelf.frag")
         depthProgram = GlProgram.fromAssets(assets, "shelf_depth.vert", "shelf_depth.frag")
         comicMeshes.clear()
@@ -64,11 +80,12 @@ class ShelfRenderer(
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        val now = System.nanoTime()
+        val now = frameClock().takeIf { it > 0L } ?: System.nanoTime()
         val dt = if (lastFrameNanos == 0L) 1f / 60f else ((now - lastFrameNanos) / 1e9f).coerceIn(0f, 1f / 20f)
+        beforeFrame?.invoke(now)
         var animating = controller.step(dt)
-        if (art.uploadPending(budgetMillis = if (animating) 4L else 12L)) animating = true
-        lastFrameNanos = if (animating) now else 0L
+        if (art.uploadPending(budgetMillis = if (animating || touching) 3L else 10L)) animating = true
+        lastFrameNanos = if (animating || touching) now else 0L
 
         val frame = controller.frame()
         for (comic in frame.comics) {
@@ -84,6 +101,7 @@ class ShelfRenderer(
 
         renderShadows(frame)
         renderScene(frame)
+        wantsFrames = animating
         if (animating) requestRender()
     }
 

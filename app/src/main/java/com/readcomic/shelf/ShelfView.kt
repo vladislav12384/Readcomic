@@ -3,13 +3,16 @@ package com.readcomic.shelf
 import android.annotation.SuppressLint
 import android.content.Context
 import android.opengl.GLSurfaceView
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
+import com.readcomic.curl.FramePacer
 import com.readcomic.curl.GlConfigChooser
+import com.readcomic.curl.TouchTrack
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlin.math.hypot
@@ -36,14 +39,17 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     private val controller = ShelfController(density)
     private val scope = MainScope()
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val artCache = ShelfArtCache(scope) { requestRender() }
+    private val artCache = ShelfArtCache(scope) { requestFrame() }
     private val renderer: ShelfRenderer
+    private val pacer = FramePacer(render = { requestRender() }, wantsFrames = { renderer.wantsFrames })
 
     init {
         setEGLContextClientVersion(3)
         setEGLConfigChooser(GlConfigChooser())
         preserveEGLContextOnPause = true
-        renderer = ShelfRenderer(context.assets, controller, artCache, ::requestRender)
+        renderer = ShelfRenderer(context.assets, controller, artCache) { requestFrame() }
+        renderer.frameClock = { pacer.frameNanos }
+        renderer.beforeFrame = ::followFinger
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY
         isHapticFeedbackEnabled = true
@@ -75,13 +81,13 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     /** Colour of the room behind the wall, components in 0..1. */
     fun setClearColor(red: Float, green: Float, blue: Float) {
         renderer.clearColor = floatArrayOf(red, green, blue)
-        requestRender()
+        requestFrame()
     }
 
     /** Paint of the wall behind the shelves, linear components in 0..1. */
     fun setWallColor(red: Float, green: Float, blue: Float) {
         renderer.wallColor = floatArrayOf(red, green, blue)
-        requestRender()
+        requestFrame()
     }
 
     /** The shelf lights come on one after another, as when walking into the room. */
@@ -91,11 +97,24 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
 
     private inline fun onGl(crossinline block: () -> Unit) {
         queueEvent { block() }
-        requestRender()
+        requestFrame()
+    }
+
+    private fun requestFrame() = pacer.requestFrame()
+
+    override fun onPause() {
+        super.onPause()
+        pacer.pause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pacer.resume()
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        pacer.stop()
         scope.cancel()
     }
 
@@ -108,8 +127,32 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     private var dragging = false
     private var downX = 0f
     private var downY = 0f
-    private var lastX = 0f
-    private var lastY = 0f
+
+    /** The finger's path, read by the render thread at the time of each frame. */
+    private val track = TouchTrack()
+    private val sample = FloatArray(3)
+
+    // Render thread only: whether the finger drives the shelves, and where it was last frame.
+    private var following = false
+    private var appliedX = 0f
+    private var appliedY = 0f
+
+    /** Render thread, start of a frame: moves the shelves (or the comic) by where the finger went since. */
+    private fun followFinger(frameNanos: Long) {
+        if (!following || !track.sample(frameNanos - RESAMPLE_DELAY_NANOS, sample)) return
+        val dx = sample[0] - appliedX
+        val dy = sample[1] - appliedY
+        appliedX = sample[0]
+        appliedY = sample[1]
+        if (dx != 0f || dy != 0f) controller.drag(dx, dy)
+    }
+
+    private fun record(event: MotionEvent, index: Int) {
+        for (h in 0 until event.historySize) {
+            track.add(historicalNanos(event, h), event.getHistoricalX(index, h), event.getHistoricalY(index, h))
+        }
+        track.add(eventNanos(event), event.getX(index), event.getY(index))
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -118,11 +161,11 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
                 pointerId = event.getPointerId(0)
                 downX = event.x
                 downY = event.y
-                lastX = downX
-                lastY = downY
                 dragging = false
                 velocity?.recycle()
                 velocity = VelocityTracker.obtain().also { it.addMovement(event) }
+                pacer.touching = true
+                renderer.touching = true
                 // A finger on the glass stops the shelves or the spinning comic.
                 onGl { controller.drag(0f, 0f) }
             }
@@ -137,44 +180,61 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
                     dragging = true
                     parent?.requestDisallowInterceptTouchEvent(true)
                     // Start from where the finger is now, without a jump of the slop distance.
-                    lastX = x
-                    lastY = y
-                }
-                if (dragging) {
-                    val dx = x - lastX
-                    val dy = y - lastY
-                    lastX = x
-                    lastY = y
-                    onGl { controller.drag(dx, dy) }
+                    track.clear()
+                    track.add(eventNanos(event), x, y)
+                    onGl {
+                        following = true
+                        appliedX = x
+                        appliedY = y
+                    }
+                } else if (dragging) {
+                    record(event, index)
+                    requestFrame()
                 }
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
-                // Follow the remaining finger if the tracked one lifts.
+                // Follow the remaining finger if the tracked one lifts, from where it is.
                 if (event.getPointerId(event.actionIndex) == pointerId) {
                     val other = if (event.actionIndex == 0) 1 else 0
                     pointerId = event.getPointerId(other)
-                    lastX = event.getX(other)
-                    lastY = event.getY(other)
+                    val x = event.getX(other)
+                    val y = event.getY(other)
+                    track.clear()
+                    track.add(eventNanos(event), x, y)
+                    onGl {
+                        appliedX = x
+                        appliedY = y
+                    }
                 }
             }
 
             MotionEvent.ACTION_UP -> {
                 val tracker = velocity
                 if (dragging) {
+                    tracker?.addMovement(event)
                     tracker?.computeCurrentVelocity(1000, maxFling)
                     val vx = tracker?.getXVelocity(pointerId) ?: 0f
                     val vy = tracker?.getYVelocity(pointerId) ?: 0f
-                    onGl { controller.release(vx, vy) }
+                    onGl {
+                        following = false
+                        controller.release(vx, vy)
+                    }
                 } else {
-                    onGl { controller.release(0f, 0f) }
+                    onGl {
+                        following = false
+                        controller.release(0f, 0f)
+                    }
                     tap(event.x, event.y)
                 }
                 finishGesture()
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                onGl { controller.release(0f, 0f) }
+                onGl {
+                    following = false
+                    controller.release(0f, 0f)
+                }
                 finishGesture()
             }
         }
@@ -192,6 +252,19 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
         velocity = null
         dragging = false
         pointerId = MotionEvent.INVALID_POINTER_ID
+        pacer.touching = false
+        renderer.touching = false
+    }
+
+    private fun eventNanos(event: MotionEvent): Long =
+        if (Build.VERSION.SDK_INT >= 34) event.eventTimeNanos else event.eventTime * NANOS_PER_MILLI
+
+    private fun historicalNanos(event: MotionEvent, h: Int): Long =
+        if (Build.VERSION.SDK_INT >= 34) event.getHistoricalEventTimeNanos(h) else event.getHistoricalEventTime(h) * NANOS_PER_MILLI
+
+    private companion object {
+        const val NANOS_PER_MILLI = 1_000_000L
+        const val RESAMPLE_DELAY_NANOS = 6_000_000L
     }
 
     // endregion
