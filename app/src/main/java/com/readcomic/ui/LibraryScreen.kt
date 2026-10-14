@@ -129,16 +129,19 @@ fun LibraryScreen(
     onShelfScroll: (Float) -> Unit,
     onShelfThemeChange: (Int) -> Unit,
     onShelfHintSeen: () -> Unit,
+    folders: FolderState,
     onAdd: () -> Unit,
     onOpen: (ComicEntry) -> Unit,
     onRemove: (ComicEntry) -> Unit,
 ) {
     var toRemove by remember { mutableStateOf<ComicEntry?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    val working = busy || folders.scanning != null
 
     if (shelfMode) {
         ShelfLibrary(
             comics = comics,
-            busy = busy,
+            busy = working,
             snackbar = snackbar,
             coverFile = coverFile,
             theme = shelfTheme,
@@ -148,21 +151,25 @@ fun LibraryScreen(
             onShowGrid = { onShelfModeChange(false) },
             onThemeChange = onShelfThemeChange,
             onHintSeen = onShelfHintSeen,
-            onAdd = onAdd,
+            onAdd = { adding = true },
             onOpen = onOpen,
             onRemove = { toRemove = it },
         )
     } else {
         GridLibrary(
             comics = comics,
-            busy = busy,
+            busy = working,
             snackbar = snackbar,
             coverFile = coverFile,
             onShowShelves = { onShelfModeChange(true) },
-            onAdd = onAdd,
+            onAdd = { adding = true },
             onOpen = onOpen,
             onRemove = { toRemove = it },
         )
+    }
+
+    if (adding) {
+        CollectionSheet(folders = folders, onAddFiles = onAdd, onDismiss = { adding = false })
     }
 
     toRemove?.let { entry ->
@@ -574,6 +581,18 @@ private fun HeldComicCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    val credits = listOfNotNull(entry.writer, entry.year?.toString()).joinToString(" · ")
+                    if (credits.isNotEmpty()) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            credits,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontStyle = FontStyle.Italic,
+                            color = ShelfInk.copy(alpha = 0.6f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Spacer(Modifier.height(4.dp))
                     Text(
                         when {

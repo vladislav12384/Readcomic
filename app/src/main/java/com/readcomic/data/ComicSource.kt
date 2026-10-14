@@ -26,10 +26,13 @@ interface ComicSource : Closeable {
 
     /** Makes every page quick to load; may take a while, call it in the background. */
     fun prepare(onProgress: (Float) -> Unit = {}) = Unit
+
+    /** Title, series, writer… if the file says; may read a little of it. */
+    val metadata: ComicMetadata? get() = null
 }
 
 object PageDecoder {
-    private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif", "avif")
+    private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "bmp", "heic", "heif", "avif")
 
     fun isImageName(name: String): Boolean {
         val file = name.substringAfterLast('/')

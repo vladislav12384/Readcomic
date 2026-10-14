@@ -1,38 +1,33 @@
 package com.readcomic.ui
 
 import android.app.Application
-import android.content.Intent
 import android.net.Uri
 import androidx.core.content.edit
-import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.readcomic.data.ComicEntry
 import com.readcomic.curl.PageTurnController.ReadingMode
-import com.readcomic.data.ComicOpener
+import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicSource
-import com.readcomic.data.LibraryStore
-import kotlinx.coroutines.Dispatchers
+import com.readcomic.data.LibraryRepository
+import com.readcomic.data.ScanInterval
+import com.readcomic.data.ScanReport
+import com.readcomic.data.WatchedFolder
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
-    private val app = application
-    private val store = LibraryStore(application)
+    private val library = LibraryRepository.get(application)
     private val prefs = application.getSharedPreferences("settings", 0)
-    private val saveLock = Mutex()
 
-    private val _comics = MutableStateFlow<List<ComicEntry>>(emptyList())
-    val comics: StateFlow<List<ComicEntry>> = _comics.asStateFlow()
+    val comics: StateFlow<List<ComicEntry>> = library.comics
+    val folders: StateFlow<List<WatchedFolder>> = library.folders
+    val scanning = library.scanning
+    val scanInterval: StateFlow<ScanInterval> = library.scanInterval
 
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
@@ -73,64 +68,35 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val shelfHintDone: StateFlow<Boolean> = _shelfHintDone.asStateFlow()
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {
-            var list = store.load()
-            if (!prefs.getBoolean(KEY_DEMO_ADDED, false)) {
-                runCatching { import(ComicOpener.DEMO_URI, "Демо: как пользоваться") }.getOrNull()?.let { list = list + it }
-                prefs.edit { putBoolean(KEY_DEMO_ADDED, true) }
-                store.save(list)
-            }
-            _comics.value = list
+        // New comics may have appeared in the watched folders while the app was closed.
+        viewModelScope.launch {
+            library.awaitReady()
+            library.scheduleScans()
+            if (library.folders.value.isNotEmpty()) report(library.scanAll(), quiet = true)
         }
     }
 
-    fun coverFile(entry: ComicEntry) = store.coverFile(entry.id)
+    fun coverFile(entry: ComicEntry) = library.coverFile(entry.id)
 
     fun addComics(uris: List<Uri>) {
         if (uris.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             _busy.value = true
-            var failed = 0
-            for (uri in uris) {
-                try {
-                    app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                } catch (_: SecurityException) {
-                }
-                val entry = runCatching {
-                    import(uri.toString(), ComicOpener.titleFromName(ComicOpener.displayName(app, uri)))
-                }.getOrNull()
-                if (entry == null) failed++ else upsert(entry)
-            }
+            val failed = library.addFiles(uris)
             _busy.value = false
             if (failed > 0) {
-                _messages.tryEmit(
-                    if (uris.size == 1) "Не удалось открыть файл" else "Не удалось открыть файлов: $failed",
-                )
+                _messages.tryEmit(if (uris.size == 1) "Не удалось открыть файл" else "Не удалось открыть файлов: $failed")
             }
         }
     }
 
     /** A file opened from another app: add it (if possible) and open it right away. */
     fun openExternal(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val id = LibraryStore.idFor(uri.toString())
-            if (_comics.value.none { it.id == id }) {
-                _busy.value = true
-                try {
-                    app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                } catch (_: SecurityException) {
-                }
-                val entry = runCatching {
-                    import(uri.toString(), ComicOpener.titleFromName(ComicOpener.displayName(app, uri)))
-                }.getOrNull()
-                _busy.value = false
-                if (entry == null) {
-                    _messages.tryEmit("Не удалось открыть файл")
-                    return@launch
-                }
-                upsert(entry)
-            }
-            _openRequest.value = id
+        viewModelScope.launch {
+            _busy.value = true
+            val id = library.addExternal(uri)
+            _busy.value = false
+            if (id == null) _messages.tryEmit("Не удалось открыть файл") else _openRequest.value = id
         }
     }
 
@@ -139,32 +105,46 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun remove(entry: ComicEntry) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _comics.update { list -> list.filter { it.id != entry.id } }
-            persist()
-            store.deleteCover(entry.id)
-            if (!ComicOpener.isDemo(entry.uri)) {
-                runCatching {
-                    app.contentResolver.releasePersistableUriPermission(
-                        entry.uri.toUri(), Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                    )
-                }
+        viewModelScope.launch { library.remove(entry) }
+    }
+
+    fun updateProgress(id: String, firstPage: Int, lastPage: Int) = library.updateProgress(id, firstPage, lastPage)
+
+    suspend fun pageAspects(entry: ComicEntry, source: ComicSource, onProgress: (Float) -> Unit): FloatArray =
+        library.pageAspects(entry, source, onProgress)
+
+    // region Watched folders
+
+    fun addFolder(uri: Uri) {
+        viewModelScope.launch {
+            val report = library.addFolder(uri)
+            if (report.failed.isNotEmpty()) {
+                _messages.tryEmit("Не получилось прочитать папку")
+            } else {
+                _messages.tryEmit(if (report.added > 0) "Из папки добавлено: ${comicsCount(report.added)}" else "В папке пока нет комиксов — буду следить за новыми")
             }
         }
     }
 
-    fun updateProgress(id: String, firstPage: Int, lastPage: Int) {
-        _comics.update { list ->
-            list.map {
-                if (it.id == id) {
-                    it.copy(currentPage = firstPage, lastVisiblePage = lastPage, lastReadAt = System.currentTimeMillis())
-                } else {
-                    it
-                }
-            }
-        }
-        viewModelScope.launch(Dispatchers.IO) { persist() }
+    fun removeFolder(folder: WatchedFolder) {
+        viewModelScope.launch { library.removeFolder(folder) }
     }
+
+    fun scanNow() {
+        viewModelScope.launch { report(library.scanAll(), quiet = false) }
+    }
+
+    fun setScanInterval(interval: ScanInterval) = library.setScanInterval(interval)
+
+    private fun report(report: ScanReport, quiet: Boolean) {
+        when {
+            report.failed.isNotEmpty() -> _messages.tryEmit("Нет доступа к папке «${report.failed.first()}» — добавь её заново")
+            report.added > 0 -> _messages.tryEmit("Новые комиксы: ${comicsCount(report.added)}")
+            !quiet -> _messages.tryEmit("Новых комиксов нет")
+        }
+    }
+
+    // endregion
 
     fun setReadingMode(mode: ReadingMode) {
         _readingMode.value = mode
@@ -192,72 +172,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putString(KEY_ORIENTATION, lock.name) }
     }
 
-    /**
-     * Width / height of every page of an opened comic (0 where unknown). Reading them means a
-     * pass over the whole archive, so the result is cached per comic.
-     */
-    suspend fun pageAspects(
-        entry: ComicEntry,
-        source: ComicSource,
-        onProgress: (Float) -> Unit,
-    ): FloatArray = withContext(Dispatchers.IO) {
-        val count = source.pageCount
-        if (count != entry.pageCount) {
-            _comics.update { list -> list.map { if (it.id == entry.id) it.copy(pageCount = count) else it } }
-            persist()
-        }
-        val demo = ComicOpener.isDemo(entry.uri)
-        if (!demo) store.loadAspects(entry.id, count)?.let { return@withContext it }
-        val sizes = runCatching { source.readPageSizes(onProgress) }.getOrDefault(emptyList())
-        val aspects = FloatArray(count) { i -> sizes.getOrNull(i)?.let { (w, h) -> w.toFloat() / h } ?: 0f }
-        if (!demo && sizes.isNotEmpty()) store.saveAspects(entry.id, aspects)
-        aspects
-    }
-
     fun setBackgroundTint(index: Int) {
         _backgroundTint.value = index
         prefs.edit { putInt(KEY_BACKGROUND, index) }
     }
 
-    private fun import(uri: String, title: String): ComicEntry {
-        val id = LibraryStore.idFor(uri)
-        ComicOpener.open(app, uri).use { source ->
-            source.loadPage(0, COVER_WIDTH, COVER_HEIGHT)?.let { cover ->
-                store.saveCover(id, cover)
-                cover.recycle()
-            }
-            val existing = _comics.value.firstOrNull { it.id == id }
-            return ComicEntry(
-                id = id,
-                uri = uri,
-                title = existing?.title ?: title,
-                pageCount = source.pageCount,
-                currentPage = (existing?.currentPage ?: 0).coerceIn(0, source.pageCount - 1),
-                addedAt = existing?.addedAt ?: System.currentTimeMillis(),
-                lastReadAt = existing?.lastReadAt ?: 0L,
-                lastVisiblePage = (existing?.lastVisiblePage ?: 0).coerceIn(0, source.pageCount - 1),
-            )
-        }
-    }
-
-    private suspend fun upsert(entry: ComicEntry) {
-        _comics.update { list ->
-            if (list.any { it.id == entry.id }) list.map { if (it.id == entry.id) entry else it } else list + entry
-        }
-        persist()
-    }
-
-    private suspend fun persist() = saveLock.withLock { store.save(_comics.value) }
-
     companion object {
-        private const val KEY_DEMO_ADDED = "demo_added"
         private const val KEY_BACKGROUND = "background"
         private const val KEY_READING_MODE = "reading_mode"
         private const val KEY_ORIENTATION = "orientation"
         private const val KEY_SHELF_MODE = "shelf_mode"
         private const val KEY_SHELF_THEME = "shelf_theme"
         private const val KEY_SHELF_HINT = "shelf_hint"
-        const val COVER_WIDTH = 360
-        const val COVER_HEIGHT = 560
     }
 }

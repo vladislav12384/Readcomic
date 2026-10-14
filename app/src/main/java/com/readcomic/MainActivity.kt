@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.readcomic.ui.FolderState
 import com.readcomic.ui.LibraryScreen
 import com.readcomic.ui.LibraryViewModel
 import com.readcomic.ui.MessagesEffect
@@ -103,6 +104,12 @@ private fun App(viewModel: LibraryViewModel) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         viewModel.addComics(uris)
     }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let(viewModel::addFolder)
+    }
+    val folders by viewModel.folders.collectAsStateWithLifecycle()
+    val scanning by viewModel.scanning.collectAsStateWithLifecycle()
+    val scanInterval by viewModel.scanInterval.collectAsStateWithLifecycle()
 
     val opened = comics.firstOrNull { it.id == openId }
     BackHandler(enabled = opened != null) { openId = null }
@@ -142,6 +149,16 @@ private fun App(viewModel: LibraryViewModel) {
                 onShelfScroll = { viewModel.shelfScroll = it },
                 onShelfThemeChange = viewModel::setShelfTheme,
                 onShelfHintSeen = viewModel::shelfHintSeen,
+                folders = FolderState(
+                    folders = folders,
+                    comicsIn = { folder -> comics.count { it.folder == folder.uri } },
+                    scanning = scanning,
+                    interval = scanInterval,
+                    onAddFolder = { folderPicker.launch(null) },
+                    onRemoveFolder = viewModel::removeFolder,
+                    onScanNow = viewModel::scanNow,
+                    onIntervalChange = viewModel::setScanInterval,
+                ),
                 onAdd = { picker.launch(arrayOf("*/*")) },
                 onOpen = { openId = it.id },
                 onRemove = viewModel::remove,

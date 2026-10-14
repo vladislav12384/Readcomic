@@ -14,10 +14,15 @@ object ComicOpener {
 
     fun isDemo(uri: String) = uri == DEMO_URI
 
-    /** Opens a comic; the format is detected from the content, not from the file name. */
+    /**
+     * Opens a comic; the format is detected from the content, not from the file name: PDF,
+     * anything libarchive reads (ZIP, RAR, 7z, TAR, also compressed; EPUB), or a folder of pictures.
+     */
     fun open(context: Context, uri: String): ComicSource {
         if (isDemo(uri)) return DemoComicSource()
-        val pfd = seekableDescriptor(context, uri.toUri())
+        val parsed = uri.toUri()
+        if (Documents.isFolder(context, parsed)) return FolderComicSource(context, parsed)
+        val pfd = seekableDescriptor(context, parsed)
         val header = ByteArray(5)
         val read = try {
             Os.pread(pfd.fileDescriptor, header, 0, header.size, 0)
@@ -75,6 +80,13 @@ object ComicOpener {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
+
+    /** Size in bytes as the provider reports it, 0 if unknown. */
+    fun fileSize(context: Context, uri: Uri): Long = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else 0L
+        } ?: 0L
+    }.getOrDefault(0L)
 
     fun titleFromName(name: String?): String {
         val base = name?.substringAfterLast('/')?.substringBeforeLast('.') ?: return "Без названия"

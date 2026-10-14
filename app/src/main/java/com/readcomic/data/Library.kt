@@ -18,6 +18,13 @@ data class ComicEntry(
     val lastReadAt: Long = 0L,
     /** Last page on screen: the right-hand one of a spread. */
     val lastVisiblePage: Int = currentPage,
+    /** The watched folder it was found in, null if added by hand. */
+    val folder: String? = null,
+    /** File name and size, to recognise the same file reached another way. */
+    val fileName: String? = null,
+    val fileSize: Long = 0L,
+    val writer: String? = null,
+    val year: Int? = null,
 ) {
     val progress: Float get() = if (pageCount <= 1) 0f else lastVisiblePage.toFloat() / (pageCount - 1)
     val isFinished: Boolean get() = lastReadAt > 0 && lastVisiblePage >= pageCount - 1
@@ -45,6 +52,11 @@ class LibraryStore(context: Context) {
                     addedAt = o.optLong("addedAt", 0L),
                     lastReadAt = o.optLong("lastReadAt", 0L),
                     lastVisiblePage = o.optInt("lastVisiblePage", o.optInt("currentPage", 0)),
+                    folder = o.optString("folder").ifEmpty { null },
+                    fileName = o.optString("fileName").ifEmpty { null },
+                    fileSize = o.optLong("fileSize", 0L),
+                    writer = o.optString("writer").ifEmpty { null },
+                    year = o.optInt("year", 0).takeIf { it > 0 },
                 )
             }
         } catch (_: Exception) {
@@ -65,7 +77,12 @@ class LibraryStore(context: Context) {
                     .put("currentPage", e.currentPage)
                     .put("addedAt", e.addedAt)
                     .put("lastReadAt", e.lastReadAt)
-                    .put("lastVisiblePage", e.lastVisiblePage),
+                    .put("lastVisiblePage", e.lastVisiblePage)
+                    .putOpt("folder", e.folder)
+                    .putOpt("fileName", e.fileName)
+                    .put("fileSize", e.fileSize)
+                    .putOpt("writer", e.writer)
+                    .putOpt("year", e.year),
             )
         }
         val tmp = File(file.parentFile, file.name + ".tmp")

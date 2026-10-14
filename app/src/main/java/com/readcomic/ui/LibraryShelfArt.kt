@@ -10,6 +10,7 @@ import android.graphics.Typeface
 import android.text.TextPaint
 import android.text.TextUtils
 import androidx.core.graphics.createBitmap
+import androidx.core.graphics.withTranslation
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
 import com.readcomic.shelf.Binding
@@ -112,11 +113,10 @@ class LibraryShelfArt(
         }
         // The title runs down the spine, as on most comics and books.
         val title = TextUtils.ellipsize(entry.title, text, height * 0.82f, TextUtils.TruncateAt.END)
-        canvas.save()
-        canvas.translate(width / 2f, height / 2f)
-        canvas.rotate(90f)
-        canvas.drawText(title, 0, title.length, 0f, -(text.descent() + text.ascent()) / 2f, text)
-        canvas.restore()
+        canvas.withTranslation(width / 2f, height / 2f) {
+            rotate(90f)
+            drawText(title, 0, title.length, 0f, -(text.descent() + text.ascent()) / 2f, text)
+        }
         return bitmap
     }
 

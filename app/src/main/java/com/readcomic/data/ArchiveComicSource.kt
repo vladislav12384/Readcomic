@@ -16,8 +16,9 @@ import kotlin.concurrent.read
 import kotlin.concurrent.write
 
 /**
- * CBZ / CBR (including RAR5) / CB7 / CBT comics, read with libarchive straight from a
- * memory-mapped file, so nothing is copied and pages can be decoded in parallel.
+ * CBZ / CBR (including RAR5) / CB7 / CBT comics and EPUB comics, read with libarchive straight
+ * from a memory-mapped file, so nothing is copied and pages can be decoded in parallel. Pages
+ * are in natural name order; an EPUB follows the reading order of its package instead.
  *
  * ZIP and TAR give quick access to any page. RAR and 7z archives are usually "solid": to reach a
  * page everything before it has to be decompressed. Those are unpacked once into [unpackDir]
@@ -38,6 +39,8 @@ class ArchiveComicSource(
     private val pages: List<String>
     private val indexOf: Map<String, Int>
     private var solid = false
+    private var comicInfo: String? = null
+    private var epubMetadata: ComicMetadata? = null
 
     init {
         if (size <= 0) {
@@ -64,6 +67,12 @@ class ArchiveComicSource(
     }
 
     override val pageCount get() = pages.size
+
+    override val metadata: ComicMetadata? by lazy {
+        epubMetadata ?: comicInfo?.let { name ->
+            lock.read { if (closed) null else readEntry(name) }?.toString(Charsets.UTF_8)?.let(ComicMetadata::fromComicInfo)
+        }
+    }
 
     override val needsPreparation: Boolean
         get() = solid && unpackDir != null && !File(unpackDir, COMPLETE).exists()
@@ -164,7 +173,25 @@ class ArchiveComicSource(
         sizes.toList()
     }
 
-    private fun listImages(): List<String> = withArchive { archive ->
+    private fun listImages(): List<String> {
+        val all = listFiles()
+        val images = all.filter(PageDecoder::isImageName)
+        comicInfo = all.firstOrNull { it.substringAfterLast('/').equals("ComicInfo.xml", ignoreCase = true) }
+        if (EpubOrder.CONTAINER in all) epubPages(all, images.toSet())?.let { return it }
+        return images.sortedWith(NaturalOrder)
+    }
+
+    /** The pages of an EPUB in reading order, with its metadata on the side. */
+    private fun epubPages(all: List<String>, images: Set<String>): List<String>? {
+        val texts = readEntries(all.filter(EpubOrder::isTextFile).toSet())
+            .mapValues { it.value.toString(Charsets.UTF_8) }
+        val opfPath = texts[EpubOrder.CONTAINER]?.let(EpubOrder::packagePath) ?: return null
+        val opf = texts[opfPath] ?: return null
+        epubMetadata = ComicMetadata.fromOpf(opf)
+        return EpubOrder.pages(opfPath, opf, texts, images)
+    }
+
+    private fun listFiles(): List<String> = withArchive { archive ->
         val names = ArrayList<String>()
         var first = true
         while (true) {
@@ -177,10 +204,24 @@ class ArchiveComicSource(
                 first = false
             }
             if (ArchiveEntry.filetype(entry) != ArchiveEntry.AE_IFREG) continue
-            val name = entryName(entry) ?: continue
-            if (PageDecoder.isImageName(name)) names += name
+            names += entryName(entry) ?: continue
         }
-        names.sortedWith(NaturalOrder)
+        names
+    }
+
+    /** Several small files in one pass. */
+    private fun readEntries(wanted: Set<String>): Map<String, ByteArray> = withArchive { archive ->
+        val found = HashMap<String, ByteArray>()
+        val buffer = ByteBuffer.allocateDirect(64 * 1024)
+        val chunk = ByteArray(64 * 1024)
+        while (found.size < wanted.size) {
+            val entry = Archive.readNextHeader(archive)
+            if (entry == 0L) break
+            val name = entryName(entry) ?: continue
+            if (name !in wanted || ArchiveEntry.size(entry) > MAX_TEXT_BYTES) continue
+            found[name] = readData(archive, entry, buffer, chunk)
+        }
+        found
     }
 
     private fun readEntry(wanted: String): ByteArray? = withArchive { archive ->
@@ -230,6 +271,7 @@ class ArchiveComicSource(
 
     private companion object {
         const val HEADER_BYTES = 64 * 1024
+        const val MAX_TEXT_BYTES = 4L * 1024 * 1024
         const val COMPLETE = ".complete"
     }
 }
