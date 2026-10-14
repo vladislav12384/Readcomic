@@ -3,6 +3,7 @@ package com.readcomic.ui
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.util.LruCache
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -14,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +37,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -114,7 +117,9 @@ fun ReaderScreen(
     var error by remember(entry.uri) { mutableStateOf<String?>(null) }
     var page by remember(entry.id) { mutableIntStateOf(entry.currentPage) }
     var lastPage by remember(entry.id) { mutableIntStateOf(entry.lastVisiblePage) }
+    // Two layers: the menu (page navigation) and, on demand, the reading settings.
     var overlay by remember { mutableStateOf(false) }
+    var settings by remember { mutableStateOf(false) }
     var curlView by remember { mutableStateOf<PageCurlView?>(null) }
     val latestOnPageChanged by rememberUpdatedState(onPageChanged)
 
@@ -137,9 +142,17 @@ fun ReaderScreen(
         }
     }
 
-    ImmersiveMode(showSystemBars = overlay)
+    ImmersiveMode(showSystemBars = overlay || settings)
     OrientationEffect(orientation)
-    VolumeKeys { next -> if (next) curlView?.turnNext() else curlView?.turnPrevious() }
+    VolumeKeys { next ->
+        overlay = false
+        settings = false
+        if (next) curlView?.turnNext() else curlView?.turnPrevious()
+    }
+    // Back closes what is open before it leaves the comic.
+    BackHandler(enabled = overlay || settings) {
+        if (settings) settings = false else overlay = false
+    }
 
     val tint = ReaderBackgrounds[backgroundTint.coerceIn(0, ReaderBackgrounds.lastIndex)]
     LaunchedEffect(curlView, tint) {
@@ -167,7 +180,12 @@ fun ReaderScreen(
                                 }
 
                                 override fun onCenterTap() {
-                                    overlay = !overlay
+                                    if (settings) settings = false else overlay = !overlay
+                                }
+
+                                override fun onReadingGesture() {
+                                    overlay = false
+                                    settings = false
                                 }
                             }
                             setReadingMode(readingMode)
@@ -200,8 +218,19 @@ fun ReaderScreen(
             }
         }
 
+        // Tapping anywhere outside the settings closes them.
+        if (settings) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        settings = false
+                    },
+            )
+        }
+
         AnimatedVisibility(
-            visible = overlay || error != null,
+            visible = overlay || settings || error != null,
             enter = fadeIn() + slideInVertically { -it },
             exit = fadeOut() + slideOutVertically { -it },
             modifier = Modifier.align(Alignment.TopCenter),
@@ -210,15 +239,17 @@ fun ReaderScreen(
                 title = entry.title,
                 pageLabel = source?.let {
                     val pages = if (lastPage > page) "${page + 1}–${lastPage + 1}" else "${page + 1}"
-                    "$pages / ${it.pageCount}"
+                    "стр. $pages из ${it.pageCount}"
                 } ?: "",
+                settingsOpen = settings,
+                onSettings = { settings = !settings },
                 onBack = onBack,
             )
         }
 
         val count = source?.pageCount ?: 0
         AnimatedVisibility(
-            visible = overlay && count > 0,
+            visible = overlay && !settings && count > 0,
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -228,10 +259,20 @@ fun ReaderScreen(
                 page = page,
                 lastPage = lastPage,
                 count = count,
+                onJump = { target -> curlView?.jumpTo(target) },
+            )
+        }
+
+        AnimatedVisibility(
+            visible = settings,
+            enter = slideInVertically { it },
+            exit = slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            SettingsPanel(
                 backgroundTint = backgroundTint,
                 readingMode = readingMode,
                 orientation = orientation,
-                onJump = { target -> curlView?.jumpTo(target) },
                 onBackgroundTintChange = onBackgroundTintChange,
                 onReadingModeChange = onReadingModeChange,
                 onOrientationChange = onOrientationChange,
@@ -241,7 +282,13 @@ fun ReaderScreen(
 }
 
 @Composable
-private fun TopBar(title: String, pageLabel: String, onBack: () -> Unit) {
+private fun TopBar(
+    title: String,
+    pageLabel: String,
+    settingsOpen: Boolean,
+    onSettings: () -> Unit,
+    onBack: () -> Unit,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -253,36 +300,36 @@ private fun TopBar(title: String, pageLabel: String, onBack: () -> Unit) {
         IconButton(onClick = onBack) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад", tint = Color.White)
         }
-        Text(
-            title,
-            color = Color.White,
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            pageLabel,
-            color = Color.White.copy(alpha = 0.8f),
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (pageLabel.isNotEmpty()) {
+                Text(pageLabel, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        IconButton(onClick = onSettings) {
+            Icon(
+                Icons.Filled.Settings,
+                contentDescription = "Настройки чтения",
+                tint = if (settingsOpen) MaterialTheme.colorScheme.primary else Color.White,
+            )
+        }
     }
 }
 
+/** Page navigation only: thumbnails and a slider. Settings live in their own panel. */
 @Composable
 private fun BottomBar(
     source: ComicSource?,
     page: Int,
     lastPage: Int,
     count: Int,
-    backgroundTint: Int,
-    readingMode: ReadingMode,
-    orientation: OrientationLock,
     onJump: (Int) -> Unit,
-    onBackgroundTintChange: (Int) -> Unit,
-    onReadingModeChange: (ReadingMode) -> Unit,
-    onOrientationChange: (OrientationLock) -> Unit,
 ) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(page.toFloat()) }
@@ -293,12 +340,9 @@ private fun BottomBar(
             .fillMaxWidth()
             .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Black.copy(alpha = 0.9f))))
             .navigationBarsPadding()
-            .padding(vertical = 10.dp),
+            .padding(top = 10.dp, bottom = 4.dp),
     ) {
-        if (source != null) {
-            PageStrip(source, count, first = page, last = lastPage, onJump = onJump)
-            Spacer(Modifier.height(4.dp))
-        }
+        if (source != null) PageStrip(source, count, first = page, last = lastPage, onJump = onJump)
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 20.dp)) {
             Text(
                 "${sliderValue.roundToInt() + 1}",
@@ -329,11 +373,57 @@ private fun BottomBar(
                 modifier = Modifier.width(40.dp).padding(start = 8.dp),
             )
         }
+    }
+}
+
+/** Settings that change rarely, opened with the gear and closed by tapping anywhere else. */
+@Composable
+private fun SettingsPanel(
+    backgroundTint: Int,
+    readingMode: ReadingMode,
+    orientation: OrientationLock,
+    onBackgroundTintChange: (Int) -> Unit,
+    onReadingModeChange: (ReadingMode) -> Unit,
+    onOrientationChange: (OrientationLock) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+            .background(Color(0xF2201C19))
+            // Taps on the panel itself must not reach the "tap outside to close" layer below.
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+            .navigationBarsPadding()
+            .padding(top = 10.dp, bottom = 12.dp),
+    ) {
+        Box(
+            Modifier
+                .align(Alignment.CenterHorizontally)
+                .size(width = 36.dp, height = 4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color.White.copy(alpha = 0.3f)),
+        )
+        Text(
+            "Настройки чтения",
+            color = Color.White,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
+        )
         SettingsRow("Вид") {
             ModeChip("Авто", readingMode == ReadingMode.AUTO) { onReadingModeChange(ReadingMode.AUTO) }
             ModeChip("Разворот", readingMode == ReadingMode.SPREAD) { onReadingModeChange(ReadingMode.SPREAD) }
             ModeChip("Страница", readingMode == ReadingMode.SINGLE) { onReadingModeChange(ReadingMode.SINGLE) }
         }
+        Text(
+            when (readingMode) {
+                ReadingMode.AUTO -> "Горизонтально — разворот, вертикально — одна страница"
+                ReadingMode.SPREAD -> "Всегда две страницы, как в открытой книге"
+                ReadingMode.SINGLE -> "Всегда одна страница, широкие развороты делятся пополам"
+            },
+            color = Color.White.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(start = 72.dp, end = 20.dp, bottom = 6.dp),
+        )
         SettingsRow("Экран") {
             ModeChip("Как в системе", orientation == OrientationLock.SYSTEM) { onOrientationChange(OrientationLock.SYSTEM) }
             ModeChip("Вертикально", orientation == OrientationLock.PORTRAIT) { onOrientationChange(OrientationLock.PORTRAIT) }
@@ -343,7 +433,7 @@ private fun BottomBar(
             ReaderBackgrounds.forEachIndexed { index, color ->
                 Box(
                     Modifier
-                        .size(28.dp)
+                        .size(30.dp)
                         .background(color, CircleShape)
                         .border(
                             width = if (index == backgroundTint) 2.dp else 1.dp,
@@ -366,7 +456,7 @@ private fun SettingsRow(label: String, content: @Composable () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 5.dp),
+            .padding(horizontal = 20.dp, vertical = 6.dp),
     ) {
         Text(
             label,

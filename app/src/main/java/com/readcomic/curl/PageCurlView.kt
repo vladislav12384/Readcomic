@@ -37,6 +37,9 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         /** Visible page images changed: [first]..[last], equal when a single page is shown. */
         fun onPageChanged(first: Int, last: Int)
         fun onCenterTap()
+
+        /** The reader went on reading (turning, zooming, panning): menus should get out of the way. */
+        fun onReadingGesture() = Unit
     }
 
     var callbacks: Callbacks? = null
@@ -154,7 +157,12 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         else -> Zone.CENTER
     }
 
+    private fun readingGesture() {
+        callbacks?.onReadingGesture()
+    }
+
     private fun turnFromZone(zone: Zone) {
+        if (zone != Zone.CENTER) readingGesture()
         when (zone) {
             Zone.LEFT -> turnPrevious()
             Zone.RIGHT -> turnNext()
@@ -166,6 +174,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         context,
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                readingGesture()
                 if (mode == Mode.TURN) onGl { controller.cancelDrag() }
                 mode = Mode.SCALE
                 lastFocusX = detector.focusX
@@ -230,6 +239,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
                     // Quick taps on the side keep turning pages; zooming is a double tap in the middle.
                     if (!touchStoppedFling) turnFromZone(zone)
                 } else {
+                    readingGesture()
                     val x = e.x
                     val y = e.y
                     onGl { controller.doubleTap(x, y) }
@@ -283,6 +293,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
                             abs(x - downX) > abs(y - downY) * 0.7f -> Mode.TURN
                             else -> Mode.IGNORE
                         }
+                        if (mode == Mode.TURN || mode == Mode.PAN) readingGesture()
                         if (mode == Mode.TURN) {
                             val sx = downX
                             val sy = downY
