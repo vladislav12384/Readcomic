@@ -102,7 +102,7 @@ class PageTurnController(private val density: Float) {
     var viewHeight = 1f
         private set
 
-    var readingMode = ReadingMode.SPREAD
+    var readingMode = ReadingMode.AUTO
         private set
 
     /** Effective layout: a book spread or a single page. */
@@ -111,6 +111,12 @@ class PageTurnController(private val density: Float) {
 
     private var aspects = FloatArray(0)
     private var singlePages: List<Page> = emptyList()
+
+    /** One page at a time in portrait: two-page images are shown as two pages. */
+    private var splitWide = false
+
+    /** Direction of the last move, so pages are prepared on the side the reader is heading to. */
+    private var lastForward = true
     private var spreadPages: List<Page> = emptyList()
     private val pages get() = if (isSpread) spreadPages else singlePages
     private var slotAspect = DEFAULT_ASPECT
@@ -161,7 +167,8 @@ class PageTurnController(private val density: Float) {
      */
     fun setPages(imageAspects: FloatArray, startImage: Int) {
         aspects = imageAspects.copyOf()
-        singlePages = List(aspects.size) { Page(it, Part.FULL) }
+        splitWide = viewHeight > viewWidth
+        singlePages = buildSinglePages()
         spreadPages = buildSpreadPages()
         slotAspect = typicalAspect()
         turn = null
@@ -187,13 +194,37 @@ class PageTurnController(private val density: Float) {
 
     private fun updateLayout() {
         val spread = wantsSpread()
-        if (spread == isSpread) return
+        val split = viewHeight > viewWidth
+        if (spread == isSpread && split == splitWide) return
         val anchor = visibleImages().first
         finishTurnNow()
         isSpread = spread
+        if (split != splitWide) {
+            splitWide = split
+            singlePages = buildSinglePages()
+        }
         position = positionOf(anchor)
         resetZoom()
         notifyPosition()
+    }
+
+    private fun buildSinglePages(): List<Page> {
+        val list = ArrayList<Page>(aspects.size + 4)
+        for (image in aspects.indices) {
+            if (splitWide && isWide(image)) {
+                list += Page(image, Part.LEFT)
+                list += Page(image, Part.RIGHT)
+            } else {
+                list += Page(image, Part.FULL)
+            }
+        }
+        return list
+    }
+
+    /** Width / height of a page (half of a two-page image), null while unknown. */
+    private fun pageAspect(page: Page): Float? {
+        val aspect = aspects.getOrElse(page.image) { 0f }.takeIf { it > 0f } ?: return null
+        return if (page.part == Part.FULL) aspect else aspect / 2f
     }
 
     private fun isWide(image: Int) = aspects.getOrElse(image) { 0f } > WIDE_ASPECT
@@ -230,7 +261,8 @@ class PageTurnController(private val density: Float) {
 
     // region Geometry
 
-    private val margin get() = 8f * density
+    /** Room around the pages, kept small: on a phone every pixel of the page counts. */
+    private val margin get() = (if (isSpread) 6f else 4f) * density
 
     private val spineX get() = viewWidth / 2f
 
@@ -251,8 +283,7 @@ class PageTurnController(private val density: Float) {
 
     /** A page on its own, fitted into the view. */
     fun singleRect(index: Int): PageRect {
-        val page = singlePages.getOrNull(index)
-        val aspect = page?.let { aspects[it.image] }?.takeIf { it > 0f } ?: slotAspect
+        val aspect = singlePages.getOrNull(index)?.let { pageAspect(it) } ?: slotAspect
         val availableWidth = viewWidth - 2f * margin
         val availableHeight = viewHeight - 2f * margin
         var width = availableWidth
@@ -389,7 +420,7 @@ class PageTurnController(private val density: Float) {
 
     private fun stackEdge(rect: PageRect, sheets: Int, side: Float): StackEdge? {
         if (sheets <= 0) return null
-        val thickness = min(sqrt(sheets.toFloat()) * 0.9f, 4.5f) * density
+        val thickness = min(sqrt(sheets.toFloat()) * 0.9f * density, margin * 0.8f)
         val lines = max(1f, min(sheets.toFloat(), thickness / (1.5f * density)))
         return StackEdge(rect, side * thickness * 0.55f, thickness, lines)
     }
@@ -399,16 +430,36 @@ class PageTurnController(private val density: Float) {
         return CurlMath.compute(t.grabX(), t.grabY(), t.spring.x, t.spring.y, t.rect(), landFlat = t.spread)
     }
 
-    /** Images worth keeping in memory, the most important first. */
+    /**
+     * Images to keep sharp, the most important first: what is on screen, then the pages the next
+     * two turns in the reading direction will show, then one turn the other way.
+     */
     fun wantedImages(): List<Int> {
         val order = if (isSpread) {
             val s = position
-            listOf(2 * s, 2 * s - 1, 2 * s + 1, 2 * s + 2, 2 * s - 2, 2 * s - 3)
+            val forward = listOf(2 * s + 1, 2 * s + 2, 2 * s + 3, 2 * s + 4)
+            val backward = listOf(2 * s - 2, 2 * s - 3, 2 * s - 4, 2 * s - 5)
+            listOf(2 * s, 2 * s - 1) + if (lastForward) forward + backward.take(2) else backward + forward.take(2)
         } else {
-            listOf(position, position + 1, position - 1, position + 2)
+            val p = position
+            val forward = listOf(p + 1, p + 2, p + 3)
+            val backward = listOf(p - 1, p - 2, p - 3)
+            listOf(p) + if (lastForward) forward + backward.take(1) else backward + forward.take(1)
         }
-        return order.mapNotNull { pages.getOrNull(it)?.image?.takeIf { image -> image >= 0 } }.distinct()
+        return images(order)
     }
+
+    /** Images worth having at least a small, blurry version of, so nothing is ever blank. */
+    fun previewImages(): List<Int> {
+        val center = if (isSpread) 2 * position else position
+        val order = (0..PREVIEW_RADIUS).flatMap { d ->
+            if (lastForward) listOf(center + d, center - d) else listOf(center - d, center + d)
+        }
+        return images(order)
+    }
+
+    private fun images(indices: List<Int>) =
+        indices.mapNotNull { pages.getOrNull(it)?.image?.takeIf { image -> image >= 0 } }.distinct()
 
     /** Images on screen right now (both halves of a spread). */
     fun visibleImageSet(): Set<Int> {
@@ -418,7 +469,7 @@ class PageTurnController(private val density: Float) {
 
     /** Size of the box an image is shown in, to decode it at a sensible resolution. */
     fun displayBox(image: Int): Pair<Float, Float> {
-        if (!isSpread) return viewWidth to viewHeight
+        if (!isSpread) return if (splitWide && isWide(image)) viewWidth * 2f to viewHeight else viewWidth to viewHeight
         val slot = rightSlot()
         return if (isWide(image)) slot.width * 2f to slot.height else slot.width to slot.height
     }
@@ -524,7 +575,10 @@ class PageTurnController(private val density: Float) {
         finishTurnNow()
         val t = newTurn(forward, relY = 0.99f) ?: return
         if (t.rubber) return
-        resetZoom()
+        // Zoom stays: the page turns under the magnifier and the new one is shown from its start.
+        zoomAnimation = null
+        flingVx = 0f
+        flingVy = 0f
         t.dragging = false
         t.completing = true
         val r = t.rect()
@@ -568,6 +622,7 @@ class PageTurnController(private val density: Float) {
         finishTurnNow()
         val target = positionOf(image.coerceIn(0, imageCount - 1))
         if (target == position) return
+        lastForward = target > position
         position = target
         resetZoom()
         notifyPosition()
@@ -608,6 +663,17 @@ class PageTurnController(private val density: Float) {
 
     private fun applyTurn(t: Turn) {
         position = (if (t.forward) position + 1 else position - 1).coerceIn(0, max(positionCount - 1, 0))
+        lastForward = t.forward
+        if (isZoomed) {
+            // Keep the magnification and glide to where reading continues: the top left corner
+            // of the next page, or the bottom right one when going back.
+            val r = contentRect()
+            if (t.forward) {
+                animateZoomTo(scale, -r.left * scale, -r.top * scale)
+            } else {
+                animateZoomTo(scale, viewWidth - r.right * scale, viewHeight - r.bottom * scale)
+            }
+        }
         notifyPosition()
         listener?.onPageTurned()
     }
@@ -656,7 +722,8 @@ class PageTurnController(private val density: Float) {
             animateZoomTo(1f, 0f, 0f)
         } else {
             finishTurnNow()
-            val target = DOUBLE_TAP_SCALE
+            // In a spread, zoom so that one page fills the width; a single page gets a fixed step.
+            val target = if (isSpread) (viewWidth / rightSlot().width).coerceIn(1.8f, MAX_SCALE) else DOUBLE_TAP_SCALE
             animateZoomTo(target, x - x * target, y - y * target)
         }
     }
@@ -770,6 +837,9 @@ class PageTurnController(private val density: Float) {
         const val MAX_SCALE = 5f
         const val DOUBLE_TAP_SCALE = 2.5f
         private const val DEFAULT_ASPECT = 0.65f
+
+        /** Pages on either side of the current one that get a small preview texture. */
+        private const val PREVIEW_RADIUS = 10
 
         /** Images wider than this (width / height) are two-page spreads. */
         private const val WIDE_ASPECT = 1.1f

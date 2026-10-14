@@ -94,14 +94,17 @@ class CurlRenderer(
     override fun onDrawFrame(gl: GL10?) {
         val now = System.nanoTime()
         val dt = if (lastFrameNanos == 0L) 1f / 60f else ((now - lastFrameNanos) / 1e9f).coerceIn(0f, 1f / 20f)
-        val animating = controller.step(dt)
-        lastFrameNanos = if (animating) now else 0L
+        var animating = controller.step(dt)
 
+        // A few milliseconds per frame for GPU uploads: pages appear without stalling a turn.
+        if (textures.uploadPending(budgetMillis = if (controller.isTurning) 4L else 12L)) animating = true
         textures.update(
-            controller.wantedImages(),
-            if (controller.scale > 1.3f) controller.visibleImageSet() else emptySet(),
-            controller::displayBox,
+            sharp = controller.wantedImages(),
+            previews = controller.previewImages(),
+            zoomed = if (controller.scale > 1.3f) controller.visibleImageSet() else emptySet(),
+            box = controller::displayBox,
         )
+        lastFrameNanos = if (animating) now else 0L
 
         updateMatrices()
         val scene = controller.scene()

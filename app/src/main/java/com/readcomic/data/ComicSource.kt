@@ -19,7 +19,13 @@ interface ComicSource : Closeable {
     fun loadPage(index: Int, maxWidth: Int, maxHeight: Int): Bitmap?
 
     /** Width and height of every page (null where unknown), read without decoding whole pages. */
-    fun readPageSizes(): List<Pair<Int, Int>?> = emptyList()
+    fun readPageSizes(onProgress: (Float) -> Unit = {}): List<Pair<Int, Int>?> = emptyList()
+
+    /** True while pages are slow to reach and [prepare] would make them fast (unpacking a solid archive). */
+    val needsPreparation: Boolean get() = false
+
+    /** Makes every page quick to load; may take a while, call it in the background. */
+    fun prepare(onProgress: (Float) -> Unit = {}) = Unit
 }
 
 object PageDecoder {

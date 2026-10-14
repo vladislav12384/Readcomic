@@ -48,9 +48,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val backgroundTint: StateFlow<Int> = _backgroundTint.asStateFlow()
 
     private val _readingMode = MutableStateFlow(
-        runCatching { ReadingMode.valueOf(prefs.getString(KEY_READING_MODE, null) ?: "") }.getOrDefault(ReadingMode.SPREAD),
+        runCatching { ReadingMode.valueOf(prefs.getString(KEY_READING_MODE, null) ?: "") }.getOrDefault(ReadingMode.AUTO),
     )
     val readingMode: StateFlow<ReadingMode> = _readingMode.asStateFlow()
+
+    private val _orientation = MutableStateFlow(
+        runCatching { OrientationLock.valueOf(prefs.getString(KEY_ORIENTATION, null) ?: "") }.getOrDefault(OrientationLock.SYSTEM),
+    )
+    val orientation: StateFlow<OrientationLock> = _orientation.asStateFlow()
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -151,11 +156,20 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putString(KEY_READING_MODE, mode.name) }
     }
 
+    fun setOrientation(lock: OrientationLock) {
+        _orientation.value = lock
+        prefs.edit { putString(KEY_ORIENTATION, lock.name) }
+    }
+
     /**
      * Width / height of every page of an opened comic (0 where unknown). Reading them means a
      * pass over the whole archive, so the result is cached per comic.
      */
-    suspend fun pageAspects(entry: ComicEntry, source: ComicSource): FloatArray = withContext(Dispatchers.IO) {
+    suspend fun pageAspects(
+        entry: ComicEntry,
+        source: ComicSource,
+        onProgress: (Float) -> Unit,
+    ): FloatArray = withContext(Dispatchers.IO) {
         val count = source.pageCount
         if (count != entry.pageCount) {
             _comics.update { list -> list.map { if (it.id == entry.id) it.copy(pageCount = count) else it } }
@@ -163,7 +177,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
         val demo = ComicOpener.isDemo(entry.uri)
         if (!demo) store.loadAspects(entry.id, count)?.let { return@withContext it }
-        val sizes = runCatching { source.readPageSizes() }.getOrDefault(emptyList())
+        val sizes = runCatching { source.readPageSizes(onProgress) }.getOrDefault(emptyList())
         val aspects = FloatArray(count) { i -> sizes.getOrNull(i)?.let { (w, h) -> w.toFloat() / h } ?: 0f }
         if (!demo && sizes.isNotEmpty()) store.saveAspects(entry.id, aspects)
         aspects
@@ -208,6 +222,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_DEMO_ADDED = "demo_added"
         private const val KEY_BACKGROUND = "background"
         private const val KEY_READING_MODE = "reading_mode"
+        private const val KEY_ORIENTATION = "orientation"
         const val COVER_WIDTH = 360
         const val COVER_HEIGHT = 560
     }

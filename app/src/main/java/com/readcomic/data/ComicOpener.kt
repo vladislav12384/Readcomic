@@ -28,9 +28,27 @@ object ComicOpener {
         return if (read >= 4 && String(header, 0, 4, Charsets.ISO_8859_1) == "%PDF") {
             PdfComicSource(pfd)
         } else {
-            ArchiveComicSource(pfd)
+            ArchiveComicSource(pfd, unpackDir(context, uri))
         }
     }
+
+    /**
+     * Where a solid archive is unpacked to. Only the few most recently opened comics are kept;
+     * the system may also clear the cache, then the comic is simply unpacked again.
+     */
+    private fun unpackDir(context: Context, uri: String): File {
+        val root = File(context.cacheDir, "unpacked").apply { mkdirs() }
+        val dir = File(root, LibraryStore.idFor(uri))
+        if (dir.exists()) dir.setLastModified(System.currentTimeMillis())
+        root.listFiles()
+            ?.filter { it != dir }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(KEEP_UNPACKED - 1)
+            ?.forEach { it.deleteRecursively() }
+        return dir
+    }
+
+    private const val KEEP_UNPACKED = 3
 
     /**
      * Pages are read with random access, which needs a real file. Some providers (cloud

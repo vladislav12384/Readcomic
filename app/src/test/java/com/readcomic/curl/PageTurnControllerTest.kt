@@ -175,6 +175,62 @@ class PageTurnControllerTest {
         assertEquals(1f, c.scale, 0.001f)
     }
 
+    @Test
+    fun tapTurnsWhileZoomedAndShowsTheTopOfTheNextPage() {
+        val c = controller(ReadingMode.SINGLE)
+        c.doubleTap(900f, 1800f)
+        c.settle()
+        val scale = c.scale
+        assertTrue(c.isZoomed)
+
+        c.turnForward()
+        assertTrue("turning does not need zooming out first", c.isTurning)
+        c.settle()
+        assertEquals(1, c.position)
+        assertEquals("zoom is kept", scale, c.scale, 0.001f)
+        val rect = c.singleRect(1)
+        assertEquals(-rect.left * scale, c.offsetX, 1f)
+        assertEquals(-rect.top * scale, c.offsetY, 1f)
+
+        c.turnBackward()
+        c.settle()
+        assertEquals(0, c.position)
+        val previous = c.singleRect(0)
+        assertEquals("back shows the end of the page", 1080f - previous.right * scale, c.offsetX, 1f)
+        assertEquals(2280f - previous.bottom * scale, c.offsetY, 1f)
+    }
+
+    @Test
+    fun portraitSplitsTwoPageImagesIntoHalves() {
+        val aspects = floatArrayOf(0.65f, 0.65f, 1.3f, 0.65f)
+        val c = controller(ReadingMode.SINGLE, aspects)
+        c.jumpTo(3)
+        assertEquals("the spread takes two positions", 4, c.position)
+        c.turnBackward()
+        c.settle()
+        assertEquals(2 to 2, c.visibleImages())
+        val right = c.scene().flats.single().front
+        assertEquals(0.5f, right.sub[0], 0f)
+
+        // In landscape the whole spread fits on screen, so it is one page again.
+        c.setViewSize(2280, 1080)
+        assertEquals(2, c.position)
+        assertEquals(1f, c.scene().flats.single().front.sub[2], 0f)
+    }
+
+    @Test
+    fun preparesPagesInTheReadingDirection() {
+        val c = controller(ReadingMode.SINGLE, FloatArray(30) { 0.65f })
+        c.jumpTo(10)
+        assertEquals(listOf(10, 11, 12, 13, 9), c.wantedImages())
+        c.turnBackward()
+        c.settle()
+        assertEquals(listOf(9, 8, 7, 6, 10), c.wantedImages())
+        val previews = c.previewImages()
+        assertEquals(9, previews.first())
+        assertTrue(previews.containsAll((0..19).toList()))
+    }
+
     // endregion
 
     // region Book spread

@@ -2,9 +2,12 @@ package com.readcomic.curl
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Rect
 import android.opengl.GLSurfaceView
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -18,6 +21,7 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.egl.EGLDisplay
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.min
 
 /**
  * Comic page view with a realistic page curl.
@@ -43,7 +47,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val textures = PageTextureCache(
         scope = scope,
-        runOnGlThread = { runnable -> onGl { runnable.run() } },
+        requestRender = { requestRender() },
         onLoaded = { index, aspect -> controller.setPageAspect(index, aspect) },
     )
     private val renderer: CurlRenderer
@@ -99,6 +103,24 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         requestRender()
     }
 
+    private val leftEdge = Rect()
+    private val rightEdge = Rect()
+    private val edges = listOf(leftEdge, rightEdge)
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        if (changed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Pages are pulled from the screen edges: keep the system back gesture away from the
+            // middle of both edges (Android allows at most 200dp per edge).
+            val height = min((200 * density).toInt(), this.height)
+            val y = (this.height - height) / 2
+            val width = (40 * density).toInt()
+            leftEdge.set(0, y, width, y + height)
+            rightEdge.set(this.width - width, y, this.width, y + height)
+            systemGestureExclusionRects = edges
+        }
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         scope.cancel()
@@ -118,6 +140,11 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     private var lastFocusY = 0f
     private var velocityTracker: VelocityTracker? = null
     private var tapTurnedPage = false
+
+    /** A touch that stops a scrolling page is not a tap: it must not turn the page by accident. */
+    private var touchStoppedFling = false
+    private var flingStartedAt = 0L
+    private val minFlingVelocity = ViewConfiguration.get(context).scaledMinimumFlingVelocity
 
     private enum class Zone { LEFT, CENTER, RIGHT }
 
@@ -177,7 +204,11 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
             override fun onSingleTapUp(e: MotionEvent): Boolean {
                 tapTurnedPage = false
-                if (controller.isZoomed) return false
+                if (touchStoppedFling) {
+                    tapTurnedPage = true
+                    return true
+                }
+                // The sides turn pages even while zoomed in: no need to zoom out first.
                 val zone = zoneOf(e.x)
                 if (zone == Zone.CENTER) return false
                 tapTurnedPage = true
@@ -195,9 +226,9 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
                 val zone = zoneOf(e.x)
-                if (!controller.isZoomed && zone != Zone.CENTER) {
-                    // Quick taps on the side keep turning pages.
-                    turnFromZone(zone)
+                if (zone != Zone.CENTER) {
+                    // Quick taps on the side keep turning pages; zooming is a double tap in the middle.
+                    if (!touchStoppedFling) turnFromZone(zone)
                 } else {
                     val x = e.x
                     val y = e.y
@@ -224,6 +255,8 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
                 lastX = downX
                 lastY = downY
                 mode = Mode.NONE
+                touchStoppedFling = SystemClock.uptimeMillis() - flingStartedAt < FLING_STOP_WINDOW_MS
+                flingStartedAt = 0L
                 onGl { controller.flingPan(0f, 0f) }
             }
 
@@ -279,7 +312,10 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
                 val vy = tracker.yVelocity
                 when (mode) {
                     Mode.TURN -> onGl { controller.endDrag(vx) }
-                    Mode.PAN -> onGl { controller.flingPan(vx, vy) }
+                    Mode.PAN -> {
+                        if (hypot(vx, vy) > minFlingVelocity * 4) flingStartedAt = SystemClock.uptimeMillis()
+                        onGl { controller.flingPan(vx, vy) }
+                    }
                     else -> Unit
                 }
                 mode = Mode.NONE
@@ -298,6 +334,11 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     }
 
     // endregion
+
+    private companion object {
+        /** A fling is considered still running this long after it started. */
+        const val FLING_STOP_WINDOW_MS = 700L
+    }
 
     /** Prefers ES 3 with 4x MSAA for smooth page edges, falls back gracefully. */
     private class ConfigChooser : EGLConfigChooser {

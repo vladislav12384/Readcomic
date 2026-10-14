@@ -61,8 +61,8 @@ class DemoComicSource : ComicSource {
         ),
         listOf(
             Panel(0.04f, 0.04f, 0.45f, 0.6f, Scene.SPACE, caption = "Мелкий текст?"),
-            Panel(0.51f, 0.04f, 0.45f, 0.6f, Scene.FOREST, hero = true, balloon = "Двойной тап или щипок — увеличение!"),
-            Panel(0.04f, 0.68f, 0.92f, 0.818f, Scene.SUNSET, caption = "При увеличении страницу можно двигать пальцем. Двойной тап — обратно."),
+            Panel(0.51f, 0.04f, 0.45f, 0.6f, Scene.FOREST, hero = true, balloon = "Двойной тап в центре или щипок — увеличение!"),
+            Panel(0.04f, 0.68f, 0.92f, 0.818f, Scene.SUNSET, caption = "При увеличении страницу можно двигать пальцем, а тап по краю всё равно листает. Двойной тап в центре — обратно."),
         ),
         // A two-page spread drawn as one wide image.
         listOf(
@@ -71,7 +71,7 @@ class DemoComicSource : ComicSource {
             Panel(0.04f, 0.98f, 0.94f, 0.518f, Scene.SUNSET,
                 caption = "В книжном режиме она ложится на обе страницы, шов — точно по корешку."),
             Panel(1.02f, 0.98f, 0.94f, 0.518f, Scene.FOREST, hero = true,
-                balloon = "Разворот, одна страница или авто — выбирается в меню."),
+                balloon = "Разворот, одна страница или авто, а ещё поворот экрана — всё в меню."),
         ),
         listOf(
             Panel(0.04f, 0.04f, 0.92f, 0.7f, Scene.BURST, shout = "МЕНЮ", caption = "Тап по центру экрана открывает меню."),
@@ -104,7 +104,7 @@ class DemoComicSource : ComicSource {
 
     private fun pageWidth(index: Int) = if (index in widePages) 2 else 1
 
-    override fun readPageSizes(): List<Pair<Int, Int>?> =
+    override fun readPageSizes(onProgress: (Float) -> Unit): List<Pair<Int, Int>?> =
         List(pageCount) { 1000 * pageWidth(it) to (1000 * PAGE_HEIGHT).toInt() }
 
     override fun loadPage(index: Int, maxWidth: Int, maxHeight: Int): Bitmap? {

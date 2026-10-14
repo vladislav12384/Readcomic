@@ -30,9 +30,12 @@ class PdfComicSource(pfd: ParcelFileDescriptor) : ComicSource {
         }
     }
 
-    override fun readPageSizes(): List<Pair<Int, Int>?> = synchronized(lock) {
+    override fun readPageSizes(onProgress: (Float) -> Unit): List<Pair<Int, Int>?> = synchronized(lock) {
         if (closed) return emptyList()
-        List(pageCount) { index -> renderer.openPage(index).use { it.width to it.height } }
+        List(pageCount) { index ->
+            onProgress((index + 1f) / pageCount)
+            renderer.openPage(index).use { it.width to it.height }
+        }
     }
 
     override fun close() = synchronized(lock) {

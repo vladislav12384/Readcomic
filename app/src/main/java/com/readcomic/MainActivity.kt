@@ -85,6 +85,7 @@ private fun App(viewModel: LibraryViewModel) {
     val openRequest by viewModel.openRequest.collectAsStateWithLifecycle()
     val backgroundTint by viewModel.backgroundTint.collectAsStateWithLifecycle()
     val readingMode by viewModel.readingMode.collectAsStateWithLifecycle()
+    val orientation by viewModel.orientation.collectAsStateWithLifecycle()
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     MessagesEffect(viewModel.messages, snackbar)
@@ -115,9 +116,11 @@ private fun App(viewModel: LibraryViewModel) {
                     entry = entry,
                     backgroundTint = backgroundTint,
                     readingMode = readingMode,
-                    pageAspects = { source -> viewModel.pageAspects(entry, source) },
+                    orientation = orientation,
+                    pageAspects = { source, onProgress -> viewModel.pageAspects(entry, source, onProgress) },
                     onBackgroundTintChange = viewModel::setBackgroundTint,
                     onReadingModeChange = viewModel::setReadingMode,
+                    onOrientationChange = viewModel::setOrientation,
                     onPageChanged = { first, last -> viewModel.updateProgress(entry.id, first, last) },
                     onBack = { openId = null },
                 )

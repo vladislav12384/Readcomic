@@ -1,26 +1,36 @@
 package com.readcomic.ui
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
+import android.util.LruCache
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -38,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -46,9 +58,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -64,31 +80,37 @@ import com.readcomic.curl.PageTurnController.ReadingMode
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
 import com.readcomic.data.ComicSource
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
 
 /** Lets the activity forward volume keys to the open reader. */
 interface VolumeKeyHost {
     var volumeKeyListener: ((next: Boolean) -> Unit)?
 }
 
+/** Screen orientation while reading. */
+enum class OrientationLock { SYSTEM, PORTRAIT, LANDSCAPE }
+
 @Composable
 fun ReaderScreen(
     entry: ComicEntry,
     backgroundTint: Int,
     readingMode: ReadingMode,
-    pageAspects: suspend (ComicSource) -> FloatArray,
+    orientation: OrientationLock,
+    pageAspects: suspend (ComicSource, onProgress: (Float) -> Unit) -> FloatArray,
     onBackgroundTintChange: (Int) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
+    onOrientationChange: (OrientationLock) -> Unit,
     onPageChanged: (first: Int, last: Int) -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     var source by remember(entry.uri) { mutableStateOf<ComicSource?>(null) }
     var aspects by remember(entry.uri) { mutableStateOf<FloatArray?>(null) }
+    var preparing by remember(entry.uri) { mutableFloatStateOf(0f) }
     var error by remember(entry.uri) { mutableStateOf<String?>(null) }
     var page by remember(entry.id) { mutableIntStateOf(entry.currentPage) }
     var lastPage by remember(entry.id) { mutableIntStateOf(entry.lastVisiblePage) }
@@ -101,7 +123,9 @@ fun ReaderScreen(
             val opened = withContext(Dispatchers.IO) { ComicOpener.open(context, entry.uri) }
             source = opened
             // Page shapes tell which images are two-page spreads; cached after the first time.
-            aspects = pageAspects(opened)
+            // A solid RAR / 7z is unpacked in the same pass, so its pages are instant afterwards.
+            aspects = pageAspects(opened) { progress -> preparing = progress }
+            if (opened.needsPreparation) launch(Dispatchers.IO) { opened.prepare() }
         } catch (e: Exception) {
             error = "Не удалось открыть комикс.\n${e.message ?: ""}".trim()
         }
@@ -114,6 +138,7 @@ fun ReaderScreen(
     }
 
     ImmersiveMode(showSystemBars = overlay)
+    OrientationEffect(orientation)
     VolumeKeys { next -> if (next) curlView?.turnNext() else curlView?.turnPrevious() }
 
     val tint = ReaderBackgrounds[backgroundTint.coerceIn(0, ReaderBackgrounds.lastIndex)]
@@ -160,7 +185,19 @@ fun ReaderScreen(
                 modifier = Modifier.align(Alignment.Center).padding(32.dp),
             )
 
-            else -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+            else -> Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.align(Alignment.Center).padding(32.dp),
+            ) {
+                if (preparing > 0f) {
+                    // First opening of a big archive: one pass to measure (and unpack) the pages.
+                    Text("Подготовка комикса… ${(preparing * 100).roundToInt()}%", color = Color.White.copy(alpha = 0.8f))
+                    Spacer(Modifier.height(12.dp))
+                    LinearProgressIndicator(progress = { preparing }, modifier = Modifier.width(220.dp))
+                } else {
+                    CircularProgressIndicator()
+                }
+            }
         }
 
         AnimatedVisibility(
@@ -187,13 +224,17 @@ fun ReaderScreen(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             BottomBar(
+                source = source,
                 page = page,
+                lastPage = lastPage,
                 count = count,
                 backgroundTint = backgroundTint,
                 readingMode = readingMode,
+                orientation = orientation,
                 onJump = { target -> curlView?.jumpTo(target) },
                 onBackgroundTintChange = onBackgroundTintChange,
                 onReadingModeChange = onReadingModeChange,
+                onOrientationChange = onOrientationChange,
             )
         }
     }
@@ -231,13 +272,17 @@ private fun TopBar(title: String, pageLabel: String, onBack: () -> Unit) {
 
 @Composable
 private fun BottomBar(
+    source: ComicSource?,
     page: Int,
+    lastPage: Int,
     count: Int,
     backgroundTint: Int,
     readingMode: ReadingMode,
+    orientation: OrientationLock,
     onJump: (Int) -> Unit,
     onBackgroundTintChange: (Int) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
+    onOrientationChange: (OrientationLock) -> Unit,
 ) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(page.toFloat()) }
@@ -246,11 +291,15 @@ private fun BottomBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Black.copy(alpha = 0.85f))))
+            .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Black.copy(alpha = 0.9f))))
             .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(vertical = 10.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        if (source != null) {
+            PageStrip(source, count, first = page, last = lastPage, onJump = onJump)
+            Spacer(Modifier.height(4.dp))
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 20.dp)) {
             Text(
                 "${sliderValue.roundToInt() + 1}",
                 color = Color.White,
@@ -280,24 +329,21 @@ private fun BottomBar(
                 modifier = Modifier.width(40.dp).padding(start = 8.dp),
             )
         }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(bottom = 10.dp),
-        ) {
+        SettingsRow("Вид") {
+            ModeChip("Авто", readingMode == ReadingMode.AUTO) { onReadingModeChange(ReadingMode.AUTO) }
             ModeChip("Разворот", readingMode == ReadingMode.SPREAD) { onReadingModeChange(ReadingMode.SPREAD) }
             ModeChip("Страница", readingMode == ReadingMode.SINGLE) { onReadingModeChange(ReadingMode.SINGLE) }
-            ModeChip("Авто", readingMode == ReadingMode.AUTO) { onReadingModeChange(ReadingMode.AUTO) }
         }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("Фон", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelMedium)
+        SettingsRow("Экран") {
+            ModeChip("Как в системе", orientation == OrientationLock.SYSTEM) { onOrientationChange(OrientationLock.SYSTEM) }
+            ModeChip("Вертикально", orientation == OrientationLock.PORTRAIT) { onOrientationChange(OrientationLock.PORTRAIT) }
+            ModeChip("Горизонтально", orientation == OrientationLock.LANDSCAPE) { onOrientationChange(OrientationLock.LANDSCAPE) }
+        }
+        SettingsRow("Фон") {
             ReaderBackgrounds.forEachIndexed { index, color ->
                 Box(
                     Modifier
-                        .size(26.dp)
+                        .size(28.dp)
                         .background(color, CircleShape)
                         .border(
                             width = if (index == backgroundTint) 2.dp else 1.dp,
@@ -305,6 +351,77 @@ private fun BottomBar(
                             shape = CircleShape,
                         )
                         .clickable { onBackgroundTintChange(index) },
+                )
+            }
+        }
+    }
+}
+
+/** A labelled row of options that scrolls sideways on narrow screens. */
+@Composable
+private fun SettingsRow(label: String, content: @Composable () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 5.dp),
+    ) {
+        Text(
+            label,
+            color = Color.White.copy(alpha = 0.6f),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.width(44.dp),
+        )
+        content()
+    }
+}
+
+private val thumbnailDispatcher = Dispatchers.IO.limitedParallelism(2)
+
+/** Small pictures of all pages for quick navigation; the pages on screen are outlined. */
+@Composable
+private fun PageStrip(source: ComicSource, count: Int, first: Int, last: Int, onJump: (Int) -> Unit) {
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (first - 2).coerceAtLeast(0))
+    val cache = remember(source) { LruCache<Int, ImageBitmap>(96) }
+    LazyRow(
+        state = listState,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        items(count) { index ->
+            val thumbnail by produceState(cache.get(index), source, index) {
+                if (value == null) {
+                    value = withContext(thumbnailDispatcher) {
+                        runCatching { source.loadPage(index, 120, 180) }.getOrNull()?.asImageBitmap()
+                    }?.also { cache.put(index, it) }
+                }
+            }
+            val selected = index in first..last
+            val shape = RoundedCornerShape(3.dp)
+            Box(
+                Modifier
+                    .size(width = 46.dp, height = 68.dp)
+                    .clip(shape)
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .border(if (selected) 2.dp else 0.dp, if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, shape)
+                    .clickable { onJump(index) },
+            ) {
+                thumbnail?.let {
+                    Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
+                Text(
+                    "${index + 1}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(vertical = 1.dp),
+                    textAlign = TextAlign.Center,
                 )
             }
         }
@@ -325,6 +442,20 @@ private fun ModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 7.dp),
     )
+}
+
+/** Locks the screen orientation while reading, if the reader asked for it. */
+@Composable
+private fun OrientationEffect(lock: OrientationLock) {
+    val activity = LocalActivity.current ?: return
+    DisposableEffect(activity, lock) {
+        activity.requestedOrientation = when (lock) {
+            OrientationLock.SYSTEM -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            OrientationLock.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+            OrientationLock.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+        }
+        onDispose { activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    }
 }
 
 /** Hides the status and navigation bars while reading; they come back with the menu. */
