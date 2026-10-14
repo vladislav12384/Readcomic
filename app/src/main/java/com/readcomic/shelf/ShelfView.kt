@@ -78,6 +78,15 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
         requestRender()
     }
 
+    /** Paint of the wall behind the shelves, linear components in 0..1. */
+    fun setWallColor(red: Float, green: Float, blue: Float) {
+        renderer.wallColor = floatArrayOf(red, green, blue)
+        requestRender()
+    }
+
+    /** The shelf lights come on one after another, as when walking into the room. */
+    fun switchLightsOn() = onGl { controller.switchLightsOn() }
+
     // endregion
 
     private inline fun onGl(crossinline block: () -> Unit) {

@@ -36,9 +36,13 @@ class ShelfRenderer(
     private var height = 1
     private var lastFrameNanos = 0L
 
-    /** Background behind the scene (where nothing is drawn); matches the reader's table. */
+    /** Background behind the scene (where nothing is drawn). */
     @Volatile
     var clearColor = floatArrayOf(0.05f, 0.05f, 0.06f)
+
+    /** Paint of the wall behind the shelves, linear colour. */
+    @Volatile
+    var wallColor = floatArrayOf(0.17f, 0.22f, 0.17f)
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         program = GlProgram.fromAssets(assets, "shelf.vert", "shelf.frag")
@@ -73,6 +77,7 @@ class ShelfRenderer(
             }
         }
         frame.labels.forEach { art.request("label:${it.id}") }
+        if (frame.plaque != null) art.request("plaque:${frame.count}")
 
         renderShadows(frame)
         renderScene(frame)
@@ -94,6 +99,7 @@ class ShelfRenderer(
             GLES30.glDrawElements(GLES30.GL_TRIANGLES, box.count, GLES30.GL_UNSIGNED_SHORT, 0)
         }
         frame.planks.forEach(::cast)
+        frame.cornice?.let(::cast)
         for (comic in frame.comics) {
             // A comic lifted off the shelf would throw a hard shadow far behind it; real ones blur away.
             if (comic.held && frame.dim > 0.05f) continue
@@ -119,10 +125,17 @@ class ShelfRenderer(
         GLES30.glUniform3f(p["uEye"], frame.eye.x, frame.eye.y, frame.eye.z)
         GLES30.glUniform3f(p["uLightDir"], frame.light.x, frame.light.y, frame.light.z)
         GLES30.glUniform1f(p["uShadowTexel"], 1f / shadowSize)
-        GLES30.glUniform1f(p["uColumns"], frame.columns.toFloat())
-        GLES30.glUniform1f(p["uCount"], frame.count.toFloat())
-        GLES30.glUniform1f(p["uSlotWidth"], ShelfController.SLOT_WIDTH)
         GLES30.glUniform1f(p["uRowHeight"], ShelfController.ROW_HEIGHT)
+        GLES30.glUniform4f(
+            p["uPlank"],
+            ShelfController.PLANK_THICKNESS,
+            ShelfController.PLANK_DEPTH,
+            ShelfController.BOTTOM_Z,
+            ShelfController.CORNICE_HEIGHT,
+        )
+        GLES30.glUniform1f(p["uLightsTime"], frame.lightsTime)
+        val wall = wallColor
+        GLES30.glUniform3f(p["uWall"], wall[0], wall[1], wall[2])
         GLES30.glUniform1i(p["uCover"], 0)
         GLES30.glUniform1i(p["uBack"], 1)
         GLES30.glUniform1i(p["uLabel"], 2)
@@ -130,8 +143,11 @@ class ShelfRenderer(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTexture)
 
+        GLES30.glUniform1f(p["uHeld"], 0f)
         draw(quad, frame.wall, MATERIAL_WALL, frame.dim)
         frame.planks.forEach { draw(box, it, MATERIAL_WOOD, frame.dim) }
+        frame.cornice?.let { draw(box, it, MATERIAL_WOOD, frame.dim) }
+        frame.plaque?.let { draw(quad, it, MATERIAL_PLAQUE, frame.dim, label = art["plaque:${frame.count}"]) }
         for (label in frame.labels) {
             val texture = art["label:${label.id}"]
             draw(quad, label.model, MATERIAL_LABEL, frame.dim, label = texture)
@@ -142,6 +158,8 @@ class ShelfRenderer(
             val back = if (comic.held) art["back:${comic.id}"] else null
             GLES30.glUniform1f(p["uSheets"], comic.sheets.toFloat())
             GLES30.glUniform1f(p["uThickness"], comic.size.z)
+            // Once out of the shelf's light, the comic in hand is lit like in a photo studio.
+            GLES30.glUniform1f(p["uHeld"], if (comic.held && frame.dim > 0.25f) 1f else 0f)
             draw(box, comic.model, MATERIAL_COMIC, dim, cover = cover, back = back)
             comic.ribbon?.let { draw(box, it, MATERIAL_RIBBON, dim) }
         }
@@ -255,6 +273,7 @@ class ShelfRenderer(
         const val MATERIAL_WALL = 2
         const val MATERIAL_LABEL = 3
         const val MATERIAL_RIBBON = 4
+        const val MATERIAL_PLAQUE = 5
 
         /**
          * Unit box, -0.5..0.5. Per vertex: position, normal, uv, face (0 front, 1 back, 2 left,

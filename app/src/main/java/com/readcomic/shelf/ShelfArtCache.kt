@@ -20,6 +20,9 @@ interface ShelfArt {
 
     /** A sharp front ([back] = false) or back cover for the comic in hand; may be slow. */
     fun page(id: String, back: Boolean): Bitmap?
+
+    /** The engraving of the name plate (white letters on black) for a collection of [count] comics. */
+    fun plaque(count: Int): Bitmap?
 }
 
 /** GL textures for the shelf, keyed like "cover:<id>". Everything but decoding runs on the render thread. */
@@ -68,7 +71,8 @@ class ShelfArtCache(
                     "cover" -> art.cover(id)
                     "label" -> art.label(id)
                     "front" -> art.page(id, back = false)
-                    else -> art.page(id, back = true)
+                    "back" -> art.page(id, back = true)
+                    else -> art.plaque(id.toInt())
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "No picture for $key", e)

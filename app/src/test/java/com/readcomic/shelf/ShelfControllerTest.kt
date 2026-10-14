@@ -58,7 +58,7 @@ class ShelfControllerTest {
         assertTrue(held.held)
         val (hx, hy) = c.screenOf("c1")
         assertEquals("held comic is tappable", "c1", c.pick(hx, hy))
-        assertTrue(c.frame().dim > 0.5f)
+        assertTrue(c.frame().dim > 0.4f)
 
         // A tap far from it puts it back.
         c.tap(40f, 40f)

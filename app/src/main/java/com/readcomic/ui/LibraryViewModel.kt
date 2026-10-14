@@ -64,6 +64,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Where the shelves were scrolled to, to come back there after reading. */
     var shelfScroll = Float.NaN
 
+    /** Paint of the wall behind the shelves, an index into [ShelfThemes]. */
+    private val _shelfTheme = MutableStateFlow(prefs.getInt(KEY_SHELF_THEME, 0).coerceIn(0, ShelfThemes.lastIndex))
+    val shelfTheme: StateFlow<Int> = _shelfTheme.asStateFlow()
+
+    /** Whether the reader has already found out that comics can be taken off the shelf. */
+    private val _shelfHintDone = MutableStateFlow(prefs.getBoolean(KEY_SHELF_HINT, false))
+    val shelfHintDone: StateFlow<Boolean> = _shelfHintDone.asStateFlow()
+
     init {
         viewModelScope.launch(Dispatchers.IO) {
             var list = store.load()
@@ -163,6 +171,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putString(KEY_READING_MODE, mode.name) }
     }
 
+    fun setShelfTheme(index: Int) {
+        _shelfTheme.value = index
+        prefs.edit { putInt(KEY_SHELF_THEME, index) }
+    }
+
+    fun shelfHintSeen() {
+        if (_shelfHintDone.value) return
+        _shelfHintDone.value = true
+        prefs.edit { putBoolean(KEY_SHELF_HINT, true) }
+    }
+
     fun setShelfMode(enabled: Boolean) {
         _shelfMode.value = enabled
         prefs.edit { putBoolean(KEY_SHELF_MODE, enabled) }
@@ -236,6 +255,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_READING_MODE = "reading_mode"
         private const val KEY_ORIENTATION = "orientation"
         private const val KEY_SHELF_MODE = "shelf_mode"
+        private const val KEY_SHELF_THEME = "shelf_theme"
+        private const val KEY_SHELF_HINT = "shelf_hint"
         const val COVER_WIDTH = 360
         const val COVER_HEIGHT = 560
     }

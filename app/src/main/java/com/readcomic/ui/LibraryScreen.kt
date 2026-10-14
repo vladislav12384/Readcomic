@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -16,7 +17,10 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,12 +35,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -45,6 +53,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -79,11 +88,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -95,11 +109,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.readcomic.data.ComicEntry
 import com.readcomic.shelf.ShelfItem
 import com.readcomic.shelf.ShelfView
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun LibraryScreen(
@@ -109,8 +123,12 @@ fun LibraryScreen(
     coverFile: (ComicEntry) -> File,
     shelfMode: Boolean,
     shelfScroll: Float,
+    shelfTheme: Int,
+    shelfHintDone: Boolean,
     onShelfModeChange: (Boolean) -> Unit,
     onShelfScroll: (Float) -> Unit,
+    onShelfThemeChange: (Int) -> Unit,
+    onShelfHintSeen: () -> Unit,
     onAdd: () -> Unit,
     onOpen: (ComicEntry) -> Unit,
     onRemove: (ComicEntry) -> Unit,
@@ -123,9 +141,13 @@ fun LibraryScreen(
             busy = busy,
             snackbar = snackbar,
             coverFile = coverFile,
+            theme = shelfTheme,
+            hintDone = shelfHintDone,
             initialScroll = shelfScroll,
             onScroll = onShelfScroll,
             onShowGrid = { onShelfModeChange(false) },
+            onThemeChange = onShelfThemeChange,
+            onHintSeen = onShelfHintSeen,
             onAdd = onAdd,
             onOpen = onOpen,
             onRemove = { toRemove = it },
@@ -171,9 +193,13 @@ private fun ShelfLibrary(
     busy: Boolean,
     snackbar: SnackbarHostState,
     coverFile: (ComicEntry) -> File,
+    theme: Int,
+    hintDone: Boolean,
     initialScroll: Float,
     onScroll: (Float) -> Unit,
     onShowGrid: () -> Unit,
+    onThemeChange: (Int) -> Unit,
+    onHintSeen: () -> Unit,
     onAdd: () -> Unit,
     onOpen: (ComicEntry) -> Unit,
     onRemove: (ComicEntry) -> Unit,
@@ -181,6 +207,7 @@ private fun ShelfLibrary(
     val context = LocalContext.current
     var view by remember { mutableStateOf<ShelfView?>(null) }
     var heldId by remember { mutableStateOf<String?>(null) }
+    var picking by remember { mutableStateOf(false) }
     // A real shelf keeps its order: the newest additions first, nothing jumps around after reading.
     val ordered = remember(comics) { comics.sortedByDescending { it.addedAt } }
     val aspects by produceState<Map<String, Float>?>(null, ordered) {
@@ -190,6 +217,7 @@ private fun ShelfLibrary(
     }
     val currentComics by rememberUpdatedState(comics)
     val currentOnOpen by rememberUpdatedState(onOpen)
+    val currentOnHintSeen by rememberUpdatedState(onHintSeen)
 
     LaunchedEffect(view, ordered, aspects) {
         val shelf = view ?: return@LaunchedEffect
@@ -205,9 +233,15 @@ private fun ShelfLibrary(
         val art = LibraryShelfArt(context.applicationContext, ordered.associateBy { it.id }, coverFile)
         shelf.setItems(items, art)
     }
+    LaunchedEffect(view, theme) {
+        val paint = ShelfThemes[theme]
+        view?.setWallColor(paint.red, paint.green, paint.blue)
+    }
 
     val held = comics.firstOrNull { it.id == heldId }
-    BackHandler(enabled = held != null) { view?.putBack() }
+    BackHandler(enabled = held != null || picking) {
+        if (picking) picking = false else view?.putBack()
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(ShelfRoom)) {
         val landscape = maxWidth > maxHeight
@@ -216,10 +250,12 @@ private fun ShelfLibrary(
             factory = { ctx ->
                 ShelfView(ctx).also { shelf ->
                     shelf.setClearColor(ShelfRoom.red, ShelfRoom.green, ShelfRoom.blue)
-                    if (!initialScroll.isNaN()) shelf.restoreScroll(initialScroll)
+                    // Walking into the room for the first time: the shelf lights come on.
+                    if (initialScroll.isNaN()) shelf.switchLightsOn() else shelf.restoreScroll(initialScroll)
                     shelf.callbacks = object : ShelfView.Callbacks {
                         override fun onHeldChanged(id: String?) {
                             heldId = id
+                            if (id != null) currentOnHintSeen()
                         }
 
                         override fun onOpen(id: String) {
@@ -237,55 +273,66 @@ private fun ShelfLibrary(
             onDispose { shelf?.let { onScroll(it.scroll) } }
         }
 
-        // Darker corners, like a room lit by the shelf lamps only.
+        // A soft vignette, like a photo of the room.
         Box(
             Modifier
                 .fillMaxSize()
                 .drawWithCache {
                     val vignette = Brush.radialGradient(
-                        0.55f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.45f),
+                        0.6f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.3f),
                         center = Offset(size.width / 2f, size.height * 0.45f),
                         radius = max(size.width, size.height) * 0.75f,
                     )
                     onDrawBehind { drawRect(vignette) }
                 },
         )
+        // Keeps the status bar readable over a light wall.
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .windowInsetsTopHeight(WindowInsets.statusBars)
+                .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.45f), 1f to Color.Black.copy(alpha = 0.1f))),
+        )
 
-        // The title steps aside while a comic is in hand.
         AnimatedVisibility(
             visible = held == null,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter),
+            modifier = Modifier.align(Alignment.TopEnd),
         ) {
-            ShelfHeader(
-                count = comics.size,
-                reading = comics.count { it.currentPage > 0 && !it.isFinished },
+            ShelfToolbar(
+                theme = theme,
                 busy = busy,
+                onPickTheme = { picking = !picking },
                 onShowGrid = onShowGrid,
             )
         }
 
         if (comics.isEmpty()) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.align(Alignment.Center).padding(32.dp),
-            ) {
-                Text(
-                    "Полки ждут первых комиксов",
-                    style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic),
-                    color = ShelfInk,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Нажми «Добавить» и выбери CBZ, CBR, CB7, CBT или PDF.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = ShelfInk.copy(alpha = 0.7f),
-                    textAlign = TextAlign.Center,
-                )
-            }
+            EmptyShelves(Modifier.align(Alignment.Center))
+        }
+
+        AnimatedVisibility(
+            visible = !hintDone && held == null && comics.isNotEmpty() && !picking,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(SafeInsets)
+                .padding(start = 20.dp, end = 20.dp, bottom = 92.dp),
+        ) {
+            Text(
+                "Коснись комикса — он окажется у тебя в руках",
+                style = MaterialTheme.typography.labelLarge,
+                color = ShelfInk,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCC1B1713))
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+            )
         }
 
         AnimatedVisibility(
@@ -301,6 +348,8 @@ private fun ShelfLibrary(
                 onClick = onAdd,
                 icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                 text = { Text("Добавить") },
+                containerColor = ShelfInk,
+                contentColor = Color(0xFF3A2A1C),
             )
         }
 
@@ -334,6 +383,7 @@ private fun ShelfLibrary(
             if (entry != null) {
                 HeldComicCard(
                     entry = entry,
+                    coverFile = coverFile(entry),
                     onRead = { onOpen(entry) },
                     onRemove = { onRemove(entry) },
                     onPutBack = { view?.putBack() },
@@ -341,6 +391,26 @@ private fun ShelfLibrary(
             } else {
                 Spacer(Modifier.fillMaxWidth())
             }
+        }
+
+        // Choosing the paint of the wall; a tap anywhere else closes it.
+        if (picking) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { picking = false } },
+            )
+        }
+        AnimatedVisibility(
+            visible = picking && held == null,
+            enter = fadeIn() + slideInVertically { -it / 3 },
+            exit = fadeOut() + slideOutVertically { -it / 3 },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .windowInsetsPadding(SafeInsets)
+                .padding(top = 64.dp, end = 12.dp),
+        ) {
+            ThemePicker(selected = theme, onSelect = onThemeChange)
         }
 
         SnackbarHost(
@@ -353,114 +423,227 @@ private fun ShelfLibrary(
     }
 }
 
+/** Round buttons in the corner: the wall paint and the switch to a plain grid. */
 @Composable
-private fun ShelfHeader(count: Int, reading: Int, busy: Boolean, onShowGrid: () -> Unit) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.75f), 1f to Color.Transparent)),
-    ) {
-        Column(Modifier.windowInsetsPadding(SafeInsets).padding(start = 24.dp, end = 8.dp, top = 12.dp, bottom = 36.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Коллекция",
-                        fontFamily = FontFamily.Serif,
-                        fontStyle = FontStyle.Italic,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 30.sp,
-                        color = ShelfInk,
-                    )
-                    Text(
-                        buildString {
-                            append(comicsCount(count))
-                            if (reading > 0) append(" · читаю $reading")
-                        },
-                        style = MaterialTheme.typography.labelLarge,
-                        color = ShelfInk.copy(alpha = 0.65f),
-                    )
-                }
-                IconButton(onClick = onShowGrid) {
-                    Icon(GridIcon, contentDescription = "Сеткой", tint = ShelfInk.copy(alpha = 0.85f))
-                }
+private fun ShelfToolbar(theme: Int, busy: Boolean, onPickTheme: () -> Unit, onShowGrid: () -> Unit) {
+    Column(horizontalAlignment = Alignment.End, modifier = Modifier.windowInsetsPadding(SafeInsets).padding(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            RoundButton(onClick = onPickTheme, description = "Цвет стены") {
+                Box(
+                    Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(ShelfThemes[theme].swatch)
+                        .border(2.dp, ShelfInk, CircleShape),
+                )
             }
-            if (busy) {
-                Spacer(Modifier.height(10.dp))
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(end = 16.dp))
+            RoundButton(onClick = onShowGrid, description = "Сеткой") {
+                Icon(GridIcon, contentDescription = null, tint = ShelfInk, modifier = Modifier.size(22.dp))
             }
+        }
+        if (busy) {
+            Spacer(Modifier.height(10.dp))
+            LinearProgressIndicator(
+                Modifier.width(98.dp).clip(RoundedCornerShape(50)),
+                color = ShelfInk,
+                trackColor = Color.Black.copy(alpha = 0.3f),
+            )
         }
     }
 }
 
 @Composable
-private fun HeldComicCard(entry: ComicEntry, onRead: () -> Unit, onRemove: () -> Unit, onPutBack: () -> Unit) {
+private fun RoundButton(onClick: () -> Unit, description: String, content: @Composable () -> Unit) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(44.dp)
+            .shadow(6.dp, CircleShape)
+            .clip(CircleShape)
+            .background(Color(0xB31B1713))
+            .clickable(onClickLabel = description, onClick = onClick)
+            .semantics { contentDescription = description },
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit) {
     Surface(
         shape = RoundedCornerShape(24.dp),
-        color = Color(0xF01E1915),
+        color = Color(0xF21B1713),
         contentColor = ShelfInk,
         shadowElevation = 12.dp,
     ) {
-        Column(Modifier.padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    entry.title,
-                    fontFamily = FontFamily.Serif,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 21.sp,
-                    lineHeight = 26.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(top = 8.dp),
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Text("Стена", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ShelfThemes.forEachIndexed { index, paint ->
+                    val chosen = index == selected
+                    Box(
+                        Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(paint.swatch)
+                            .border(if (chosen) 3.dp else 1.dp, if (chosen) ShelfInk else ShelfInk.copy(alpha = 0.3f), CircleShape)
+                            .clickable(onClickLabel = paint.name) { onSelect(index) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                ShelfThemes[selected].name,
+                fontFamily = FontFamily.Serif,
+                fontStyle = FontStyle.Italic,
+                fontSize = 17.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyShelves(modifier: Modifier) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .padding(32.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(Color(0xD91B1713))
+            .padding(horizontal = 28.dp, vertical = 24.dp),
+    ) {
+        Text(
+            "Полки ждут первых комиксов",
+            style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic),
+            color = ShelfInk,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Нажми «Добавить» и выбери CBZ, CBR, CB7, CBT или PDF.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = ShelfInk.copy(alpha = 0.7f),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/** The comic in hand: title, progress and buttons, tinted with the colour of its cover. */
+@Composable
+private fun HeldComicCard(
+    entry: ComicEntry,
+    coverFile: File,
+    onRead: () -> Unit,
+    onRemove: () -> Unit,
+    onPutBack: () -> Unit,
+) {
+    val accent by produceState(Color(0xFFB0703A), coverFile) {
+        withContext(Dispatchers.IO) { LibraryShelfArt.coverAccent(coverFile) }?.let { value = Color(it) }
+    }
+    val tint by animateColorAsState(accent, label = "accent")
+    // The button wears the cover's colour, light enough to stand out on the dark card.
+    val button = if (tint.luminance() < 0.32f) lerp(tint, Color.White, 0.35f) else tint
+    val onButton = if (button.luminance() > 0.4f) Color(0xFF1A1410) else Color.White
+    val reading = entry.currentPage > 0 && !entry.isFinished
+
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = Color.Transparent,
+        contentColor = ShelfInk,
+        shadowElevation = 16.dp,
+    ) {
+        Column(
+            Modifier
+                .background(
+                    Brush.linearGradient(
+                        0f to lerp(tint, Color.Black, 0.62f).copy(alpha = 0.96f),
+                        1f to lerp(tint, Color.Black, 0.86f).copy(alpha = 0.96f),
+                    ),
                 )
+                .padding(start = 22.dp, end = 10.dp, top = 10.dp, bottom = 18.dp),
+        ) {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f).padding(top = 10.dp)) {
+                    Text(
+                        entry.title,
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 22.sp,
+                        lineHeight = 27.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        when {
+                            entry.isFinished -> "Прочитан · ${pagesCount(entry.pageCount)}"
+                            reading -> "Стр. ${entry.currentPage + 1} из ${entry.pageCount}"
+                            else -> "${pagesCount(entry.pageCount)} · ещё не начат"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ShelfInk.copy(alpha = 0.72f),
+                    )
+                }
                 IconButton(onClick = onPutBack) {
                     Icon(Icons.Filled.Close, contentDescription = "Поставить на полку", tint = ShelfInk.copy(alpha = 0.7f))
                 }
             }
             Column(Modifier.padding(end = 12.dp)) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    when {
-                        entry.isFinished -> "Прочитан · ${pagesCount(entry.pageCount)}"
-                        entry.currentPage > 0 ->
-                            "Стр. ${entry.currentPage + 1} из ${entry.pageCount} · ${(entry.progress * 100).roundToInt()}%"
-                        else -> "${pagesCount(entry.pageCount)} · ещё не начат"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = ShelfInk.copy(alpha = 0.7f),
-                )
-                if (entry.currentPage > 0 && !entry.isFinished) {
-                    Spacer(Modifier.height(10.dp))
-                    LinearProgressIndicator(
-                        progress = { entry.progress },
-                        modifier = Modifier.fillMaxWidth().height(4.dp),
-                        trackColor = Color.White.copy(alpha = 0.12f),
-                        drawStopIndicator = {},
-                    )
+                if (reading) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        LinearProgressIndicator(
+                            progress = { entry.progress },
+                            modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(50)),
+                            color = button,
+                            trackColor = Color.White.copy(alpha = 0.14f),
+                            drawStopIndicator = {},
+                            gapSize = 0.dp,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "${(entry.progress * 100).roundToInt()}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ShelfInk.copy(alpha = 0.8f),
+                        )
+                    }
                 }
                 Spacer(Modifier.height(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = onRead, modifier = Modifier.weight(1f).height(48.dp)) {
+                    Button(
+                        onClick = onRead,
+                        colors = ButtonDefaults.buttonColors(containerColor = button, contentColor = onButton),
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(
                             when {
                                 entry.isFinished -> "Перечитать"
-                                entry.currentPage > 0 -> "Продолжить"
+                                reading -> "Продолжить"
                                 else -> "Читать"
                             },
-                            style = MaterialTheme.typography.titleSmall,
+                            style = MaterialTheme.typography.titleMedium,
                         )
                     }
-                    Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = onRemove) {
-                        Icon(Icons.Filled.Delete, contentDescription = "Убрать из коллекции", tint = ShelfInk.copy(alpha = 0.6f))
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.1f))
+                            .clickable(onClickLabel = "Убрать из коллекции", onClick = onRemove),
+                    ) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Убрать из коллекции", tint = ShelfInk.copy(alpha = 0.75f))
                     }
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(12.dp))
                 Text(
-                    "Покрути пальцем · нажми на комикс, чтобы открыть",
+                    "Покрути пальцем · коснись комикса, чтобы открыть",
                     style = MaterialTheme.typography.labelSmall,
-                    color = ShelfInk.copy(alpha = 0.45f),
+                    color = ShelfInk.copy(alpha = 0.5f),
                 )
             }
         }
@@ -668,7 +851,7 @@ private fun plural(n: Int, one: String, few: String, many: String): String {
     return "$n $word"
 }
 
-private fun comicsCount(n: Int) = plural(n, "комикс", "комикса", "комиксов")
+internal fun comicsCount(n: Int) = plural(n, "комикс", "комикса", "комиксов")
 
 private fun pagesCount(n: Int) = plural(n, "страница", "страницы", "страниц")
 

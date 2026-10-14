@@ -34,3 +34,20 @@ val ReaderBackgrounds = listOf(
 fun ReadcomicTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = Colors, content = content)
 }
+
+/** A paint for the wall behind the shelves; [red], [green], [blue] are linear, as the 3D scene uses them. */
+class ShelfTheme(val name: String, val red: Float, val green: Float, val blue: Float) {
+    /** The paint as it looks on screen. */
+    val swatch: Color
+        get() = Color(toSrgb(red), toSrgb(green), toSrgb(blue))
+
+    private fun toSrgb(c: Float) = Math.pow(c.toDouble(), 1.0 / 2.2).toFloat().coerceIn(0f, 1f)
+}
+
+val ShelfThemes = listOf(
+    ShelfTheme("Шалфей", 0.17f, 0.22f, 0.17f),
+    ShelfTheme("Лён", 0.34f, 0.27f, 0.20f),
+    ShelfTheme("Пыльно-синий", 0.14f, 0.19f, 0.25f),
+    ShelfTheme("Терракота", 0.36f, 0.17f, 0.11f),
+    ShelfTheme("Графит", 0.055f, 0.055f, 0.06f),
+)

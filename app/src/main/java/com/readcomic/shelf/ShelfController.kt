@@ -43,13 +43,18 @@ class ShelfFrame(
     val light: Vec3,
     val wall: FloatArray,
     val planks: List<FloatArray>,
+    /** The top board of the bookcase, when it is on screen. */
+    val cornice: FloatArray?,
+    /** The brass name plate on the cornice (a quad). */
+    val plaque: FloatArray?,
     val comics: List<ComicDraw>,
     val labels: List<LabelDraw>,
     /** How much everything but the comic in hand is darkened, 0..1. */
     val dim: Float,
-    val columns: Int,
-    /** Occupied slots, for the light pools above them. */
+    /** Comics in the collection, for the name plate. */
     val count: Int,
+    /** Seconds since the shelf lights were switched on. */
+    val lightsTime: Float,
 )
 
 /**
@@ -98,6 +103,13 @@ class ShelfController(private val density: Float) {
     private var handFill = 0.6f
 
     val isHolding get() = heldId != null
+
+    // Shelf lights: they switch on one after another when the library opens.
+    private var lightsTime = LIGHTS_DONE
+
+    fun switchLightsOn() {
+        lightsTime = 0f
+    }
 
     /** How far the shelves are scrolled; set it to come back to the same place later. */
     var scroll: Float
@@ -162,7 +174,8 @@ class ShelfController(private val density: Float) {
 
     private fun rowBase(row: Int) = -row * ROW_HEIGHT
 
-    private val scrollTop get() = ROW_HEIGHT * 0.92f - visibleHalfHeight
+    private val corniceBottom get() = ROW_HEIGHT - PLANK_THICKNESS
+    private val scrollTop get() = corniceBottom + CORNICE_HEIGHT + 0.10f - visibleHalfHeight
     private val scrollBottom get() = min(scrollTop, rowBase(rows - 1) - 0.08f + visibleHalfHeight)
 
     private fun sizeOf(item: ShelfItem): Vec3 {
@@ -253,6 +266,24 @@ class ShelfController(private val density: Float) {
             )
         }
 
+        // The top board with the name plate, above the first shelf.
+        val cornice = if (topRow == 0) {
+            Mat4.compose(
+                Vec3(0f, corniceBottom + CORNICE_HEIGHT / 2f, (PLANK_DEPTH + CORNICE_OVERHANG) / 2f),
+                Quat.IDENTITY,
+                Vec3(halfW * 2.6f, CORNICE_HEIGHT, PLANK_DEPTH + CORNICE_OVERHANG),
+            )
+        } else {
+            null
+        }
+        val plaque = cornice?.let {
+            Mat4.compose(
+                Vec3(0f, corniceBottom + CORNICE_HEIGHT / 2f, PLANK_DEPTH + CORNICE_OVERHANG + 0.0008f),
+                Quat.IDENTITY,
+                Vec3(PLAQUE_WIDTH, PLAQUE_HEIGHT, 1f),
+            )
+        }
+
         val comics = ArrayList<ComicDraw>()
         val labels = ArrayList<LabelDraw>()
         var held: ComicDraw? = null
@@ -281,7 +312,8 @@ class ShelfController(private val density: Float) {
                 Mat4.compose(
                     Vec3(slotX(index % columns), rowBase(row) - PLANK_THICKNESS / 2f, PLANK_DEPTH + 0.0006f),
                     Quat.IDENTITY,
-                    Vec3(LABEL_WIDTH, LABEL_HEIGHT, 1f),
+                    // With its brass holder around it.
+                    Vec3(LABEL_WIDTH + 0.008f, LABEL_HEIGHT + 0.006f, 1f),
                 ),
             )
         }
@@ -301,11 +333,13 @@ class ShelfController(private val density: Float) {
             light = light,
             wall = wall,
             planks = planks,
+            cornice = cornice,
+            plaque = plaque,
             comics = comics,
             labels = labels,
-            dim = if (heldId != null) 0.6f * easedHold() else 0f,
-            columns = columns,
+            dim = if (heldId != null) 0.5f * easedHold() else 0f,
             count = items.size,
+            lightsTime = lightsTime,
         )
     }
 
@@ -437,6 +471,11 @@ class ShelfController(private val density: Float) {
     fun step(dt: Float): Boolean {
         var animating = false
 
+        if (lightsTime < LIGHTS_DONE) {
+            lightsTime = min(LIGHTS_DONE, lightsTime + dt)
+            animating = true
+        }
+
         val target = if (holding) 1f else 0f
         hold.step(target, 0f, HOLD_OMEGA, dt)
         if (heldId != null) {
@@ -495,6 +534,11 @@ class ShelfController(private val density: Float) {
         const val PLANK_DEPTH = 0.15f
         const val BOTTOM_Z = 0.065f
         const val LEAN = 0.19f
+        const val CORNICE_HEIGHT = 0.075f
+        const val CORNICE_OVERHANG = 0.012f
+        const val PLAQUE_WIDTH = 0.26f
+        const val PLAQUE_HEIGHT = 0.042f
+        const val LIGHTS_DONE = 3f
         const val LABEL_WIDTH = 0.16f
         const val LABEL_HEIGHT = 0.025f
         const val RIBBON_WIDTH = 0.008f
