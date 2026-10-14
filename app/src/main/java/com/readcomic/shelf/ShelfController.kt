@@ -1,8 +1,10 @@
 package com.readcomic.shelf
 
+import com.readcomic.curl.PageTurnController
 import com.readcomic.curl.Spring2D
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.floor
@@ -52,6 +54,8 @@ class ShelfFrame(
     val labels: List<LabelDraw>,
     /** How much everything but the comic in hand is darkened, 0..1. */
     val dim: Float,
+    /** Everything but the comic in hand fades into the colour of the reading table, 0..1. */
+    val fade: Float,
     /** Comics in the collection, for the name plate. */
     val count: Int,
     /** Seconds since the shelf lights were switched on. */
@@ -68,6 +72,9 @@ class ShelfController(private val density: Float) {
     interface Listener {
         /** The comic in hand changed (null: back on the shelf). */
         fun onHeldChanged(id: String?)
+
+        /** The comic in hand was brought before the eyes to be read: the reader takes over. */
+        fun onPresented(id: String) = Unit
     }
 
     var listener: Listener? = null
@@ -220,12 +227,60 @@ class ShelfController(private val density: Float) {
     }
 
     private fun handPose(size: Vec3): Pair<Vec3, Quat> {
-        val depth = size.y / (2f * tan(FOV / 2f) * handFill)
-        val position = pointInFront(handAnchorX, handAnchorY, depth)
-        // Face the eye (the camera looks slightly down), then the reader's own turning.
-        val face = Quat.axisAngle(Vec3(1f, 0f, 0f), 0.05f)
-        val rotation = Quat.axisAngle(Vec3(0f, 1f, 0f), yaw) * Quat.axisAngle(Vec3(1f, 0f, 0f), pitch) * face
+        // Being presented: it comes to the middle, as large as the reader will start showing it.
+        val p = presentEase()
+        val anchorX = handAnchorX + (0.5f - handAnchorX) * p
+        val anchorY = handAnchorY + (0.5f - handAnchorY) * p
+        val fill = handFill + (presentFill - handFill) * p
+        // Presented, the front cover itself (not the middle of the comic) is at that size.
+        val depth = size.y / (2f * tan(FOV / 2f) * fill) + size.z * 0.5f * p
+        val position = pointInFront(anchorX, anchorY, depth)
+        // Face the eye (the camera looks slightly down), then the reader's own turning. Presented,
+        // it is square to the camera, as flat on the screen as the page in the reader.
+        val square = -atan2(eye().y - target().y, distance)
+        val face = Quat.axisAngle(Vec3(1f, 0f, 0f), 0.05f + (square - 0.05f) * p)
+        val turn = yaw + (presentYaw - yaw) * p
+        val rotation = Quat.axisAngle(Vec3(0f, 1f, 0f), turn) * Quat.axisAngle(Vec3(1f, 0f, 0f), pitch * (1f - p)) * face
         return position to rotation
+    }
+
+    // Presenting the comic in hand for reading.
+    private var presentTime = -1f
+    private var presentFill = 0.5f
+    private var presentYaw = 0f
+
+    private fun presentEase(): Float {
+        if (presentTime < 0f) return 0f
+        val t = (presentTime / PRESENT_DURATION).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
+    /**
+     * Brings the comic in hand to the middle of the screen, front up, at the size the reader
+     * starts at, while the room fades into the reading table. [fill] is that size as a part of
+     * the screen's height. Returns false if nothing is in hand.
+     */
+    fun present(fill: Float): Boolean {
+        val id = heldId ?: return false
+        if (!holding || presentTime >= 0f || items.none { it.id == id }) return false
+        presentFill = fill
+        presentTime = 0f
+        rotating = false
+        yawVelocity = 0f
+        // Front up the shortest way round.
+        presentYaw = round(yaw / (2f * PI.toFloat())) * 2f * PI.toFloat()
+        return true
+    }
+
+    /**
+     * Height of the comic [id] as the reader first shows it, held up before it falls onto the
+     * table, as a part of the screen's height. [spread] tells whether the reader will show two
+     * pages side by side.
+     */
+    fun readerFill(id: String, spread: Boolean): Float {
+        val item = items.firstOrNull { it.id == id } ?: return 0.6f
+        val aspect = item.aspect.coerceIn(0.5f, 1f)
+        return PageTurnController.handRect(viewWidth, viewHeight, density, aspect, spread).height / viewHeight
     }
 
     private fun easedHold(): Float {
@@ -337,6 +392,7 @@ class ShelfController(private val density: Float) {
             comics = comics,
             labels = labels,
             dim = if (heldId != null) 0.5f * easedHold() else 0f,
+            fade = presentEase(),
             count = items.size,
             lightsTime = lightsTime,
         )
@@ -348,6 +404,7 @@ class ShelfController(private val density: Float) {
 
     /** Finger moved by (dx, dy) pixels: scrolls the shelves or turns the comic in hand. */
     fun drag(dx: Float, dy: Float) {
+        if (presentTime >= 0f) return
         if (heldId != null && holding) {
             rotating = true
             yaw += dx * ROTATE_PER_PIXEL / density
@@ -379,6 +436,7 @@ class ShelfController(private val density: Float) {
 
     /** A tap at (x, y) pixels. Picks a comic off the shelf, or puts the one in hand back. */
     fun tap(x: Float, y: Float): String? {
+        if (presentTime >= 0f) return null
         val hit = pick(x, y)
         val held = heldId
         if (held != null) {
@@ -409,7 +467,8 @@ class ShelfController(private val density: Float) {
     }
 
     fun putBack() {
-        if (heldId == null) return
+        // Once on its way to the reader it is not put back.
+        if (heldId == null || presentTime >= 0f) return
         holding = false
         rotating = false
         listener?.onHeldChanged(null)
@@ -469,6 +528,15 @@ class ShelfController(private val density: Float) {
     /** Advances animations. Returns true while another frame is needed. */
     fun step(dt: Float): Boolean {
         var animating = false
+
+        if (presentTime >= 0f) {
+            val before = presentTime
+            presentTime += dt
+            if (before < PRESENT_DURATION + PRESENT_HOLD && presentTime >= PRESENT_DURATION + PRESENT_HOLD) {
+                heldId?.let { listener?.onPresented(it) }
+            }
+            if (presentTime < PRESENT_DURATION + PRESENT_HOLD) animating = true
+        }
 
         if (lightsTime < LIGHTS_DONE) {
             lightsTime = min(LIGHTS_DONE, lightsTime + dt)
@@ -538,6 +606,8 @@ class ShelfController(private val density: Float) {
         const val PLAQUE_WIDTH = 0.26f
         const val PLAQUE_HEIGHT = 0.042f
         const val LIGHTS_DONE = 3f
+        private const val PRESENT_DURATION = 0.42f
+        private const val PRESENT_HOLD = 0.04f
         const val LABEL_WIDTH = 0.16f
         const val LABEL_HEIGHT = 0.025f
         const val RIBBON_WIDTH = 0.008f

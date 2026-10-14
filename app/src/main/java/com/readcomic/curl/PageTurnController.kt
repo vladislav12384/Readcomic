@@ -1,6 +1,8 @@
 package com.readcomic.curl
 
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
@@ -34,6 +36,9 @@ class PageTurnController(private val density: Float) {
 
         /** The comic lies closed on the table ([closed]) or was opened. */
         fun onClosedChanged(closed: Boolean) = Unit
+
+        /** The comic is drawn for the first time (a closed one starts to fall). */
+        fun onShown() = Unit
     }
 
     /**
@@ -54,6 +59,15 @@ class PageTurnController(private val density: Float) {
         val shiftY: Float,
         val stacks: Float,
         val hidden: Boolean,
+        /** How high "in the hand" is, as a part of the distance to the eye. */
+        val height: Float = 0.12f,
+        /** The lamp over the table, 1 while the comic lies closed, gone once it is open. */
+        val spot: Float = 0f,
+        /**
+         * The table's light and shade (vignette, lamp, shadows): 0 is a plain colour, as the
+         * shelves fade out to, and it comes up as the comic falls.
+         */
+        val ambience: Float = 1f,
     )
 
     enum class ReadingMode { AUTO, SPREAD, SINGLE }
@@ -128,6 +142,74 @@ class PageTurnController(private val density: Float) {
         var waited = 0f
         var landed = false
     }
+
+    /**
+     * Opening at a bookmark: the cover, then bunches of the pages read so far, flip over one
+     * after another (quick at first, slower towards the end) and the comic lands open there.
+     */
+    private inner class Riffle(val target: Int) {
+        inner class Bunch(
+            /** First leaf (book) or page (single) of the bunch, and the one after its last. */
+            val first: Int,
+            val end: Int,
+            val start: Float,
+            val relY: Float,
+        ) {
+            val spring = Spring2D()
+            var guide: Guide? = null
+            var flying = false
+            var landed = false
+
+            fun rect() = if (isSpread) rightSlot() else singleRect(first)
+            fun grabX() = rect().right
+            fun grabY() = rect().let { it.top + it.height * relY }
+
+            /** How far over it is, 0 lying on the right to 1 landed. */
+            fun progress(): Float = when {
+                landed -> 1f
+                !flying -> 0f
+                isSpread -> ((grabX() - spring.x) / (2f * rect().width)).coerceIn(0f, 1f)
+                else -> ((grabX() - spring.x) / rect().width).coerceIn(0f, 1f)
+            }
+
+            fun curl(): CurlGeometry? =
+                CurlMath.compute(grabX(), grabY(), spring.x, spring.y, rect(), landFlat = isSpread)
+
+            fun front(): Face? = if (isSpread) face(2 * first, false) else face(first, false)
+
+            /** What shows on its back: the left page of the spread after it. */
+            fun back(): Face? = if (isSpread) face(2 * end - 1, true) else null
+        }
+
+        val bunches: List<Bunch>
+        var time = 0f
+
+        init {
+            // Units are leaves in a book, pages one at a time. At most a handful of bunches fly:
+            // the cover alone, then the rest shared out evenly.
+            val units = target
+            val count = min(units, MAX_BUNCHES)
+            val ends = (1..count).map { k -> if (k == 1) 1 else 1 + ((units - 1) * (k - 1).toFloat() / (count - 1)).toInt() }
+                .let { list -> list.dropLast(1) + units }
+                .distinct()
+            var first = 0
+            val total = RIFFLE_SPREAD_TIME + RIFFLE_STEP * (ends.size - 1)
+            bunches = ends.mapIndexed { k, end ->
+                val f = if (ends.size == 1) 0f else k.toFloat() / (ends.size - 1)
+                // Released by a thumb: the first ones go in quick succession, the last ones linger.
+                val start = if (ends.size == 1) 0f else total * f * f * 0.75f + total * 0.25f * f
+                val relY = 0.99f - 0.05f * ((k * 7) % 5) / 4f
+                Bunch(first, end, start, relY).also { first = end }
+            }
+        }
+
+        val done get() = bunches.all { it.landed }
+
+        /** How far the comic has opened: the cover's way over. */
+        fun opening() = bunches.firstOrNull()?.progress() ?: 1f
+    }
+
+    private var riffle: Riffle? = null
 
     private class ZoomAnimation(
         val fromScale: Float, val fromX: Float, val fromY: Float,
@@ -207,6 +289,9 @@ class PageTurnController(private val density: Float) {
 
     private var arrival: Arrival? = null
 
+    /** Whether [Listener.onShown] was called for the comic set last. */
+    private var shown = false
+
     /** The comic lies closed (or is still falling): a touch opens it. Read from the UI thread too. */
     @Volatile
     var isClosed = false
@@ -242,6 +327,7 @@ class PageTurnController(private val density: Float) {
         turn = null
         isSpread = wantsSpread()
         resetZoom()
+        shown = false
         if (closed && pages.isNotEmpty()) {
             // The comic comes onto the table closed and opens where reading continues.
             arrival = Arrival(startImage)
@@ -422,9 +508,42 @@ class PageTurnController(private val density: Float) {
     // region What the renderer needs
 
     fun scene(): Scene {
+        riffle?.let { return riffleScene(it) }
         val t = turn
         val curl = currentCurl()
         return if (isSpread) spreadScene(t, curl) else singleScene(t, curl)
+    }
+
+    /** The comic opening at its bookmark: bunches of pages waiting, in the air and landed. */
+    private fun riffleScene(r: Riffle): Scene {
+        val waiting = r.bunches.firstOrNull { !it.flying }
+        val lastLanded = r.bunches.lastOrNull { it.landed }
+        // The earliest ones are on top: they were above the others on the pile.
+        val flying = r.bunches.filter { it.flying && !it.landed }.reversed().map { b ->
+            Sheet(b.rect(), false, b.front()!!, b.back(), b.curl())
+        }
+        val flats = ArrayList<Sheet>(2)
+        val stacks = ArrayList<StackEdge>(2)
+        if (isSpread) {
+            val slot = rightSlot()
+            lastLanded?.let { b -> b.back()?.let { flats += Sheet(slot, true, it, null, null) } }
+            val rightIndex = waiting?.let { 2 * it.first } ?: (2 * r.target)
+            face(rightIndex, false)?.let { flats += Sheet(slot, false, it, null, null) }
+            lastLanded?.let { b ->
+                stackEdge(leftSlot(), b.end - 1, -1f)?.let { stacks += it }
+            }
+            if (rightIndex < pages.size) stackEdge(slot, leafCount - rightIndex / 2 - 1, 1f)?.let { stacks += it }
+            val first = r.bunches.first().progress()
+            val leftAlpha = if (lastLanded != null) 1f else first * first
+            val drops = listOf(DropShadow(leftSlot(), leftAlpha), DropShadow(slot, 1f)).filter { it.alpha > 0.002f }
+            return Scene(flats, null, stacks, drops, gutter = 0.16f, flying = flying)
+        }
+        val top = waiting?.first ?: r.target
+        face(r.target, false)?.let { flats += Sheet(singleRect(r.target), false, it, null, null) }
+        if (top != r.target) face(top, false)?.let { flats += Sheet(singleRect(top), false, it, null, null) }
+        val rect = singleRect(top)
+        stackEdge(rect, pages.size - 1 - top, 1f)?.let { stacks += it }
+        return Scene(flats, null, stacks, listOf(DropShadow(rect, 1f)), gutter = 0.10f, flying = flying)
     }
 
     private fun spreadScene(t: Turn?, curl: CurlGeometry?): Scene {
@@ -531,9 +650,11 @@ class PageTurnController(private val density: Float) {
     fun wantedImages(): List<Int> {
         val closed = arrival
         if (closed != null) {
-            // The cover now, and what opening it will show.
+            // The cover now, what opening it will show, and the pages flying past on the way.
             val open = openingTarget(closed) ?: 0
-            return images(if (isSpread) listOf(0, 2 * open - 1, 2 * open, 1) else listOf(0, open, 1))
+            val shown = if (isSpread) listOf(0, 2 * open - 1, 2 * open, 1) else listOf(0, open, 1)
+            val passing = riffle?.bunches?.flatMap { b -> if (isSpread) listOf(2 * b.first, 2 * b.end - 1) else listOf(b.first) }.orEmpty()
+            return images(shown + passing)
         }
         val order = if (isSpread) {
             val s = position
@@ -684,7 +805,7 @@ class PageTurnController(private val density: Float) {
     /** Opens the closed comic with an animation (a touch on it, or a key). */
     fun open() {
         val closed = arrival ?: return
-        if (turn != null) return
+        if (turn != null || riffle != null) return
         if (!closed.landed) {
             // Impatient: it lands at once.
             closed.time = DROP_DURATION + SETTLE_DURATION
@@ -697,8 +818,7 @@ class PageTurnController(private val density: Float) {
             notifyPosition()
             return
         }
-        animatedTurn(forward = true)
-        turn?.openTo = target
+        if (riffle == null) riffle = Riffle(target)
     }
 
     /** How the closed comic is placed while it arrives and opens; null while simply reading. */
@@ -711,6 +831,7 @@ class PageTurnController(private val density: Float) {
         // that its spine ends up in the middle.
         val t = turn
         val opening = when {
+            riffle != null -> riffle!!.opening()
             t == null || t.openTo == null -> 0f
             isSpread -> ((t.grabX() - t.spring.x) / (2f * t.rect().width)).coerceIn(0f, 1f)
             else -> ((t.grabX() - t.spring.x) / t.rect().width).coerceIn(0f, 1f)
@@ -720,28 +841,46 @@ class PageTurnController(private val density: Float) {
         // Lying closed it is seen whole with the table around it; opening it brings it close.
         val rest = if (viewHeight > viewWidth) CLOSED_SCALE_PORTRAIT else CLOSED_SCALE_LANDSCAPE
         val scale = rest + (1f - rest) * eased
-        if (closed.time < 0f) return Pose(1f, DROP_ANGLE, DROP_TILT, pivotX, pivotY, scale, shiftX, 0f, 0f, hidden = true)
+        // In the hand it is as large as the screen allows; that sets how high the hand is.
+        val height = (1f - rest / IN_HAND_SCALE).coerceIn(0.02f, 0.3f)
+        val spot = 1f - eased
+        if (closed.time < 0f) {
+            return Pose(1f, 0f, 0f, pivotX, pivotY, scale, shiftX, 0f, 0f, hidden = true, height = height, spot = spot, ambience = 0f)
+        }
+        val light = (closed.time / AMBIENCE_DURATION).coerceIn(0f, 1f)
+        val ambience = light * light * (3f - 2f * light)
 
+        // It comes to rest a little askew and off centre, as a comic put down on a table does,
+        // and straightens out as it opens.
+        val restAngle = REST_ANGLE * (1f - eased)
+        val restX = rect.width * REST_SHIFT_X * (1f - eased)
+        val restY = rect.height * REST_SHIFT_Y * (1f - eased)
         val lift: Float
         val angle: Float
         val tilt: Float
+        val drift: Float
         if (closed.time < DROP_DURATION) {
-            // Falling: slow at first, faster and faster, straightening out on the way down.
+            // Falling: slow at first, faster and faster, tipping a little on the way down.
             val u = closed.time / DROP_DURATION
             lift = 1f - u * u
-            val straighten = 1f - (1f - u) * (1f - u)
-            angle = DROP_ANGLE * (1f - straighten)
-            tilt = DROP_TILT * (1f - u)
+            angle = restAngle * 1.5f * (1f - (1f - u) * (1f - u))
+            tilt = DROP_TILT * sin(PI.toFloat() * u)
+            drift = u * u
         } else {
-            // A small hop where it hits the table, quickly settling.
+            // A small hop where it hits the table, a short slide, and it settles.
             val since = closed.time - DROP_DURATION
             val decay = exp(-since * 10f)
-            lift = 0.035f * decay * abs(sin(since * 17f))
-            angle = DROP_ANGLE * -0.06f * decay * sin(since * 13f)
-            tilt = DROP_TILT * 0.08f * decay * sin(since * 17f)
+            lift = 0.03f * decay * abs(sin(since * 17f))
+            angle = restAngle * (1f + 0.5f * exp(-since * 7f) * cos(since * 11f))
+            tilt = DROP_TILT * 0.06f * decay * sin(since * 17f)
+            drift = 1f
         }
         val stacks = 1f - (lift / 0.12f).coerceIn(0f, 1f)
-        return Pose(lift, angle, tilt, pivotX, pivotY, scale, shiftX, 0f, stacks, hidden = false)
+        return Pose(
+            lift, angle, tilt, pivotX, pivotY, scale,
+            shiftX + restX * drift, restY * drift, stacks, hidden = false, height = height, spot = spot,
+            ambience = ambience,
+        )
     }
 
     /** Where opening lands: the place reading continues, at least past the cover. */
@@ -1106,6 +1245,68 @@ class PageTurnController(private val density: Float) {
     /** Advances animations. Returns true while another frame is needed. */
     fun step(dt: Float): Boolean {
         var animating = false
+        if (!shown && (arrival?.time ?: 0f) >= 0f) {
+            shown = true
+            listener?.onShown()
+        }
+
+        riffle?.let { r ->
+            r.time += dt
+            for (b in r.bunches) {
+                if (b.landed) continue
+                if (!b.flying) {
+                    if (r.time < b.start) continue
+                    b.flying = true
+                    b.spring.snapTo(b.grabX(), b.grabY())
+                    val rect = b.rect()
+                    b.guide = if (isSpread) {
+                        // Over the spine in an arc, landing flat on the other side.
+                        Guide(
+                            b.grabX(), b.grabY(),
+                            rect.left, b.grabY() - rect.height * 0.55f,
+                            CurlMath.landedX(b.grabX(), rect), b.grabY(),
+                            SPREAD_GUIDE_DURATION,
+                        )
+                    } else {
+                        Guide(
+                            b.grabX(), b.grabY(),
+                            b.grabX() - rect.width * 0.55f, b.grabY() - rect.height * 0.4f,
+                            CurlMath.hiddenX(b.grabX(), rect, 0f), b.grabY() - rect.height * 0.15f,
+                            GUIDE_DURATION,
+                        )
+                    }
+                }
+                val guide = b.guide
+                if (guide != null) {
+                    guide.t = min(1f, guide.t + dt / guide.duration)
+                    val (gx, gy) = guide.point()
+                    b.spring.step(gx, gy, GUIDE_OMEGA, dt)
+                    if (guide.t >= 1f) b.guide = null
+                } else {
+                    val rect = b.rect()
+                    val tx = if (isSpread) CurlMath.landedX(b.grabX(), rect) else CurlMath.hiddenX(b.grabX(), rect, 0f)
+                    b.spring.step(tx, b.grabY(), SETTLE_OMEGA, dt)
+                    val there = if (isSpread) {
+                        b.spring.isAt(tx, b.grabY(), 0.75f, 20f)
+                    } else {
+                        b.spring.x <= tx + rect.width * 0.12f
+                    }
+                    if (there) {
+                        b.landed = true
+                        listener?.onPageTurned()
+                    }
+                }
+            }
+            if (r.done) {
+                riffle = null
+                arrival = null
+                position = r.target.coerceIn(0, max(positionCount - 1, 0))
+                lastForward = true
+                setClosed(false)
+                notifyPosition()
+            }
+            animating = true
+        }
 
         arrival?.let { closed ->
             if (closed.time < 0f) {
@@ -1236,11 +1437,37 @@ class PageTurnController(private val density: Float) {
         // The closed comic falling onto the table: time to fall, to settle, its turn and tilt in the hand.
         private const val DROP_DURATION = 0.62f
         private const val SETTLE_DURATION = 0.4f
-        private const val DROP_ANGLE = -8f
-        private const val DROP_TILT = 16f
+        private const val DROP_TILT = 9f
         private const val COVER_WAIT = 0.8f
+        private const val AMBIENCE_DURATION = 0.7f
         private const val CLOSED_SCALE_PORTRAIT = 0.8f
         private const val CLOSED_SCALE_LANDSCAPE = 0.88f
+
+        /** Size of the comic in the hand compared to reading size: the start of its fall. */
+        const val IN_HAND_SCALE = 0.95f
+
+        /**
+         * Where a closed comic with a cover of [aspect] (width / height) is held up in a view of
+         * that size, just before it falls onto the table: in the middle, a little smaller than
+         * the page it opens to. [spread] tells whether the view shows two pages side by side.
+         */
+        fun handRect(viewWidth: Float, viewHeight: Float, density: Float, aspect: Float, spread: Boolean): PageRect {
+            val margin = (if (spread) 6f else 4f) * density
+            val availableWidth = (viewWidth - 2f * margin) / (if (spread) 2f else 1f)
+            val availableHeight = viewHeight - 2f * margin
+            val shape = if (aspect > 0f) aspect else DEFAULT_ASPECT
+            val height = min(availableHeight, availableWidth / shape) * IN_HAND_SCALE
+            val width = height * shape
+            return PageRect((viewWidth - width) / 2f, (viewHeight - height) / 2f, width, height)
+        }
+        private const val REST_ANGLE = -2.6f
+        private const val REST_SHIFT_X = 0.025f
+        private const val REST_SHIFT_Y = 0.012f
+
+        // Opening at a bookmark: at most this many bunches of pages fly over, within this time.
+        private const val MAX_BUNCHES = 7
+        private const val RIFFLE_SPREAD_TIME = 0.22f
+        private const val RIFFLE_STEP = 0.11f
 
         /** Speed (dp per second) a thrown page keeps when it hits an edge. */
         private const val BOUNCE_MAX_SPEED = 1400f

@@ -20,6 +20,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -73,10 +75,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -87,6 +91,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.readcomic.curl.PageCurlView
 import com.readcomic.curl.PageLoader
+import com.readcomic.curl.PageTurnController
 import com.readcomic.curl.PageTurnController.ReadingMode
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
@@ -94,6 +99,7 @@ import com.readcomic.data.ComicSource
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -111,6 +117,8 @@ fun ReaderScreen(
     backgroundTint: Int,
     readingMode: ReadingMode,
     orientation: OrientationLock,
+    /** Brought from the shelf: held up in the middle of the screen until the reader draws it. */
+    carried: CarriedCover? = null,
     pageAspects: suspend (ComicSource, onProgress: (Float) -> Unit) -> FloatArray,
     onBackgroundTintChange: (Int) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
@@ -131,6 +139,19 @@ fun ReaderScreen(
     var curlView by remember { mutableStateOf<PageCurlView?>(null) }
     // The comic arrives closed on the table and waits for a touch to open.
     var closed by remember(entry.id) { mutableStateOf(true) }
+    // Carried from the shelf, its cover is held up where the shelf left it until the comic falls.
+    var heldUp by remember(entry.id) { mutableStateOf(carried != null) }
+    LaunchedEffect(heldUp) {
+        if (!heldUp) carried?.release()
+    }
+    // Once open, where it opened: "page 37 of 120", for a moment.
+    var openedAt by remember(entry.id) { mutableStateOf(false) }
+    LaunchedEffect(openedAt) {
+        if (openedAt) {
+            delay(OPENED_AT_MILLIS)
+            openedAt = false
+        }
+    }
     val latestOnPageChanged by rememberUpdatedState(onPageChanged)
 
     LaunchedEffect(entry.uri) {
@@ -199,7 +220,13 @@ fun ReaderScreen(
                                 }
 
                                 override fun onClosedChanged(isClosed: Boolean) {
+                                    if (closed && !isClosed) openedAt = true
                                     closed = isClosed
+                                }
+
+                                override fun onShown() {
+                                    // The picture goes once the comic's own first frames are surely on screen.
+                                    postDelayed({ heldUp = false }, HANDOVER_MILLIS)
                                 }
                             }
                             setReadingMode(readingMode)
@@ -217,6 +244,9 @@ fun ReaderScreen(
                 modifier = Modifier.align(Alignment.Center).padding(32.dp),
             )
 
+            // Held up while it loads ([HeldUpCover] below): no spinner over it.
+            heldUp -> Unit
+
             else -> Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.align(Alignment.Center).padding(32.dp),
@@ -230,6 +260,47 @@ fun ReaderScreen(
                     CircularProgressIndicator()
                 }
             }
+        }
+
+        if (heldUp && error == null) {
+            HeldUpCover(carried?.image, readingMode, tint)
+            // Only a long first preparation is worth a word.
+            if (preparing > 0f && shapes == null) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .windowInsetsPadding(barInsets)
+                        .padding(bottom = 28.dp),
+                ) {
+                    Text("Подготовка комикса… ${(preparing * 100).roundToInt()}%", color = Color.White.copy(alpha = 0.8f))
+                    Spacer(Modifier.height(10.dp))
+                    LinearProgressIndicator(progress = { preparing }, modifier = Modifier.width(220.dp))
+                }
+            }
+        }
+
+        // Where the comic opened, for a moment.
+        val total = source?.pageCount ?: 0
+        AnimatedVisibility(
+            visible = openedAt && !overlay && !settings && total > 0,
+            enter = fadeIn(tween(durationMillis = 350)) + slideInVertically(tween(durationMillis = 350)) { it / 2 },
+            exit = fadeOut(tween(durationMillis = 500)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(barInsets)
+                .padding(bottom = 28.dp),
+        ) {
+            val pages = if (lastPage > page) "${page + 1}–${lastPage + 1}" else "${page + 1}"
+            Text(
+                "Стр. $pages из $total",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .padding(horizontal = 18.dp, vertical = 9.dp),
+            )
         }
 
         // A quiet hint while the comic lies closed.
@@ -636,3 +707,39 @@ internal fun GlLifecycle(view: GLSurfaceView?) {
         onDispose { lifecycle.removeObserver(observer) }
     }
 }
+
+/**
+ * The cover of a comic carried from the shelf, held up in the middle of the plain table exactly
+ * where the shelf left it and where the reader starts its fall, while the comic loads.
+ */
+@Composable
+private fun HeldUpCover(image: ImageBitmap?, readingMode: ReadingMode, table: Color) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(table)) {
+        if (image == null) return@BoxWithConstraints
+        val density = LocalDensity.current
+        val width = constraints.maxWidth.toFloat()
+        val height = constraints.maxHeight.toFloat()
+        val spread = when (readingMode) {
+            ReadingMode.SPREAD -> true
+            ReadingMode.SINGLE -> false
+            ReadingMode.AUTO -> width > height
+        }
+        // The same shape as the comic on the shelf.
+        val aspect = (image.width.toFloat() / image.height).coerceIn(0.5f, 1f)
+        val rect = PageTurnController.handRect(width, height, density.density, aspect, spread)
+        Image(
+            bitmap = image,
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .offset { IntOffset(rect.left.roundToInt(), rect.top.roundToInt()) }
+                .size(with(density) { rect.width.toDp() }, with(density) { rect.height.toDp() }),
+        )
+    }
+}
+
+/** How long the picture of the cover stays over the reader's own first frames. */
+private const val HANDOVER_MILLIS = 48L
+
+/** How long "page N of M" shows once the comic is open. */
+private const val OPENED_AT_MILLIS = 1800L

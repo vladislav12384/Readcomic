@@ -219,10 +219,10 @@ class LibraryShelfArt(
         private const val INK = 0xFF3A2A1C.toInt()
         private const val INK_LIGHT = 0xFF9A8670.toInt()
 
-        private fun isWide(bitmap: Bitmap) = bitmap.width > bitmap.height * 1.1f
+        fun isWide(bitmap: Bitmap) = bitmap.width > bitmap.height * 1.1f
 
         /** The front cover: the right half of a wraparound cover, otherwise the whole picture. */
-        private fun frontHalf(bitmap: Bitmap) = if (isWide(bitmap)) half(bitmap, right = true) else bitmap
+        fun frontHalf(bitmap: Bitmap) = if (isWide(bitmap)) half(bitmap, right = true) else bitmap
 
         private fun half(bitmap: Bitmap, right: Boolean): Bitmap {
             val width = bitmap.width / 2

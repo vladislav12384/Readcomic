@@ -10,6 +10,8 @@ uniform mat3 uShadowInverse; // the same for the comic's shadow, which falls awa
 uniform float uShadowSoft;   // shadow of a lifted comic: softer
 uniform float uShadowAlpha;  // and lighter
 uniform float uStackAlpha;   // edges of the stacks fade in as the comic lands
+uniform float uSpot;         // a desk lamp over the closed comic: a warm pool of light, darker around
+uniform float uAmbience;     // light and shade of the table; 0 is a plain colour (coming from the shelves)
 uniform vec4 uDropRect[2];   // where the comic lies on the table (one per side of a spread)
 uniform float uDropAlpha[2];
 uniform int uDropCount;
@@ -60,7 +62,14 @@ void main() {
     vec2 ws = (uShadowInverse * vec3(frag, 1.0)).xy;
 
     vec2 q = frag / uViewport - 0.5;
-    vec3 color = uBgColor * (1.0 - 0.55 * dot(q, q));
+    vec3 color = uBgColor * (1.0 - 0.55 * dot(q, q) * uAmbience);
+    if (uSpot * uAmbience > 0.0) {
+        // The pool is round on the table whatever the screen's shape, a little above the middle.
+        vec2 p = (frag - uViewport * vec2(0.5, 0.46)) / max(uViewport.x, uViewport.y);
+        float pool = exp(-dot(p, p) * 7.0);
+        vec3 lamp = color * mix(vec3(0.55), vec3(1.25, 1.17, 1.02), pool) + vec3(0.035, 0.028, 0.018) * pool;
+        color = mix(color, lamp, uSpot * uAmbience);
+    }
 
     // Drop shadow under the comic, a little larger than the pages to include the stacks.
     float drop = 0.0;

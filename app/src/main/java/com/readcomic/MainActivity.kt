@@ -12,6 +12,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -22,16 +24,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.readcomic.ui.CarriedCover
 import com.readcomic.ui.FolderState
 import com.readcomic.ui.LibraryScreen
 import com.readcomic.ui.LibraryViewModel
 import com.readcomic.ui.MessagesEffect
 import com.readcomic.ui.ReadcomicTheme
+import com.readcomic.ui.ReaderBackgrounds
 import com.readcomic.ui.ReaderScreen
 import com.readcomic.ui.VolumeKeyHost
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity(), VolumeKeyHost {
     private val viewModel: LibraryViewModel by viewModels()
@@ -114,9 +121,24 @@ private fun App(viewModel: LibraryViewModel) {
     val opened = comics.firstOrNull { it.id == openId }
     BackHandler(enabled = opened != null) { openId = null }
 
+    // A comic taken from the shelf is carried into the reader: no cross-fade, the shelf has
+    // already faded into the reading table and the reader picks the comic up where it is.
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var carried by remember { mutableStateOf<CarriedCover?>(null) }
+    LaunchedEffect(openId) {
+        if (openId == null) carried = null
+    }
+
     AnimatedContent(
         targetState = opened?.id,
-        transitionSpec = { fadeIn() togetherWith fadeOut() },
+        transitionSpec = {
+            if (targetState != null && targetState == carried?.id) {
+                EnterTransition.None togetherWith ExitTransition.None
+            } else {
+                fadeIn() togetherWith fadeOut()
+            }
+        },
         label = "screen",
     ) { id ->
         val entry = comics.firstOrNull { it.id == id }
@@ -127,6 +149,7 @@ private fun App(viewModel: LibraryViewModel) {
                     backgroundTint = backgroundTint,
                     readingMode = readingMode,
                     orientation = orientation,
+                    carried = carried?.takeIf { it.id == entry.id },
                     pageAspects = { source, onProgress -> viewModel.pageAspects(entry, source, onProgress) },
                     onBackgroundTintChange = viewModel::setBackgroundTint,
                     onReadingModeChange = viewModel::setReadingMode,
@@ -149,6 +172,13 @@ private fun App(viewModel: LibraryViewModel) {
                 onShelfScroll = { viewModel.shelfScroll = it },
                 onShelfThemeChange = viewModel::setShelfTheme,
                 onShelfHintSeen = viewModel::shelfHintSeen,
+                readerTint = ReaderBackgrounds[backgroundTint.coerceIn(0, ReaderBackgrounds.lastIndex)],
+                readingMode = readingMode,
+                onPresenting = { entry ->
+                    val cover = CarriedCover(entry.id)
+                    carried = cover
+                    scope.launch { cover.load(context, entry, viewModel.coverFile(entry)) }
+                },
                 folders = FolderState(
                     folders = folders,
                     comicsIn = { folder -> comics.count { it.folder == folder.uri } },
