@@ -139,7 +139,7 @@ class CurlRenderer(
         val w = width.toFloat()
         val h = height.toFloat()
         val zRange = 4f * max(w, h)
-        val eye = 2.2f * max(w, h)
+        val eye = EYE_DISTANCE * max(w, h)
         // Orthographic mapping of the z = 0 plane to view pixels, with a mild perspective
         // (w = 1 - z / eye) so that lifted parts of a sheet come towards the reader.
         projection.fill(0f)
@@ -293,6 +293,7 @@ class CurlRenderer(
         GLES30.glUniform4f(p["${prefix}Rect"], rect[0], rect[1], rect[2], rect[3])
         GLES30.glUniform4f(p["${prefix}Sub"], sub[0], sub[1], sub[2], sub[3])
         GLES30.glUniform1f(p["${prefix}Flip"], if (face?.flip == true) 1f else 0f)
+        GLES30.glUniform1f(p["${prefix}Glossy"], if (face?.glossy == true && texture != null) 1f else 0f)
     }
 
     private fun drawSheet(sheet: Sheet, shadowOn: Boolean, depth: Float) {
@@ -302,6 +303,16 @@ class CurlRenderer(
         GLES30.glUniform1f(p["uBackPrinted"], if (sheet.back != null) 1f else 0f)
         GLES30.glUniform1f(p["uShadowOn"], if (shadowOn) 1f else 0f)
         GLES30.glUniform1f(p["uDepth"], depth)
+        // Reflections are seen from above the middle of the sheet (where it lies when flat), so a
+        // glossy cover shows its sheen at the same place in any layout and it slides as the sheet bends.
+        val r = sheet.rect
+        val centerX = r.left + r.width / 2f
+        GLES30.glUniform3f(
+            p["uEye"],
+            if (sheet.mirror) 2f * r.left - centerX else centerX,
+            r.top + r.height / 2f,
+            EYE_DISTANCE * r.height,
+        )
         setSheetUniforms(p, sheet)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, gridIndexCount, GLES30.GL_UNSIGNED_SHORT, 0)
     }
@@ -351,6 +362,9 @@ class CurlRenderer(
         const val GRID_Y = 96
         const val SHADOW_DOWNSCALE = 4
         const val SHADOW_STRENGTH = 0.72f
+
+        /** Distance from the eye to the screen, in screen sizes: sets the perspective and reflections. */
+        const val EYE_DISTANCE = 2.2f
 
         /** Direction towards the light: from the top left, mostly from the front. */
         val LIGHT = floatArrayOf(-0.30f, -0.45f, 0.84f).let { v ->

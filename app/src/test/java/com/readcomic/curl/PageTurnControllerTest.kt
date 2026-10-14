@@ -246,6 +246,23 @@ class PageTurnControllerTest {
     }
 
     @Test
+    fun onlyTheOutsideOfTheCoversIsGlossy() {
+        val c = controller(ReadingMode.SPREAD)
+        assertTrue("front cover", c.scene().flats.single().front.glossy)
+        c.turnForward()
+        repeat(5) { c.step(1f / 60f) }
+        val leaf = c.scene().turning!!
+        assertTrue(leaf.front.glossy)
+        assertFalse("inside of the cover", leaf.back!!.glossy)
+        c.settle()
+        assertTrue(c.scene().flats.none { it.front.glossy })
+
+        c.jumpTo(9)
+        val back = c.scene().flats.single { it.front.image == 9 }
+        assertTrue("back cover", back.front.glossy)
+    }
+
+    @Test
     fun turnedLeafShowsTheNextPageOnItsBack() {
         val c = controller(ReadingMode.SPREAD)
         c.turnForward()

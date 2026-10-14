@@ -13,6 +13,8 @@ class Face(
     val rect: FloatArray,
     val sub: FloatArray,
     val flip: Boolean,
+    /** Coated, glossy paper: the outside of the covers. */
+    val glossy: Boolean = false,
 ) {
     val isBlank get() = image < 0
 

@@ -11,6 +11,7 @@ uniform float uDepth;     // depth offset of the whole sheet (pages underneath u
 out vec2 vUV;
 out vec3 vNormal;
 out float vHeight;
+out vec3 vPos;
 
 void main() {
     vec3 pos;
@@ -19,5 +20,6 @@ void main() {
     vUV = aUV;
     vNormal = normal;
     vHeight = pos.z;
+    vPos = pos;
     gl_Position = uMVP * vec4(pos.xy, pos.z + uDepth, 1.0);
 }

@@ -316,10 +316,12 @@ class PageTurnController(private val density: Float) {
             Part.RIGHT -> Face.RIGHT_HALF
             else -> Face.FULL
         }
-        if (!isSpread) return Face(page.image, Face.FULL, sub, flip)
+        // The first and the last page are the outside of the covers.
+        val glossy = page.image == 0 || page.image == imageCount - 1
+        if (!isSpread) return Face(page.image, Face.FULL, sub, flip, glossy)
         val imageAspect = aspects[page.image].takeIf { it > 0f } ?: slotAspect
         val pageAspect = if (page.part == Part.FULL) imageAspect else imageAspect / 2f
-        return Face(page.image, letterbox(pageAspect, slotAspect), sub, flip)
+        return Face(page.image, letterbox(pageAspect, slotAspect), sub, flip, glossy)
     }
 
     /** Where a page of [pageAspect] sits on a sheet of [sheetAspect]; small differences are stretched away. */

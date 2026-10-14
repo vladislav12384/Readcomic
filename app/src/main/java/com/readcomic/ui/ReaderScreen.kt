@@ -19,17 +19,23 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -281,6 +287,15 @@ fun ReaderScreen(
     }
 }
 
+/**
+ * Room for the system bars and the camera cutout on every side, including the navigation buttons
+ * that sit on the right or left in landscape. Taken even while the bars are hidden, so the menu
+ * does not jump when they slide in together with it.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+private val barInsets: WindowInsets
+    @Composable get() = WindowInsets.systemBarsIgnoringVisibility.union(WindowInsets.displayCutout)
+
 @Composable
 private fun TopBar(
     title: String,
@@ -294,7 +309,7 @@ private fun TopBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.85f), Color.Black.copy(alpha = 0.55f))))
-            .statusBarsPadding()
+            .windowInsetsPadding(barInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
             .padding(horizontal = 4.dp, vertical = 4.dp),
     ) {
         IconButton(onClick = onBack) {
@@ -339,7 +354,7 @@ private fun BottomBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Black.copy(alpha = 0.9f))))
-            .navigationBarsPadding()
+            .windowInsetsPadding(barInsets.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
             .padding(top = 10.dp, bottom = 4.dp),
     ) {
         if (source != null) PageStrip(source, count, first = page, last = lastPage, onJump = onJump)
@@ -393,7 +408,7 @@ private fun SettingsPanel(
             .background(Color(0xF2201C19))
             // Taps on the panel itself must not reach the "tap outside to close" layer below.
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
-            .navigationBarsPadding()
+            .windowInsetsPadding(barInsets.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
             .padding(top = 10.dp, bottom = 12.dp),
     ) {
         Box(
