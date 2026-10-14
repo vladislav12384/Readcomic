@@ -4,32 +4,48 @@ import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
- * All the reading state that is not tied to OpenGL: current page, the page being turned
- * (driven by a spring towards the finger or towards its final position) and zoom/pan.
+ * All the reading state that is not tied to OpenGL: the comic laid out as a book, the sheet
+ * being turned (driven by a spring towards the finger or towards its final position) and zoom.
+ *
+ * Two layouts:
+ * - **spread**: an open book. Leaf k carries page 2k on its front (right-hand side) and page
+ *   2k + 1 on its back, so turning a leaf shows the next page on its reverse, and that page stays
+ *   on the left. The cover is alone on the right, like a closed comic.
+ * - **single**: one page at a time, the turned page flies off to the left.
+ *
+ * Images wider than tall are two-page spreads: in the book layout they are split into two
+ * facing pages (a blank page is inserted if needed so the halves meet at the spine).
  *
  * Coordinates are view pixels. Not thread-safe: it lives on the render thread.
  */
 class PageTurnController(private val density: Float) {
 
     interface Listener {
-        fun onPageChanged(index: Int)
+        /** The visible pages changed; image indices, equal for a single page. */
+        fun onPageChanged(first: Int, last: Int)
         fun onPageTurned()
     }
 
-    enum class Direction { FORWARD, BACKWARD }
+    enum class ReadingMode { AUTO, SPREAD, SINGLE }
+
+    private enum class Part { FULL, LEFT, RIGHT, BLANK }
+
+    private class Page(val image: Int, val part: Part)
 
     /** Path the finger "would" take for an animated turn: a quadratic Bézier curve. */
     private class Guide(
         val x0: Float, val y0: Float,
         val x1: Float, val y1: Float,
         val x2: Float, val y2: Float,
+        val duration: Float,
     ) {
         var t = 0f
 
         fun point(): Pair<Float, Float> {
-            // Ease out: the corner reacts to the tap at once and slows down as the sheet flies away.
+            // Ease out: the corner reacts to the tap at once and slows down towards the end.
             val e = 1f - (1f - t) * (1f - t)
             val a = (1f - e) * (1f - e)
             val b = 2f * (1f - e) * e
@@ -38,7 +54,17 @@ class PageTurnController(private val density: Float) {
         }
     }
 
-    private inner class Turn(val direction: Direction, val grabRelY: Float, val turningIndex: Int) {
+    /**
+     * A sheet being turned. Its geometry lives in "curl space" where the sheet always lies to
+     * the right of its spine and is turned to the left; turning back in a book is mirrored.
+     */
+    private inner class Turn(
+        val forward: Boolean,
+        val spread: Boolean,
+        /** Spread: the leaf. Single: the page being turned. */
+        val sheet: Int,
+        val grabRelY: Float,
+    ) {
         val spring = Spring2D()
         var targetX = 0f
         var targetY = 0f
@@ -46,12 +72,20 @@ class PageTurnController(private val density: Float) {
         var completing = false
         var guide: Guide? = null
 
-        /** Turning past the last page: the sheet only lifts a little and always falls back. */
-        val rubber get() = direction == Direction.FORWARD && turningIndex >= pageCount - 1
+        val mirrored get() = spread && !forward
 
-        fun rect() = pageRect(turningIndex)
+        /** Pulling at the last page: it only lifts and falls back. */
+        val rubber get() = forward && (if (spread) position >= spreadCount - 1 else sheet >= pages.size - 1)
+
+        fun rect() = if (spread) rightSlot() else singleRect(sheet)
         fun grabX() = rect().right
         fun grabY() = rect().let { it.top + it.height * grabRelY }
+        fun toCurlX(x: Float) = if (mirrored) 2f * spineX - x else x
+
+        /** Single layout: the end where the sheet is gone, off the screen to the left. */
+        fun hiddenX() = CurlMath.hiddenX(grabX(), rect(), 0f)
+
+        fun endIsHidden() = !spread && forward == completing
     }
 
     private class ZoomAnimation(
@@ -68,13 +102,27 @@ class PageTurnController(private val density: Float) {
     var viewHeight = 1f
         private set
 
-    var pageCount = 0
-        private set
-    var currentIndex = 0
+    var readingMode = ReadingMode.SPREAD
         private set
 
-    private val aspects = HashMap<Int, Float>()
-    private var defaultAspect = 0.65f
+    /** Effective layout: a book spread or a single page. */
+    var isSpread = true
+        private set
+
+    private var aspects = FloatArray(0)
+    private var singlePages: List<Page> = emptyList()
+    private var spreadPages: List<Page> = emptyList()
+    private val pages get() = if (isSpread) spreadPages else singlePages
+    private var slotAspect = DEFAULT_ASPECT
+
+    /** Spread index in the book layout, page index in the single layout. */
+    var position = 0
+        private set
+
+    val imageCount get() = aspects.size
+    private val spreadCount get() = spreadPages.size / 2 + 1
+    private val positionCount get() = if (isSpread) spreadCount else singlePages.size
+    private val leafCount get() = (spreadPages.size + 1) / 2
 
     private var turn: Turn? = null
 
@@ -93,34 +141,120 @@ class PageTurnController(private val density: Float) {
     val isZoomed get() = scale > 1.01f
     val isTurning get() = turn != null
 
+    // region Setup
+
     fun setViewSize(width: Int, height: Int) {
         viewWidth = max(width, 1).toFloat()
         viewHeight = max(height, 1).toFloat()
+        updateLayout()
         resetZoom()
     }
 
-    fun setPages(count: Int, startIndex: Int) {
-        pageCount = count
-        currentIndex = startIndex.coerceIn(0, max(count - 1, 0))
+    fun setReadingMode(mode: ReadingMode) {
+        readingMode = mode
+        updateLayout()
+    }
+
+    /**
+     * @param imageAspects width / height of every page image, 0 where unknown.
+     * @param startImage the image to open the comic at.
+     */
+    fun setPages(imageAspects: FloatArray, startImage: Int) {
+        aspects = imageAspects.copyOf()
+        singlePages = List(aspects.size) { Page(it, Part.FULL) }
+        spreadPages = buildSpreadPages()
+        slotAspect = typicalAspect()
         turn = null
+        isSpread = wantsSpread()
+        position = positionOf(startImage)
         resetZoom()
     }
 
-    fun setPageAspect(index: Int, aspect: Float) {
-        if (aspect <= 0f || aspect.isNaN()) return
-        if (aspects.isEmpty()) defaultAspect = aspect
-        aspects[index] = aspect
+    /** Aspect learnt from a decoded page; layouts are not rebuilt so nothing jumps while reading. */
+    fun setPageAspect(image: Int, aspect: Float) {
+        if (image !in aspects.indices || aspect <= 0f || aspect.isNaN()) return
+        if (aspects[image] > 0f) return
+        aspects[image] = aspect
+        if (aspects.count { it > 0f } == 1) slotAspect = typicalAspect()
         if (!isZoomed) resetZoom()
     }
 
-    private fun aspectOf(index: Int) = aspects[index] ?: defaultAspect
+    private fun wantsSpread() = when (readingMode) {
+        ReadingMode.SPREAD -> true
+        ReadingMode.SINGLE -> false
+        ReadingMode.AUTO -> viewWidth > viewHeight
+    }
 
-    /** Rectangle of a page at zoom 1, fitted into the view with a small margin for the stack edge. */
-    fun pageRect(index: Int): PageRect {
-        val margin = 6f * density
+    private fun updateLayout() {
+        val spread = wantsSpread()
+        if (spread == isSpread) return
+        val anchor = visibleImages().first
+        finishTurnNow()
+        isSpread = spread
+        position = positionOf(anchor)
+        resetZoom()
+        notifyPosition()
+    }
+
+    private fun isWide(image: Int) = aspects.getOrElse(image) { 0f } > WIDE_ASPECT
+
+    private fun buildSpreadPages(): List<Page> {
+        val list = ArrayList<Page>(aspects.size + 4)
+        for (image in aspects.indices) {
+            if (isWide(image)) {
+                // The left half has to be a left-hand page (odd index) to meet its other half at the spine.
+                if (list.size % 2 == 0) list += Page(-1, Part.BLANK)
+                list += Page(image, Part.LEFT)
+                list += Page(image, Part.RIGHT)
+            } else {
+                list += Page(image, Part.FULL)
+            }
+        }
+        return list
+    }
+
+    private fun typicalAspect(): Float {
+        val known = aspects.filter { it > 0f && it <= WIDE_ASPECT }.sorted()
+        if (known.isNotEmpty()) return known[known.size / 2]
+        val halves = aspects.filter { it > WIDE_ASPECT }.map { it / 2f }.sorted()
+        return if (halves.isNotEmpty()) halves[halves.size / 2] else DEFAULT_ASPECT
+    }
+
+    private fun positionOf(image: Int): Int {
+        if (pages.isEmpty()) return 0
+        val index = pages.indexOfFirst { it.image == image }.takeIf { it >= 0 } ?: 0
+        return if (isSpread) (index + 1) / 2 else index
+    }
+
+    // endregion
+
+    // region Geometry
+
+    private val margin get() = 8f * density
+
+    private val spineX get() = viewWidth / 2f
+
+    /** Right-hand page of the spread; the left one is its mirror image around the spine. */
+    fun rightSlot(): PageRect {
+        val availableWidth = (viewWidth - 2f * margin) / 2f
+        val availableHeight = viewHeight - 2f * margin
+        var width = availableWidth
+        var height = width / slotAspect
+        if (height > availableHeight) {
+            height = availableHeight
+            width = height * slotAspect
+        }
+        return PageRect(spineX, (viewHeight - height) / 2f, width, height)
+    }
+
+    private fun leftSlot(): PageRect = rightSlot().let { PageRect(it.left - it.width, it.top, it.width, it.height) }
+
+    /** A page on its own, fitted into the view. */
+    fun singleRect(index: Int): PageRect {
+        val page = singlePages.getOrNull(index)
+        val aspect = page?.let { aspects[it.image] }?.takeIf { it > 0f } ?: slotAspect
         val availableWidth = viewWidth - 2f * margin
         val availableHeight = viewHeight - 2f * margin
-        val aspect = aspectOf(index)
         var width = availableWidth
         var height = width / aspect
         if (height > availableHeight) {
@@ -130,34 +264,171 @@ class PageTurnController(private val density: Float) {
         return PageRect((viewWidth - width) / 2f, (viewHeight - height) / 2f, width, height)
     }
 
+    /** What is visible at the current position (for zoom limits). */
+    private fun contentRect(): PageRect {
+        if (!isSpread) return singleRect(position)
+        val hasLeft = pages.getOrNull(2 * position - 1) != null
+        val hasRight = pages.getOrNull(2 * position) != null
+        val right = rightSlot()
+        return when {
+            hasLeft && !hasRight -> leftSlot()
+            hasRight && !hasLeft -> right
+            else -> PageRect(right.left - right.width, right.top, right.width * 2f, right.height)
+        }
+    }
+
+    private fun face(index: Int, flip: Boolean): Face? {
+        val page = pages.getOrNull(index) ?: return null
+        if (page.part == Part.BLANK) return Face.blank(flip)
+        val sub = when (page.part) {
+            Part.LEFT -> Face.LEFT_HALF
+            Part.RIGHT -> Face.RIGHT_HALF
+            else -> Face.FULL
+        }
+        if (!isSpread) return Face(page.image, Face.FULL, sub, flip)
+        val imageAspect = aspects[page.image].takeIf { it > 0f } ?: slotAspect
+        val pageAspect = if (page.part == Part.FULL) imageAspect else imageAspect / 2f
+        return Face(page.image, letterbox(pageAspect, slotAspect), sub, flip)
+    }
+
+    /** Where a page of [pageAspect] sits on a sheet of [sheetAspect]; small differences are stretched away. */
+    private fun letterbox(pageAspect: Float, sheetAspect: Float): FloatArray {
+        val ratio = pageAspect / sheetAspect
+        return when {
+            abs(ratio - 1f) < 0.07f -> Face.FULL
+            ratio > 1f -> (1f / ratio).let { h -> floatArrayOf(0f, (1f - h) / 2f, 1f, h) }
+            else -> floatArrayOf((1f - ratio) / 2f, 0f, ratio, 1f)
+        }
+    }
+
+    // endregion
+
     // region What the renderer needs
 
-    val turningIndex: Int? get() = turn?.turningIndex
+    fun scene(): Scene {
+        val t = turn
+        val curl = currentCurl()
+        return if (isSpread) spreadScene(t, curl) else singleScene(t, curl)
+    }
 
-    /** The flat page that is visible below everything else, or null if there is none (end of the comic). */
-    val underIndex: Int?
-        get() {
-            val t = turn ?: return currentIndex.takeIf { it in 0 until pageCount }
-            val index = if (t.direction == Direction.FORWARD) currentIndex + 1 else currentIndex
-            return index.takeIf { it in 0 until pageCount }
+    private fun spreadScene(t: Turn?, curl: CurlGeometry?): Scene {
+        val s = position
+        val slot = rightSlot()
+        // Pages lying flat on the left and on the right while the leaf (if any) is in the air.
+        val leftIndex: Int
+        val rightIndex: Int
+        var turning: Sheet? = null
+        when {
+            t == null -> {
+                leftIndex = 2 * s - 1
+                rightIndex = 2 * s
+            }
+            t.forward -> {
+                leftIndex = 2 * s - 1
+                rightIndex = 2 * s + 2
+                turning = Sheet(slot, false, face(2 * t.sheet, false)!!, face(2 * t.sheet + 1, true), curl)
+            }
+            else -> {
+                leftIndex = 2 * s - 3
+                rightIndex = 2 * s
+                turning = Sheet(slot, true, face(2 * t.sheet + 1, true)!!, face(2 * t.sheet, false), curl)
+            }
         }
+        val flats = ArrayList<Sheet>(2)
+        face(leftIndex, true)?.let { flats += Sheet(slot, true, it, null, null) }
+        face(rightIndex, false)?.let { flats += Sheet(slot, false, it, null, null) }
+
+        val stacks = ArrayList<StackEdge>(2)
+        val left = leftSlot()
+        if (leftIndex >= 0 && leftIndex < pages.size) {
+            // Left page 2j - 1 is the back of leaf j - 1; leaves 0 .. j - 2 lie below it.
+            val below = (leftIndex + 1) / 2 - 1
+            stackEdge(left, below, -1f)?.let { stacks += it }
+        }
+        if (rightIndex < pages.size) {
+            // Right page 2j is the front of leaf j; leaves j + 1 .. lie below it.
+            val below = leafCount - rightIndex / 2 - 1
+            stackEdge(slot, below, 1f)?.let { stacks += it }
+        }
+
+        // The table shadow of an empty side fades in as a leaf lands there (and out as it leaves).
+        val progress = t?.let { ((it.grabX() - it.spring.x) / (2f * slot.width)).coerceIn(0f, 1f) } ?: 0f
+        val arriving = progress * progress
+        val leaving = (1f - progress) * (1f - progress)
+        val leftAlpha = when {
+            flats.any { it.mirror } -> 1f
+            t == null -> 0f
+            t.forward -> arriving
+            else -> leaving
+        }
+        val rightAlpha = when {
+            flats.any { !it.mirror } -> 1f
+            t == null -> 0f
+            t.forward -> leaving
+            else -> arriving
+        }
+        val drops = listOf(DropShadow(left, leftAlpha), DropShadow(slot, rightAlpha)).filter { it.alpha > 0.002f }
+        return Scene(flats, turning, stacks, drops, gutter = 0.16f)
+    }
+
+    private fun singleScene(t: Turn?, curl: CurlGeometry?): Scene {
+        val under = when {
+            t == null -> position
+            t.forward -> position + 1
+            else -> position
+        }.takeIf { it in pages.indices }
+        val flats = ArrayList<Sheet>(1)
+        under?.let { index -> face(index, false)?.let { flats += Sheet(singleRect(index), false, it, null, null) } }
+        val turning = t?.let { Sheet(singleRect(it.sheet), false, face(it.sheet, false)!!, null, curl) }
+        val stackIndex = under ?: t?.sheet ?: position
+        val rect = singleRect(stackIndex)
+        val stacks = listOfNotNull(stackEdge(rect, pages.size - 1 - stackIndex, 1f))
+        val drops = if (under != null || t != null) listOf(DropShadow(rect, 1f)) else emptyList()
+        return Scene(flats, turning, stacks, drops, gutter = 0.10f)
+    }
+
+    private fun stackEdge(rect: PageRect, sheets: Int, side: Float): StackEdge? {
+        if (sheets <= 0) return null
+        val thickness = min(sqrt(sheets.toFloat()) * 0.9f, 4.5f) * density
+        val lines = max(1f, min(sheets.toFloat(), thickness / (1.5f * density)))
+        return StackEdge(rect, side * thickness * 0.55f, thickness, lines)
+    }
 
     fun currentCurl(): CurlGeometry? {
         val t = turn ?: return null
-        return CurlMath.compute(t.grabX(), t.grabY(), t.spring.x, t.spring.y, t.rect())
+        return CurlMath.compute(t.grabX(), t.grabY(), t.spring.x, t.spring.y, t.rect(), landFlat = t.spread)
     }
 
-    /** Pages worth keeping in memory, the most important first. */
-    fun wantedPages(): List<Int> =
-        listOf(currentIndex, currentIndex + 1, currentIndex - 1, currentIndex + 2)
-            .filter { it in 0 until pageCount }
+    /** Images worth keeping in memory, the most important first. */
+    fun wantedImages(): List<Int> {
+        val order = if (isSpread) {
+            val s = position
+            listOf(2 * s, 2 * s - 1, 2 * s + 1, 2 * s + 2, 2 * s - 2, 2 * s - 3)
+        } else {
+            listOf(position, position + 1, position - 1, position + 2)
+        }
+        return order.mapNotNull { pages.getOrNull(it)?.image?.takeIf { image -> image >= 0 } }.distinct()
+    }
+
+    /** Images on screen right now (both halves of a spread). */
+    fun visibleImageSet(): Set<Int> {
+        val (first, last) = visibleImages()
+        return if (first < 0) emptySet() else (first..last).toSet()
+    }
+
+    /** Size of the box an image is shown in, to decode it at a sensible resolution. */
+    fun displayBox(image: Int): Pair<Float, Float> {
+        if (!isSpread) return viewWidth to viewHeight
+        val slot = rightSlot()
+        return if (isWide(image)) slot.width * 2f to slot.height else slot.width to slot.height
+    }
 
     // endregion
 
     // region Turning
 
     fun beginDrag(downX: Float, downY: Float, x: Float, y: Float): Boolean {
-        if (isZoomed || pageCount == 0) return false
+        if (isZoomed || pages.isEmpty()) return false
         // A sheet that is falling back can be caught mid-air and pulled again.
         val falling = turn
         if (falling != null && !falling.dragging && !falling.completing && falling.guide == null) {
@@ -166,37 +437,53 @@ class PageTurnController(private val density: Float) {
             return true
         }
         finishTurnNow()
-        val direction = if (x < downX) Direction.FORWARD else Direction.BACKWARD
-        val turningIndex = if (direction == Direction.FORWARD) currentIndex else currentIndex - 1
-        if (turningIndex < 0) return false
-
-        val rect = pageRect(turningIndex)
+        val forward = x < downX
+        val t = newTurn(forward, relY = 0f) ?: return false
+        val rect = t.rect()
         var rel = ((downY - rect.top) / rect.height).coerceIn(0.02f, 0.98f)
         // Grabbing close to a corner grabs the corner itself.
         if (rel > 0.86f) rel = 0.99f
         if (rel < 0.14f) rel = 0.01f
-
-        val t = Turn(direction, rel, turningIndex)
-        if (direction == Direction.FORWARD) {
-            t.spring.snapTo(t.grabX(), t.grabY())
+        val turn = Turn(t.forward, t.spread, t.sheet, rel)
+        if (turn.spread || turn.forward) {
+            turn.spring.snapTo(turn.grabX(), turn.grabY())
         } else {
-            t.spring.snapTo(CurlMath.hiddenX(t.grabX(), rect, 0f), t.grabY())
+            turn.spring.snapTo(turn.hiddenX(), turn.grabY())
         }
-        turn = t
+        this.turn = turn
         drag(x, y)
         return true
+    }
+
+    /** Which sheet a turn in this direction would move, or null if there is nothing to turn. */
+    private fun newTurn(forward: Boolean, relY: Float): Turn? {
+        if (isSpread) {
+            val s = position
+            return if (forward) {
+                // Needs a right-hand page to lift (the last one only lifts a little).
+                if (2 * s >= pages.size) null else Turn(true, true, s, relY)
+            } else {
+                if (s <= 0) null else Turn(false, true, s - 1, relY)
+            }
+        }
+        return if (forward) {
+            Turn(true, false, position, relY)
+        } else {
+            if (position <= 0) null else Turn(false, false, position - 1, relY)
+        }
     }
 
     fun drag(x: Float, y: Float) {
         val t = turn ?: return
         if (!t.dragging) return
+        val cx = t.toCurlX(x)
         if (t.rubber) {
-            val travel = max(t.grabX() - x, 0f)
+            val travel = max(t.grabX() - cx, 0f)
             val limit = t.rect().width * 0.22f
             t.targetX = t.grabX() - limit * (1f - exp(-travel / limit))
             t.targetY = t.grabY() + (y - t.grabY()) * 0.3f
         } else {
-            t.targetX = x
+            t.targetX = cx
             t.targetY = y
         }
     }
@@ -207,13 +494,14 @@ class PageTurnController(private val density: Float) {
         t.dragging = false
         val rect = t.rect()
         val fling = 500f * density
+        val vx = if (t.mirrored) -velocityX else velocityX
         val x = t.targetX
         t.completing = when {
             t.rubber -> false
-            t.direction == Direction.FORWARD ->
-                velocityX < -fling || (velocityX < fling && x < rect.left + rect.width * 0.6f)
-            else ->
-                velocityX > fling || (velocityX > -fling && x > rect.left + rect.width * 0.4f)
+            // In a book the leaf goes over once the finger has crossed the spine.
+            t.spread -> vx < -fling || (vx < fling && x < rect.left)
+            t.forward -> vx < -fling || (vx < fling && x < rect.left + rect.width * 0.6f)
+            else -> vx > fling || (vx > -fling && x > rect.left + rect.width * 0.4f)
         }
         aimAtEnd(t)
     }
@@ -227,66 +515,88 @@ class PageTurnController(private val density: Float) {
     }
 
     /** Turn with an animation, as if the bottom corner was picked up (tap or volume key). */
-    fun turnForward() {
-        if (pageCount == 0) return
+    fun turnForward() = animatedTurn(forward = true)
+
+    fun turnBackward() = animatedTurn(forward = false)
+
+    private fun animatedTurn(forward: Boolean) {
+        if (pages.isEmpty()) return
         finishTurnNow()
-        if (currentIndex >= pageCount - 1) return
+        val t = newTurn(forward, relY = 0.99f) ?: return
+        if (t.rubber) return
         resetZoom()
-        val t = Turn(Direction.FORWARD, 0.99f, currentIndex)
-        t.spring.snapTo(t.grabX(), t.grabY())
         t.dragging = false
         t.completing = true
-        aimAtEnd(t)
         val r = t.rect()
-        t.guide = Guide(
-            t.grabX(), t.grabY(),
-            t.grabX() - r.width * 0.55f, t.grabY() - r.height * 0.4f,
-            t.targetX, t.grabY() - r.height * 0.15f,
-        )
-        t.targetY = t.grabY() - r.height * 0.15f
+        if (t.spread) {
+            // Over the spine in an arc, landing flat on the other side.
+            t.spring.snapTo(t.grabX(), t.grabY())
+            aimAtEnd(t)
+            t.guide = Guide(
+                t.grabX(), t.grabY(),
+                r.left, t.grabY() - r.height * 0.55f,
+                t.targetX, t.targetY,
+                SPREAD_GUIDE_DURATION,
+            )
+        } else if (forward) {
+            t.spring.snapTo(t.grabX(), t.grabY())
+            aimAtEnd(t)
+            t.targetY = t.grabY() - r.height * 0.15f
+            t.guide = Guide(
+                t.grabX(), t.grabY(),
+                t.grabX() - r.width * 0.55f, t.grabY() - r.height * 0.4f,
+                t.targetX, t.targetY,
+                GUIDE_DURATION,
+            )
+        } else {
+            val hiddenX = t.hiddenX()
+            t.spring.snapTo(hiddenX, t.grabY() - r.height * 0.15f)
+            aimAtEnd(t)
+            t.guide = Guide(
+                hiddenX, t.grabY() - r.height * 0.15f,
+                t.grabX() - r.width * 0.55f, t.grabY() - r.height * 0.4f,
+                t.grabX(), t.grabY(),
+                GUIDE_DURATION,
+            )
+        }
         turn = t
     }
 
-    fun turnBackward() {
-        if (pageCount == 0) return
+    /** Jumps to the position that shows [image]. */
+    fun jumpTo(image: Int) {
+        if (pages.isEmpty()) return
         finishTurnNow()
-        if (currentIndex <= 0) return
+        val target = positionOf(image.coerceIn(0, imageCount - 1))
+        if (target == position) return
+        position = target
         resetZoom()
-        val t = Turn(Direction.BACKWARD, 0.99f, currentIndex - 1)
-        val r = t.rect()
-        val hiddenX = CurlMath.hiddenX(t.grabX(), r, 0f)
-        t.spring.snapTo(hiddenX, t.grabY() - r.height * 0.15f)
-        t.dragging = false
-        t.completing = true
-        aimAtEnd(t)
-        t.guide = Guide(
-            hiddenX, t.grabY() - r.height * 0.15f,
-            t.grabX() - r.width * 0.55f, t.grabY() - r.height * 0.4f,
-            t.grabX(), t.grabY(),
-        )
-        turn = t
+        notifyPosition()
     }
 
-    fun jumpTo(index: Int) {
-        if (pageCount == 0) return
-        finishTurnNow()
-        val target = index.coerceIn(0, pageCount - 1)
-        if (target == currentIndex) return
-        currentIndex = target
-        resetZoom()
-        listener?.onPageChanged(currentIndex)
+    /** First and last image on screen, (-1, -1) if nothing. */
+    fun visibleImages(): Pair<Int, Int> {
+        val images = if (isSpread) {
+            listOfNotNull(pages.getOrNull(2 * position - 1), pages.getOrNull(2 * position))
+        } else {
+            listOfNotNull(pages.getOrNull(position))
+        }.map { it.image }.filter { it >= 0 }
+        return if (images.isEmpty()) -1 to -1 else images.min() to images.max()
     }
-
-    private fun hiddenTargetX(t: Turn) = CurlMath.hiddenX(t.grabX(), t.rect(), 0f)
 
     private fun aimAtEnd(t: Turn) {
-        val hidden = (t.direction == Direction.FORWARD) == t.completing
-        if (hidden) {
-            t.targetX = hiddenTargetX(t)
-            t.targetY = t.spring.y
-        } else {
-            t.targetX = t.grabX()
-            t.targetY = t.grabY()
+        when {
+            t.spread && t.completing -> {
+                t.targetX = CurlMath.landedX(t.grabX(), t.rect())
+                t.targetY = t.grabY()
+            }
+            t.endIsHidden() -> {
+                t.targetX = t.hiddenX()
+                t.targetY = t.spring.y
+            }
+            else -> {
+                t.targetX = t.grabX()
+                t.targetY = t.grabY()
+            }
         }
     }
 
@@ -297,9 +607,14 @@ class PageTurnController(private val density: Float) {
     }
 
     private fun applyTurn(t: Turn) {
-        currentIndex = if (t.direction == Direction.FORWARD) currentIndex + 1 else currentIndex - 1
-        listener?.onPageChanged(currentIndex)
+        position = (if (t.forward) position + 1 else position - 1).coerceIn(0, max(positionCount - 1, 0))
+        notifyPosition()
         listener?.onPageTurned()
+    }
+
+    private fun notifyPosition() {
+        val (first, last) = visibleImages()
+        if (first >= 0) listener?.onPageChanged(first, last)
     }
 
     // endregion
@@ -372,7 +687,8 @@ class PageTurnController(private val density: Float) {
     }
 
     private fun clamp(s: Float, ox: Float, oy: Float): Pair<Float, Float> {
-        val r = pageRect(currentIndex)
+        if (s <= 1f) return 0f to 0f
+        val r = contentRect()
         val x = if (r.width * s <= viewWidth) {
             viewWidth / 2f - (r.left + r.width / 2f) * s
         } else {
@@ -399,21 +715,18 @@ class PageTurnController(private val density: Float) {
             } else {
                 val guide = t.guide
                 if (guide != null) {
-                    guide.t = min(1f, guide.t + dt / GUIDE_DURATION)
+                    guide.t = min(1f, guide.t + dt / guide.duration)
                     val (gx, gy) = guide.point()
                     t.spring.step(gx, gy, GUIDE_OMEGA, dt)
                     if (guide.t >= 1f) t.guide = null
                 } else {
                     t.spring.step(t.targetX, t.targetY, SETTLE_OMEGA, dt)
                 }
-                val hidden = (t.direction == Direction.FORWARD) == t.completing
-                val done = if (t.guide != null) {
-                    false
-                } else if (hidden) {
+                val done = when {
+                    t.guide != null -> false
                     // Once the sheet is completely off screen nobody can see the rest of the motion.
-                    t.spring.x <= t.targetX + t.rect().width * 0.12f
-                } else {
-                    t.spring.isAt(t.targetX, t.targetY, 0.75f, 20f)
+                    t.endIsHidden() -> t.spring.x <= t.targetX + t.rect().width * 0.12f
+                    else -> t.spring.isAt(t.targetX, t.targetY, 0.75f, 20f)
                 }
                 if (done) {
                     turn = null
@@ -456,10 +769,15 @@ class PageTurnController(private val density: Float) {
     companion object {
         const val MAX_SCALE = 5f
         const val DOUBLE_TAP_SCALE = 2.5f
+        private const val DEFAULT_ASPECT = 0.65f
+
+        /** Images wider than this (width / height) are two-page spreads. */
+        private const val WIDE_ASPECT = 1.1f
         private const val DRAG_OMEGA = 30f
         private const val SETTLE_OMEGA = 13f
         private const val GUIDE_OMEGA = 24f
         private const val GUIDE_DURATION = 0.42f
+        private const val SPREAD_GUIDE_DURATION = 0.55f
         private const val ZOOM_DURATION = 0.28f
         private const val FLING_FRICTION = 4.5f
     }

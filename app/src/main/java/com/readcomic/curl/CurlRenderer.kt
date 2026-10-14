@@ -21,7 +21,6 @@ class CurlRenderer(
     private val assets: AssetManager,
     private val controller: PageTurnController,
     private val textures: PageTextureCache,
-    private val density: Float,
     private val requestRender: () -> Unit,
 ) : GLSurfaceView.Renderer {
 
@@ -98,20 +97,17 @@ class CurlRenderer(
         val animating = controller.step(dt)
         lastFrameNanos = if (animating) now else 0L
 
-        val current = controller.currentIndex
         textures.update(
-            controller.wantedPages(),
-            if (controller.scale > 1.3f) current else null,
-            controller.viewWidth,
-            controller.viewHeight,
+            controller.wantedImages(),
+            if (controller.scale > 1.3f) controller.visibleImageSet() else emptySet(),
+            controller::displayBox,
         )
 
         updateMatrices()
-
-        val turning = controller.turningIndex
-        val curl = if (turning != null) controller.currentCurl() else null
-        val shadowOn = curl != null && turning != null
-        if (curl != null && turning != null) renderShadow(controller.pageRect(turning), curl)
+        val scene = controller.scene()
+        val turning = scene.turning
+        val shadowOn = turning?.curl != null
+        if (turning != null && turning.curl != null) renderShadow(turning, turning.curl)
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
@@ -119,29 +115,22 @@ class CurlRenderer(
         GLES30.glClearDepthf(1f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
 
-        val under = controller.underIndex
-        // The stack below the comic is the page that stays put while another one is turned.
-        val stackIndex = under ?: turning ?: current
-        drawBackground(controller.pageRect(stackIndex), shadowOn, stackSheets(stackIndex), under != null || turning != null)
+        drawBackground(scene, shadowOn)
 
         GLES30.glBindVertexArray(gridVao)
         pageProgram.use()
-        setCommonPageUniforms()
-        if (under != null) {
-            drawPage(under, controller.pageRect(under), null, shadowOn)
-        }
+        setCommonPageUniforms(scene)
+        for (sheet in scene.flats) drawSheet(sheet, shadowOn, depth = -1f)
         if (turning != null) {
             GLES30.glEnable(GLES30.GL_DEPTH_TEST)
             GLES30.glDepthFunc(GLES30.GL_LEQUAL)
-            drawPage(turning, controller.pageRect(turning), curl, shadowOn)
+            drawSheet(turning, shadowOn, depth = 0f)
             GLES30.glDisable(GLES30.GL_DEPTH_TEST)
         }
         GLES30.glBindVertexArray(0)
 
         if (animating) requestRender()
     }
-
-    private fun stackSheets(index: Int): Int = max(controller.pageCount - 1 - index, 0)
 
     private fun updateMatrices() {
         val w = width.toFloat()
@@ -170,8 +159,11 @@ class CurlRenderer(
         Matrix.multiplyMM(mvp, 0, projection, 0, view, 0)
     }
 
-    private fun setCurlUniforms(program: GlProgram, rect: PageRect, curl: CurlGeometry?) {
+    private fun setSheetUniforms(program: GlProgram, sheet: Sheet) {
+        val rect = sheet.rect
         GLES30.glUniform4f(program["uPageRect"], rect.left, rect.top, rect.width, rect.height)
+        GLES30.glUniform1f(program["uMirror"], if (sheet.mirror) 1f else 0f)
+        val curl = sheet.curl
         if (curl != null) {
             GLES30.glUniform2f(program["uAxisPoint"], curl.axisX, curl.axisY)
             GLES30.glUniform2f(program["uAxisNormal"], curl.nx, curl.ny)
@@ -183,7 +175,7 @@ class CurlRenderer(
         }
     }
 
-    private fun renderShadow(rect: PageRect, curl: CurlGeometry) {
+    private fun renderShadow(sheet: Sheet, curl: CurlGeometry) {
         GLES30.glViewport(0, 0, shadowWidth, shadowHeight)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, shadowFramebuffers[0])
         GLES30.glClearColor(0f, 0f, 0f, 0f)
@@ -194,7 +186,8 @@ class CurlRenderer(
         GLES30.glUniformMatrix4fv(shadowProgram["uMVP"], 1, false, mvp, 0)
         GLES30.glUniform3f(shadowProgram["uLight"], LIGHT[0], LIGHT[1], LIGHT[2])
         GLES30.glUniform1f(shadowProgram["uStrength"], SHADOW_STRENGTH)
-        setCurlUniforms(shadowProgram, rect, curl)
+        GLES30.glUniform1f(shadowProgram["uShadowScale"], sheet.rect.width * 0.3f)
+        setSheetUniforms(shadowProgram, sheet)
         GLES30.glEnable(GLES30.GL_BLEND)
         GLES30.glBlendEquation(GLES30.GL_MAX)
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
@@ -207,7 +200,8 @@ class CurlRenderer(
         GLES30.glBindVertexArray(emptyVao)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glUniform1i(blurProgram["uTex"], 0)
-        val spread = 0.5f * curl.radius * controller.scale / SHADOW_DOWNSCALE / 3.2f
+        val radius = max(curl.radius, sheet.rect.width * 0.04f)
+        val spread = 0.5f * radius * controller.scale / SHADOW_DOWNSCALE / 3.2f
         repeat(2) {
             blurPass(shadowFramebuffers[1], shadowTextures[0], spread / shadowWidth, 0f)
             blurPass(shadowFramebuffers[0], shadowTextures[1], 0f, spread / shadowHeight)
@@ -221,48 +215,91 @@ class CurlRenderer(
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
     }
 
-    private fun drawBackground(rect: PageRect, shadowOn: Boolean, sheets: Int, hasPage: Boolean) {
-        backgroundProgram.use()
+    private fun drawBackground(scene: Scene, shadowOn: Boolean) {
+        val p = backgroundProgram
+        p.use()
         GLES30.glBindVertexArray(emptyVao)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTextures[0])
-        GLES30.glUniform1i(backgroundProgram["uShadowTex"], 1)
-        GLES30.glUniform1f(backgroundProgram["uShadowOn"], if (shadowOn) 1f else 0f)
-        GLES30.glUniform2f(backgroundProgram["uViewport"], width.toFloat(), height.toFloat())
-        GLES30.glUniform3f(backgroundProgram["uTransform"], controller.scale, controller.offsetX, controller.offsetY)
-        GLES30.glUniform4f(backgroundProgram["uPageRect"], rect.left, rect.top, rect.width, rect.height)
-        // A visible edge of the remaining sheets: thicker for longer comics, a few dp at most.
-        val thickness = min(sqrt(sheets.toFloat()) * 0.9f, 4.5f) * density
-        GLES30.glUniform2f(backgroundProgram["uStack"], thickness * 0.55f, thickness)
-        GLES30.glUniform1f(backgroundProgram["uSheets"], max(1f, min(sheets.toFloat(), thickness / (1.5f * density))))
-        GLES30.glUniform1f(backgroundProgram["uHasPage"], if (hasPage) 1f else 0f)
+        GLES30.glUniform1i(p["uShadowTex"], 1)
+        GLES30.glUniform1f(p["uShadowOn"], if (shadowOn) 1f else 0f)
+        GLES30.glUniform2f(p["uViewport"], width.toFloat(), height.toFloat())
+        GLES30.glUniform3f(p["uTransform"], controller.scale, controller.offsetX, controller.offsetY)
+        val drops = scene.drops.take(2)
+        val dropRects = FloatArray(8)
+        val dropAlphas = FloatArray(2)
+        drops.forEachIndexed { i, d ->
+            dropRects[i * 4] = d.rect.left
+            dropRects[i * 4 + 1] = d.rect.top
+            dropRects[i * 4 + 2] = d.rect.width
+            dropRects[i * 4 + 3] = d.rect.height
+            dropAlphas[i] = d.alpha
+        }
+        GLES30.glUniform4fv(p["uDropRect[0]"], 2, dropRects, 0)
+        GLES30.glUniform1fv(p["uDropAlpha[0]"], 2, dropAlphas, 0)
+        GLES30.glUniform1i(p["uDropCount"], drops.size)
+
+        val stacks = scene.stacks.take(2)
+        val rects = FloatArray(8)
+        val shifts = FloatArray(4)
+        val lines = FloatArray(2)
+        stacks.forEachIndexed { i, s ->
+            rects[i * 4] = s.rect.left
+            rects[i * 4 + 1] = s.rect.top
+            rects[i * 4 + 2] = s.rect.width
+            rects[i * 4 + 3] = s.rect.height
+            shifts[i * 2] = s.dx
+            shifts[i * 2 + 1] = s.dy
+            lines[i] = s.lines
+        }
+        GLES30.glUniform4fv(p["uStackRect[0]"], 2, rects, 0)
+        GLES30.glUniform2fv(p["uStackShift[0]"], 2, shifts, 0)
+        GLES30.glUniform1fv(p["uStackLines[0]"], 2, lines, 0)
+        GLES30.glUniform1i(p["uStackCount"], stacks.size)
+
         val bg = backgroundColor
-        GLES30.glUniform3f(backgroundProgram["uBgColor"], bg[0], bg[1], bg[2])
-        GLES30.glUniform3f(backgroundProgram["uPaper"], PAPER[0], PAPER[1], PAPER[2])
+        GLES30.glUniform3f(p["uBgColor"], bg[0], bg[1], bg[2])
+        GLES30.glUniform3f(p["uPaper"], PAPER[0], PAPER[1], PAPER[2])
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
     }
 
-    private fun setCommonPageUniforms() {
-        GLES30.glUniformMatrix4fv(pageProgram["uMVP"], 1, false, mvp, 0)
-        GLES30.glUniform1i(pageProgram["uTex"], 0)
-        GLES30.glUniform1i(pageProgram["uShadowTex"], 1)
-        GLES30.glUniform2f(pageProgram["uViewport"], width.toFloat(), height.toFloat())
-        GLES30.glUniform3f(pageProgram["uLight"], LIGHT[0], LIGHT[1], LIGHT[2])
-        GLES30.glUniform3f(pageProgram["uPaper"], PAPER[0], PAPER[1], PAPER[2])
-        GLES30.glUniform1f(pageProgram["uGloss"], 0.22f)
-        GLES30.glUniform1f(pageProgram["uGutter"], 0.10f)
+    private fun setCommonPageUniforms(scene: Scene) {
+        val p = pageProgram
+        GLES30.glUniformMatrix4fv(p["uMVP"], 1, false, mvp, 0)
+        GLES30.glUniform1i(p["uFrontTex"], 0)
+        GLES30.glUniform1i(p["uShadowTex"], 1)
+        GLES30.glUniform1i(p["uBackTex"], 2)
+        GLES30.glUniform2f(p["uViewport"], width.toFloat(), height.toFloat())
+        GLES30.glUniform3f(p["uLight"], LIGHT[0], LIGHT[1], LIGHT[2])
+        GLES30.glUniform3f(p["uPaper"], PAPER[0], PAPER[1], PAPER[2])
+        GLES30.glUniform1f(p["uGloss"], 0.22f)
+        GLES30.glUniform1f(p["uGutter"], scene.gutter)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTextures[0])
     }
 
-    private fun drawPage(index: Int, rect: PageRect, curl: CurlGeometry?, shadowOn: Boolean) {
-        val texture = textures[index]
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+    /** Binds the texture of a face to [unit] and sets its uniforms ("uFront..." / "uBack..."). */
+    private fun setFace(prefix: String, face: Face?, unit: Int) {
+        val p = pageProgram
+        val texture = face?.takeIf { !it.isBlank }?.let { textures[it.image] }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture?.id ?: 0)
-        GLES30.glUniform1f(pageProgram["uHasTex"], if (texture != null) 1f else 0f)
-        GLES30.glUniform1f(pageProgram["uShadowOn"], if (shadowOn) 1f else 0f)
-        GLES30.glUniform1f(pageProgram["uDepth"], if (curl == null) -1f else 0f)
-        setCurlUniforms(pageProgram, rect, curl)
+        GLES30.glUniform1f(p["${prefix}HasTex"], if (texture != null) 1f else 0f)
+        val rect = face?.rect ?: Face.FULL
+        val sub = face?.sub ?: Face.FULL
+        GLES30.glUniform4f(p["${prefix}Rect"], rect[0], rect[1], rect[2], rect[3])
+        GLES30.glUniform4f(p["${prefix}Sub"], sub[0], sub[1], sub[2], sub[3])
+        GLES30.glUniform1f(p["${prefix}Flip"], if (face?.flip == true) 1f else 0f)
+    }
+
+    private fun drawSheet(sheet: Sheet, shadowOn: Boolean, depth: Float) {
+        val p = pageProgram
+        setFace("uFront", sheet.front, 0)
+        setFace("uBack", sheet.back, 2)
+        GLES30.glUniform1f(p["uBackPrinted"], if (sheet.back != null) 1f else 0f)
+        GLES30.glUniform1f(p["uShadowOn"], if (shadowOn) 1f else 0f)
+        GLES30.glUniform1f(p["uDepth"], depth)
+        setSheetUniforms(p, sheet)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, gridIndexCount, GLES30.GL_UNSIGNED_SHORT, 0)
     }
 

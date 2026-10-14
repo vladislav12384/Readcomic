@@ -39,6 +39,9 @@ object CurlMath {
     /** Vertical finger movement only partially rotates the fold. */
     private const val TILT_DAMPING = 0.6f
 
+    /** A leaf that lands flat ends with an (almost) sharp fold; 0 would mean "no curl" to the shader. */
+    private const val MIN_RADIUS = 0.75f
+
     /** Curl radius grows with the drag distance so the first touch lifts the edge crisply. */
     fun radiusFor(dragDistance: Float, pageWidth: Float): Float =
         min(pageWidth * 0.15f, pageWidth * 0.05f + 0.1f * dragDistance)
@@ -60,7 +63,19 @@ object CurlMath {
         return (lo + hi) / 2f
     }
 
-    fun compute(grabX: Float, grabY: Float, fx: Float, fy: Float, page: PageRect): CurlGeometry? {
+    /**
+     * @param landFlat the sheet is a leaf of an open book: instead of flying off the screen it
+     * has to lie down flat on the other side of the spine, so the bend tightens to nothing
+     * as the dragged edge approaches its mirrored position.
+     */
+    fun compute(
+        grabX: Float,
+        grabY: Float,
+        fx: Float,
+        fy: Float,
+        page: PageRect,
+        landFlat: Boolean = false,
+    ): CurlGeometry? {
         val vx = grabX - fx
         val vy = grabY - fy
         if (vx <= 0.5f) return null
@@ -75,15 +90,23 @@ object CurlMath {
         var phi = atan2(vy * TILT_DAMPING, vx).coerceIn(-maxUp, maxDown)
 
         val width = page.width
-        fun along(p: Float) = vx * cos(p) + vy * sin(p)
+        val travel = grabX - page.left
+        fun along(p: Float): Float {
+            val d = vx * cos(p) + vy * sin(p)
+            // Never past the point where the leaf lies flat with the smallest bend at the spine.
+            return if (landFlat) min(d, 2f * travel - (PI * MIN_RADIUS).toFloat()) else d
+        }
+        fun radius(d: Float): Float {
+            val r = radiusFor(d, width)
+            return if (landFlat) max(min(r, ((2f * travel - d) / PI).toFloat()), MIN_RADIUS) else r
+        }
 
         // Straighten the fold gradually as it approaches the spine, so it never snaps.
-        val travel = grabX - page.left
-        val approach = along(phi).let { d -> liftedLength(max(d, 0f), radiusFor(d, width)) }
+        val approach = along(phi).let { d -> liftedLength(max(d, 0f), radius(d)) }
         phi *= ((travel - approach) / (travel * 0.4f)).coerceIn(0f, 1f)
         fun keepsSpine(p: Float): Boolean {
             val d = max(along(p), 0f)
-            val lifted = liftedLength(d, radiusFor(d, width))
+            val lifted = liftedLength(d, radius(d))
             val c = cos(p)
             val s = sin(p)
             return (grabX - page.left) * c + (grabY - page.top) * s >= lifted &&
@@ -107,7 +130,7 @@ object CurlMath {
 
         val distance = along(phi)
         if (distance < 0.5f) return null
-        val radius = radiusFor(distance, width)
+        val radius = radius(distance)
         val lifted = liftedLength(distance, radius)
         val nx = cos(phi)
         val ny = sin(phi)
@@ -129,6 +152,9 @@ object CurlMath {
         val distance = 2f * lifted - halfTurn
         return grabX - distance
     }
+
+    /** Where the dragged edge of a book leaf ends up when it lies flat on the other side of the spine. */
+    fun landedX(grabX: Float, page: PageRect): Float = 2f * page.left - grabX
 
     /** Where a point of the flat page ends up; the same math as curlDeform() in curl_common.glsl. */
     fun deform(x: Float, y: Float, curl: CurlGeometry): Triple<Float, Float, Float> {

@@ -17,6 +17,9 @@ interface ComicSource : Closeable {
 
     /** Decodes a page so that it fits into [maxWidth] x [maxHeight], keeping its aspect ratio. */
     fun loadPage(index: Int, maxWidth: Int, maxHeight: Int): Bitmap?
+
+    /** Width and height of every page (null where unknown), read without decoding whole pages. */
+    fun readPageSizes(): List<Pair<Int, Int>?> = emptyList()
 }
 
 object PageDecoder {
@@ -26,6 +29,13 @@ object PageDecoder {
         val file = name.substringAfterLast('/')
         if (file.startsWith(".") || name.contains("__MACOSX/")) return false
         return file.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
+    }
+
+    /** Image size from its header; works on a truncated file as long as the header is there. */
+    fun size(bytes: ByteArray, length: Int = bytes.size): Pair<Int, Int>? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, length, bounds)
+        return if (bounds.outWidth > 0 && bounds.outHeight > 0) bounds.outWidth to bounds.outHeight else null
     }
 
     fun decode(bytes: ByteArray, maxWidth: Int, maxHeight: Int): Bitmap? {

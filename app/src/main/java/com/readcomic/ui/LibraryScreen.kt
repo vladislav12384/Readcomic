@@ -226,7 +226,7 @@ private fun ComicCard(entry: ComicEntry, coverFile: File, onClick: () -> Unit, o
         )
         Text(
             when {
-                entry.lastReadAt > 0 && entry.currentPage >= entry.pageCount - 1 -> "Прочитан"
+                entry.isFinished -> "Прочитан"
                 entry.currentPage > 0 -> "Стр. ${entry.currentPage + 1} из ${entry.pageCount}"
                 else -> "${entry.pageCount} стр."
             },

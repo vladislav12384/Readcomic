@@ -11,17 +11,18 @@ layout(location = 0) in vec2 aUV;
 uniform mat4 uMVP;
 uniform vec3 uLight;
 uniform float uStrength;
+uniform float uShadowScale;   // height at which the shadow gets noticeably lighter
 
 out float vStrength;
 
 void main() {
     vec3 pos;
     vec3 normal;
-    curlDeform(aUV, pos, normal);
+    sheetDeform(aUV, pos, normal);
     vec2 projected = pos.xy - uLight.xy / uLight.z * pos.z;
 
-    float height = pos.z / max(2.0 * uRadius, 1.0);
-    // Flat parts cast nothing; higher parts cast lighter shadows.
-    vStrength = uStrength * smoothstep(0.0, 0.12, height) * mix(1.0, 0.55, clamp(height, 0.0, 1.0));
+    float height = pos.z / uShadowScale;
+    // Flat parts cast nothing (so a leaf that lands softly loses its shadow); higher parts cast lighter shadows.
+    vStrength = uStrength * smoothstep(0.0, 0.06, height) * mix(1.0, 0.55, clamp(height, 0.0, 1.0));
     gl_Position = uMVP * vec4(projected, 0.0, 1.0);
 }

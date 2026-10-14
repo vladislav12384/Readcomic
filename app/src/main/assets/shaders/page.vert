@@ -15,7 +15,7 @@ out float vHeight;
 void main() {
     vec3 pos;
     vec3 normal;
-    curlDeform(aUV, pos, normal);
+    sheetDeform(aUV, pos, normal);
     vUV = aUV;
     vNormal = normal;
     vHeight = pos.z;

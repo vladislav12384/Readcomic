@@ -72,10 +72,10 @@ class PageTextureCache(
     operator fun get(index: Int): Texture? = textures[index]
 
     /**
-     * Keeps exactly [wanted] in memory (requesting missing ones in order of priority),
-     * with a high resolution version for [hiResIndex].
+     * Keeps exactly [wanted] in memory (requesting missing ones in order of priority), with a
+     * high resolution version of the [hiRes] ones. [box] gives the on-screen size of an image.
      */
-    fun update(wanted: List<Int>, hiResIndex: Int?, viewWidth: Float, viewHeight: Float) {
+    fun update(wanted: List<Int>, hiRes: Set<Int>, box: (Int) -> Pair<Float, Float>) {
         val iterator = textures.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
@@ -87,12 +87,13 @@ class PageTextureCache(
         val limit = min(maxTextureSize, 4096)
         for (index in wanted) {
             if (index in failed || index in inFlight) continue
-            val hi = index == hiResIndex
+            val hi = index in hiRes
             val texture = textures[index]
             if (texture != null && (texture.hiRes || !hi)) continue
             val factor = if (hi) 2.2f else 1.35f
-            val width = min((viewWidth * factor).toInt(), limit)
-            val height = min((viewHeight * factor).toInt(), limit)
+            val (boxWidth, boxHeight) = box(index)
+            val width = min((boxWidth * factor).toInt(), limit)
+            val height = min((boxHeight * factor).toInt(), limit)
             request(index, hi, width, height)
         }
     }

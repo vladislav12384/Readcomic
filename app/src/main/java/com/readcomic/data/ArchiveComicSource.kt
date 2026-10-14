@@ -59,6 +59,38 @@ class ArchiveComicSource(private val pfd: ParcelFileDescriptor) : ComicSource {
         return PageDecoder.decode(bytes, maxWidth, maxHeight)
     }
 
+    override fun readPageSizes(): List<Pair<Int, Int>?> = lock.read {
+        if (closed) return emptyList()
+        val indexOf = pages.withIndex().associate { it.value to it.index }
+        val sizes = arrayOfNulls<Pair<Int, Int>>(pages.size)
+        withArchive { archive ->
+            val buffer = ByteBuffer.allocateDirect(64 * 1024)
+            var head = ByteArray(HEADER_BYTES)
+            while (true) {
+                val entry = Archive.readNextHeader(archive)
+                if (entry == 0L) break
+                val index = indexOf[entryName(entry) ?: continue] ?: continue
+                // The header is at the start of the file; only fall back to the whole file if needed.
+                var length = 0
+                var size: Pair<Int, Int>? = null
+                while (size == null) {
+                    buffer.clear()
+                    Archive.readData(archive, buffer)
+                    buffer.flip()
+                    val read = buffer.remaining()
+                    if (read <= 0) break
+                    if (length + read > head.size) head = head.copyOf(maxOf(head.size * 2, length + read))
+                    buffer.get(head, length, read)
+                    length += read
+                    if (length >= HEADER_BYTES) size = PageDecoder.size(head, length)
+                }
+                sizes[index] = size ?: PageDecoder.size(head, length)
+                if (head.size > HEADER_BYTES * 4) head = ByteArray(HEADER_BYTES)
+            }
+        }
+        sizes.toList()
+    }
+
     override fun close() {
         lock.write {
             if (closed) return
@@ -125,6 +157,10 @@ class ArchiveComicSource(private val pfd: ParcelFileDescriptor) : ComicSource {
             } catch (_: ArchiveException) {
             }
         }
+    }
+
+    private companion object {
+        const val HEADER_BYTES = 64 * 1024
     }
 
     private fun entryName(entry: Long): String? =

@@ -8,7 +8,9 @@ import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.readcomic.data.ComicEntry
+import com.readcomic.curl.PageTurnController.ReadingMode
 import com.readcomic.data.ComicOpener
+import com.readcomic.data.ComicSource
 import com.readcomic.data.LibraryStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
@@ -43,6 +46,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _backgroundTint = MutableStateFlow(prefs.getInt(KEY_BACKGROUND, 0))
     val backgroundTint: StateFlow<Int> = _backgroundTint.asStateFlow()
+
+    private val _readingMode = MutableStateFlow(
+        runCatching { ReadingMode.valueOf(prefs.getString(KEY_READING_MODE, null) ?: "") }.getOrDefault(ReadingMode.SPREAD),
+    )
+    val readingMode: StateFlow<ReadingMode> = _readingMode.asStateFlow()
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -125,11 +133,40 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun updateProgress(id: String, page: Int) {
+    fun updateProgress(id: String, firstPage: Int, lastPage: Int) {
         _comics.update { list ->
-            list.map { if (it.id == id) it.copy(currentPage = page, lastReadAt = System.currentTimeMillis()) else it }
+            list.map {
+                if (it.id == id) {
+                    it.copy(currentPage = firstPage, lastVisiblePage = lastPage, lastReadAt = System.currentTimeMillis())
+                } else {
+                    it
+                }
+            }
         }
         viewModelScope.launch(Dispatchers.IO) { persist() }
+    }
+
+    fun setReadingMode(mode: ReadingMode) {
+        _readingMode.value = mode
+        prefs.edit { putString(KEY_READING_MODE, mode.name) }
+    }
+
+    /**
+     * Width / height of every page of an opened comic (0 where unknown). Reading them means a
+     * pass over the whole archive, so the result is cached per comic.
+     */
+    suspend fun pageAspects(entry: ComicEntry, source: ComicSource): FloatArray = withContext(Dispatchers.IO) {
+        val count = source.pageCount
+        if (count != entry.pageCount) {
+            _comics.update { list -> list.map { if (it.id == entry.id) it.copy(pageCount = count) else it } }
+            persist()
+        }
+        val demo = ComicOpener.isDemo(entry.uri)
+        if (!demo) store.loadAspects(entry.id, count)?.let { return@withContext it }
+        val sizes = runCatching { source.readPageSizes() }.getOrDefault(emptyList())
+        val aspects = FloatArray(count) { i -> sizes.getOrNull(i)?.let { (w, h) -> w.toFloat() / h } ?: 0f }
+        if (!demo && sizes.isNotEmpty()) store.saveAspects(entry.id, aspects)
+        aspects
     }
 
     fun setBackgroundTint(index: Int) {
@@ -153,6 +190,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 currentPage = (existing?.currentPage ?: 0).coerceIn(0, source.pageCount - 1),
                 addedAt = existing?.addedAt ?: System.currentTimeMillis(),
                 lastReadAt = existing?.lastReadAt ?: 0L,
+                lastVisiblePage = (existing?.lastVisiblePage ?: 0).coerceIn(0, source.pageCount - 1),
             )
         }
     }
@@ -169,6 +207,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     companion object {
         private const val KEY_DEMO_ADDED = "demo_added"
         private const val KEY_BACKGROUND = "background"
+        private const val KEY_READING_MODE = "reading_mode"
         const val COVER_WIDTH = 360
         const val COVER_HEIGHT = 560
     }

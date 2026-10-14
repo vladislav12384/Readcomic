@@ -64,6 +64,15 @@ class DemoComicSource : ComicSource {
             Panel(0.51f, 0.04f, 0.45f, 0.6f, Scene.FOREST, hero = true, balloon = "Двойной тап или щипок — увеличение!"),
             Panel(0.04f, 0.68f, 0.92f, 0.818f, Scene.SUNSET, caption = "При увеличении страницу можно двигать пальцем. Двойной тап — обратно."),
         ),
+        // A two-page spread drawn as one wide image.
+        listOf(
+            Panel(0.04f, 0.04f, 1.92f, 0.9f, Scene.SPACE, shout = "РАЗВОРОТ", hero = true,
+                caption = "Широкая картинка — это разворот на две страницы."),
+            Panel(0.04f, 0.98f, 0.94f, 0.518f, Scene.SUNSET,
+                caption = "В книжном режиме она ложится на обе страницы, шов — точно по корешку."),
+            Panel(1.02f, 0.98f, 0.94f, 0.518f, Scene.FOREST, hero = true,
+                balloon = "Разворот, одна страница или авто — выбирается в меню."),
+        ),
         listOf(
             Panel(0.04f, 0.04f, 0.92f, 0.7f, Scene.BURST, shout = "МЕНЮ", caption = "Тап по центру экрана открывает меню."),
             Panel(0.04f, 0.78f, 0.92f, 0.718f, Scene.NIGHT, hero = true, balloon = "Там номер страницы и ползунок для быстрого перехода."),
@@ -88,15 +97,24 @@ class DemoComicSource : ComicSource {
         ),
     )
 
+    /** Pages that are two pages wide. */
+    private val widePages = setOf(5)
+
     override val pageCount get() = pages.size
+
+    private fun pageWidth(index: Int) = if (index in widePages) 2 else 1
+
+    override fun readPageSizes(): List<Pair<Int, Int>?> =
+        List(pageCount) { 1000 * pageWidth(it) to (1000 * PAGE_HEIGHT).toInt() }
 
     override fun loadPage(index: Int, maxWidth: Int, maxHeight: Int): Bitmap? {
         val panels = pages.getOrNull(index) ?: return null
-        val (width, height) = PageDecoder.fit(1000, (1000 * PAGE_HEIGHT).toInt(), maxWidth, maxHeight)
+        val (width, height) =
+            PageDecoder.fit(1000 * pageWidth(index), (1000 * PAGE_HEIGHT).toInt(), maxWidth, maxHeight)
         val bitmap = createBitmap(width, height)
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.rgb(251, 247, 238))
-        val unit = width.toFloat()
+        val unit = width.toFloat() / pageWidth(index)
         val random = Random(index * 7919 + 17)
         panels.forEach { drawPanel(canvas, unit, it, random) }
 
@@ -106,7 +124,7 @@ class DemoComicSource : ComicSource {
             typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
             textAlign = Paint.Align.CENTER
         }
-        canvas.drawText("${index + 1}", unit * 0.5f, height - unit * 0.012f, number)
+        if (pageWidth(index) == 1) canvas.drawText("${index + 1}", unit * 0.5f, height - unit * 0.012f, number)
         return bitmap
     }
 

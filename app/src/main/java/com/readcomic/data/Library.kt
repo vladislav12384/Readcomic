@@ -12,17 +12,22 @@ data class ComicEntry(
     val uri: String,
     val title: String,
     val pageCount: Int,
+    /** First page on screen when the comic was closed (reading resumes here). */
     val currentPage: Int = 0,
     val addedAt: Long = System.currentTimeMillis(),
     val lastReadAt: Long = 0L,
+    /** Last page on screen: the right-hand one of a spread. */
+    val lastVisiblePage: Int = currentPage,
 ) {
-    val progress: Float get() = if (pageCount <= 1) 0f else currentPage.toFloat() / (pageCount - 1)
+    val progress: Float get() = if (pageCount <= 1) 0f else lastVisiblePage.toFloat() / (pageCount - 1)
+    val isFinished: Boolean get() = lastReadAt > 0 && lastVisiblePage >= pageCount - 1
 }
 
 /** The list of comics with reading progress, stored as a small JSON file plus cover thumbnails. */
 class LibraryStore(context: Context) {
     private val file = File(context.filesDir, "library.json")
     private val coverDir = File(context.filesDir, "covers").apply { mkdirs() }
+    private val pagesDir = File(context.filesDir, "pages").apply { mkdirs() }
 
     @Synchronized
     fun load(): List<ComicEntry> {
@@ -39,6 +44,7 @@ class LibraryStore(context: Context) {
                     currentPage = o.optInt("currentPage", 0),
                     addedAt = o.optLong("addedAt", 0L),
                     lastReadAt = o.optLong("lastReadAt", 0L),
+                    lastVisiblePage = o.optInt("lastVisiblePage", o.optInt("currentPage", 0)),
                 )
             }
         } catch (_: Exception) {
@@ -58,7 +64,8 @@ class LibraryStore(context: Context) {
                     .put("pageCount", e.pageCount)
                     .put("currentPage", e.currentPage)
                     .put("addedAt", e.addedAt)
-                    .put("lastReadAt", e.lastReadAt),
+                    .put("lastReadAt", e.lastReadAt)
+                    .put("lastVisiblePage", e.lastVisiblePage),
             )
         }
         val tmp = File(file.parentFile, file.name + ".tmp")
@@ -74,6 +81,22 @@ class LibraryStore(context: Context) {
 
     fun deleteCover(id: String) {
         coverFile(id).delete()
+        File(pagesDir, "$id.txt").delete()
+    }
+
+    /** Cached width / height of every page, so wide two-page images are known before reading. */
+    fun loadAspects(id: String, pageCount: Int): FloatArray? {
+        val file = File(pagesDir, "$id.txt")
+        if (!file.exists()) return null
+        return try {
+            file.readText().split(',').map { it.toFloat() }.toFloatArray().takeIf { it.size == pageCount }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveAspects(id: String, aspects: FloatArray) {
+        File(pagesDir, "$id.txt").writeText(aspects.joinToString(","))
     }
 
     companion object {

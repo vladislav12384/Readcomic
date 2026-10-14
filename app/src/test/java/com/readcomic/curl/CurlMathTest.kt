@@ -78,6 +78,28 @@ class CurlMathTest {
     }
 
     @Test
+    fun bookLeafLandsFlatAndTightensTheBend() {
+        val grabY = page.top + page.height * 0.7f
+        val landed = CurlMath.landedX(page.right, page)
+        assertEquals(page.left - page.width, landed, 0.01f)
+        var previousRadius = Float.MAX_VALUE
+        for (step in 0..20) {
+            val fx = page.right + (landed - page.right) * step / 20f
+            val curl = CurlMath.compute(page.right, grabY, fx, grabY, page, landFlat = true) ?: continue
+            // The spine never lifts and the axis never crosses it.
+            assertTrue((page.left - curl.axisX) * curl.nx <= 0.01f)
+            if (step > 14) {
+                assertTrue("bend must tighten towards the end", curl.radius <= previousRadius + 0.01f)
+                previousRadius = curl.radius
+            }
+        }
+        val curl = CurlMath.compute(page.right, grabY, landed, grabY, page, landFlat = true)!!
+        val (x, _, z) = CurlMath.deform(page.right, grabY, curl)
+        assertEquals(landed, x, 3f)
+        assertTrue(z < 2f)
+    }
+
+    @Test
     fun cornerGrabTiltsTheFold() {
         val curl = CurlMath.compute(page.right, page.bottom, page.right - 120f, page.bottom - 90f, page)!!
         assertTrue(curl.ny > 0.2f)

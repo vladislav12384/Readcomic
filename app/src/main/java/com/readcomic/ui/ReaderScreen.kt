@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +43,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -58,6 +60,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.readcomic.curl.PageCurlView
 import com.readcomic.curl.PageLoader
+import com.readcomic.curl.PageTurnController.ReadingMode
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
 import com.readcomic.data.ComicSource
@@ -76,21 +79,29 @@ interface VolumeKeyHost {
 fun ReaderScreen(
     entry: ComicEntry,
     backgroundTint: Int,
+    readingMode: ReadingMode,
+    pageAspects: suspend (ComicSource) -> FloatArray,
     onBackgroundTintChange: (Int) -> Unit,
-    onPageChanged: (Int) -> Unit,
+    onReadingModeChange: (ReadingMode) -> Unit,
+    onPageChanged: (first: Int, last: Int) -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     var source by remember(entry.uri) { mutableStateOf<ComicSource?>(null) }
+    var aspects by remember(entry.uri) { mutableStateOf<FloatArray?>(null) }
     var error by remember(entry.uri) { mutableStateOf<String?>(null) }
     var page by remember(entry.id) { mutableIntStateOf(entry.currentPage) }
+    var lastPage by remember(entry.id) { mutableIntStateOf(entry.lastVisiblePage) }
     var overlay by remember { mutableStateOf(false) }
     var curlView by remember { mutableStateOf<PageCurlView?>(null) }
     val latestOnPageChanged by rememberUpdatedState(onPageChanged)
 
     LaunchedEffect(entry.uri) {
         try {
-            source = withContext(Dispatchers.IO) { ComicOpener.open(context, entry.uri) }
+            val opened = withContext(Dispatchers.IO) { ComicOpener.open(context, entry.uri) }
+            source = opened
+            // Page shapes tell which images are two-page spreads; cached after the first time.
+            aspects = pageAspects(opened)
         } catch (e: Exception) {
             error = "Не удалось открыть комикс.\n${e.message ?: ""}".trim()
         }
@@ -109,27 +120,33 @@ fun ReaderScreen(
     LaunchedEffect(curlView, tint) {
         curlView?.setBackgroundTint(tint.red, tint.green, tint.blue)
     }
+    LaunchedEffect(curlView, readingMode) {
+        curlView?.setReadingMode(readingMode)
+    }
 
     Box(Modifier.fillMaxSize().background(tint)) {
         val opened = source
+        val shapes = aspects
         when {
-            opened != null -> {
+            opened != null && shapes != null -> {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
                         PageCurlView(ctx).apply {
                             keepScreenOn = true
                             callbacks = object : PageCurlView.Callbacks {
-                                override fun onPageChanged(index: Int) {
-                                    page = index
-                                    latestOnPageChanged(index)
+                                override fun onPageChanged(first: Int, last: Int) {
+                                    page = first
+                                    lastPage = last
+                                    latestOnPageChanged(first, last)
                                 }
 
                                 override fun onCenterTap() {
                                     overlay = !overlay
                                 }
                             }
-                            setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, opened.pageCount, entry.currentPage)
+                            setReadingMode(readingMode)
+                            setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, shapes, entry.currentPage)
                             curlView = this
                         }
                     },
@@ -154,7 +171,10 @@ fun ReaderScreen(
         ) {
             TopBar(
                 title = entry.title,
-                pageLabel = source?.let { "${page + 1} / ${it.pageCount}" } ?: "",
+                pageLabel = source?.let {
+                    val pages = if (lastPage > page) "${page + 1}–${lastPage + 1}" else "${page + 1}"
+                    "$pages / ${it.pageCount}"
+                } ?: "",
                 onBack = onBack,
             )
         }
@@ -170,8 +190,10 @@ fun ReaderScreen(
                 page = page,
                 count = count,
                 backgroundTint = backgroundTint,
+                readingMode = readingMode,
                 onJump = { target -> curlView?.jumpTo(target) },
                 onBackgroundTintChange = onBackgroundTintChange,
+                onReadingModeChange = onReadingModeChange,
             )
         }
     }
@@ -212,8 +234,10 @@ private fun BottomBar(
     page: Int,
     count: Int,
     backgroundTint: Int,
+    readingMode: ReadingMode,
     onJump: (Int) -> Unit,
     onBackgroundTintChange: (Int) -> Unit,
+    onReadingModeChange: (ReadingMode) -> Unit,
 ) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(page.toFloat()) }
@@ -258,6 +282,15 @@ private fun BottomBar(
         }
         Row(
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(bottom = 10.dp),
+        ) {
+            ModeChip("Разворот", readingMode == ReadingMode.SPREAD) { onReadingModeChange(ReadingMode.SPREAD) }
+            ModeChip("Страница", readingMode == ReadingMode.SINGLE) { onReadingModeChange(ReadingMode.SINGLE) }
+            ModeChip("Авто", readingMode == ReadingMode.AUTO) { onReadingModeChange(ReadingMode.AUTO) }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Фон", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelMedium)
@@ -276,6 +309,22 @@ private fun BottomBar(
             }
         }
     }
+}
+
+/** "Авто" shows a spread in landscape and a single page in portrait. */
+@Composable
+private fun ModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Text(
+        label,
+        color = if (selected) MaterialTheme.colorScheme.onPrimary else Color.White,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier
+            .clip(shape)
+            .background(if (selected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.12f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+    )
 }
 
 /** Hides the status and navigation bars while reading; they come back with the menu. */

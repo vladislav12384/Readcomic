@@ -30,7 +30,8 @@ import kotlin.math.hypot
 class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     interface Callbacks {
-        fun onPageChanged(index: Int)
+        /** Visible page images changed: [first]..[last], equal when a single page is shown. */
+        fun onPageChanged(first: Int, last: Int)
         fun onCenterTap()
     }
 
@@ -51,13 +52,13 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         setEGLContextClientVersion(3)
         setEGLConfigChooser(ConfigChooser())
         preserveEGLContextOnPause = true
-        renderer = CurlRenderer(context.assets, controller, textures, density, ::requestRender)
+        renderer = CurlRenderer(context.assets, controller, textures, ::requestRender)
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY
         isHapticFeedbackEnabled = true
         controller.listener = object : PageTurnController.Listener {
-            override fun onPageChanged(index: Int) {
-                mainHandler.post { callbacks?.onPageChanged(index) }
+            override fun onPageChanged(first: Int, last: Int) {
+                mainHandler.post { callbacks?.onPageChanged(first, last) }
             }
 
             override fun onPageTurned() {
@@ -68,10 +69,16 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     // region Public API (UI thread)
 
-    fun setComic(loader: PageLoader, pageCount: Int, startPage: Int) = onGl {
+    /**
+     * @param aspects width / height of every page image (0 where unknown); wide images are
+     * shown as two facing pages in the book layout.
+     */
+    fun setComic(loader: PageLoader, aspects: FloatArray, startPage: Int) = onGl {
         textures.loader = loader
-        controller.setPages(pageCount, startPage)
+        controller.setPages(aspects, startPage)
     }
+
+    fun setReadingMode(mode: PageTurnController.ReadingMode) = onGl { controller.setReadingMode(mode) }
 
     fun turnNext() = onGl { controller.turnForward() }
 

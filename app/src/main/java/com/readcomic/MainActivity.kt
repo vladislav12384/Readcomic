@@ -84,6 +84,7 @@ private fun App(viewModel: LibraryViewModel) {
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val openRequest by viewModel.openRequest.collectAsStateWithLifecycle()
     val backgroundTint by viewModel.backgroundTint.collectAsStateWithLifecycle()
+    val readingMode by viewModel.readingMode.collectAsStateWithLifecycle()
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     MessagesEffect(viewModel.messages, snackbar)
@@ -113,8 +114,11 @@ private fun App(viewModel: LibraryViewModel) {
                 ReaderScreen(
                     entry = entry,
                     backgroundTint = backgroundTint,
+                    readingMode = readingMode,
+                    pageAspects = { source -> viewModel.pageAspects(entry, source) },
                     onBackgroundTintChange = viewModel::setBackgroundTint,
-                    onPageChanged = { page -> viewModel.updateProgress(entry.id, page) },
+                    onReadingModeChange = viewModel::setReadingMode,
+                    onPageChanged = { first, last -> viewModel.updateProgress(entry.id, first, last) },
                     onBack = { openId = null },
                 )
             }
