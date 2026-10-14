@@ -21,6 +21,9 @@ interface ShelfArt {
     /** A sharp front ([back] = false) or back cover for the comic in hand; may be slow. */
     fun page(id: String, back: Boolean): Bitmap?
 
+    /** What is printed on the spine: its colour and, on thicker comics, the title. */
+    fun spine(id: String): Bitmap?
+
     /** The engraving of the name plate (white letters on black) for a collection of [count] comics. */
     fun plaque(count: Int): Bitmap?
 }
@@ -72,6 +75,7 @@ class ShelfArtCache(
                     "label" -> art.label(id)
                     "front" -> art.page(id, back = false)
                     "back" -> art.page(id, back = true)
+                    "spine" -> art.spine(id)
                     else -> art.plaque(id.toInt())
                 }
             } catch (e: Exception) {

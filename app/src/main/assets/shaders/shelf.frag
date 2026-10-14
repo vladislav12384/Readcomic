@@ -12,7 +12,7 @@ in vec3 vNormal;
 in vec3 vLocal;
 in vec2 vUV;
 in vec4 vLight;
-flat in int vFace;   // 0 front, 1 back, 2 left (spine), 3 right, 4 top, 5 bottom
+flat in int vFace;   // boxes: 0 front, 1 back, 2 left, 3 right, 4 top, 5 bottom; comics: their part (ComicShape)
 
 uniform int uMaterial;        // 0 comic, 1 wood, 2 wall, 3 label, 4 ribbon, 5 name plate
 uniform mat4 uModel;
@@ -23,8 +23,9 @@ uniform sampler2D uLabel;     // the label's paper, or the engraving of the name
 uniform float uHasCover;
 uniform float uHasBack;
 uniform float uHasLabel;
-uniform float uSheets;        // sheets of paper in the comic
-uniform float uThickness;     // of the comic, meters
+uniform sampler2D uSpine;     // what is printed on the spine
+uniform float uHasSpine;
+uniform vec4 uBook;           // binding (0 stapled, 1 paperback, 2 hardcover), pages, board thickness, spine rounding
 uniform float uDim;           // darkening of everything but the comic in hand
 uniform float uHeld;          // 1 for the comic in hand: lit like in a photo studio
 uniform float uLightsTime;    // seconds since the shelf lights were switched on
@@ -42,6 +43,8 @@ const float PI = 3.14159265;
 const vec3 PAPER = vec3(0.80, 0.76, 0.66);
 const vec3 STRIP = vec3(1.0, 0.82, 0.62);
 const vec3 BRASS = vec3(0.90, 0.66, 0.30);
+const vec3 FOIL = vec3(0.851, 0.698, 0.416);   // the gold of titles stamped on hardcover spines (sRGB)
+const vec3 ENDPAPER = vec3(0.70, 0.64, 0.52);
 const float EXPOSURE = 1.0;
 
 const vec2 POISSON[8] = vec2[8](
@@ -157,8 +160,8 @@ vec3 environment(vec3 r, float blur) {
     vec3 color = mix(room, sky, window * (1.0 - bars * 0.9));
     float softbox = band(q.x, 0.10, 0.028, s + 0.008) * band(q.y, 0.40, 0.60, s);
     color += vec3(2.6, 2.45, 2.2) * softbox;
-    float ceiling = smoothstep(0.75, 1.5, q.y);
-    return color + vec3(0.9, 0.82, 0.7) * ceiling;
+    float ceiling = smoothstep(0.9, 1.8, q.y);
+    return color + vec3(0.32, 0.29, 0.25) * ceiling;
 }
 
 float fresnel(vec3 n, vec3 v, float f0) {
@@ -212,16 +215,41 @@ vec3 bevelNormal(float radius) {
 
 // region Materials
 
+// A normal given in the comic's own meters, to the world.
+vec3 comicNormal(vec3 n) {
+    return normalize(uNormalMatrix * normalize(n * boxSize()));
+}
+
+vec3 coverEdgeColor() {
+    return uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.97, 0.5), 6.0).rgb) : PAPER * 0.6;
+}
+
+// The outside of a cover ([side] 1 front, -1 back): the cut edges are slightly rounded and a
+// paperback has a crease along the spine where it bends open.
+vec3 coverNormal(float side, vec3 p, vec3 size) {
+    float radius = uBook.x > 1.5 ? 0.0012 : 0.0006;
+    vec2 t = clamp(1.0 - vec2(size.x * 0.5 - p.x, size.y * 0.5 - abs(p.y)) / radius, 0.0, 1.0);
+    vec3 n = vec3(tan(t.x * 0.785), sign(p.y) * tan(t.y * 0.785), side);
+    if (uBook.x > 0.5 && uBook.x < 1.5) {
+        float x = p.x - (-size.x * 0.5 + 0.0065);
+        n.x += sin(clamp(x / 0.0008, -1.0, 1.0) * PI) * 0.18 * (1.0 - smoothstep(0.0006, 0.0009, abs(x)));
+    }
+    return comicNormal(n);
+}
+
 vec3 comic(vec3 v) {
     vec3 size = boxSize();
-    float height = (vLocal.y + 0.5) * size.y;
+    vec3 p = vLocal * size;
+    float binding = uBook.x;
+    float pages = max(uBook.y, 2.0);
     // Standing on the shelf: darker where the comic meets the wood.
-    float occlusion = uHeld > 0.5 ? 1.0 : 1.0 - 0.45 * exp(-height / 0.012);
+    float occlusion = uHeld > 0.5 ? 1.0 : 1.0 - 0.45 * exp(-(p.y + size.y * 0.5) / 0.012);
+    int part = vFace;
 
-    if (vFace == 0 || vFace == 1) {
-        vec3 n = bevelNormal(0.0012);
+    if (part == 0 || part == 1) {
+        vec3 n = coverNormal(part == 0 ? 1.0 : -1.0, p, size);
         vec3 a;
-        if (vFace == 0) {
+        if (part == 0) {
             a = uHasCover > 0.5 ? toLinear(texture(uCover, vUV).rgb) : PAPER * 0.6;
             // Ink on coated paper: a touch richer.
             a = max(mix(vec3(luminance(a)), a, 1.12), 0.0);
@@ -231,37 +259,81 @@ vec3 comic(vec3 v) {
             a = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.8 : PAPER * 0.5;
         }
         vec3 color = a * irradiance(n, occlusion) + sparkle(n, v, 300.0, 1.2);
-        return coat(color, n, v, 1.0, 0.0);
+        return coat(color, n, v, binding > 1.5 ? 0.8 : 1.0, binding > 1.5 ? 0.02 : 0.0);
     }
-    if (vFace == 2) {
-        // The spine: the cover wraps around it, so it is rounded and has the cover's edge colour.
-        float t = vUV.x;
-        vec3 rounded = vec3(-cos((t - 0.5) * PI), 0.0, sin((t - 0.5) * PI));
-        vec3 n = normalize(uNormalMatrix * rounded);
-        vec3 a = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.02, vUV.y), 3.0).rgb) : PAPER * 0.5;
-        if (uSheets <= 40.0) {
-            // Thin comics are held together by two staples.
-            float sy = min(abs(vUV.y - 0.27), abs(vUV.y - 0.73));
-            float staple = (1.0 - smoothstep(0.004, 0.008, sy)) * (1.0 - smoothstep(0.28, 0.36, abs(t - 0.5)));
-            a = mix(a, vec3(0.55, 0.56, 0.6), staple);
-        }
-        vec3 color = a * irradiance(n, occlusion) + sparkle(n, v, 200.0, 1.0);
-        return coat(color, n, v, 1.0, 0.0);
-    }
-    // Page edges: a block of sheets between the two covers.
+
     vec3 n = normalize(vNormal);
-    float t = vFace == 3 ? vUV.x : vUV.y;
-    float sheet = t * uSheets;
+    if (part == 2) {
+        vec3 print = uHasSpine > 0.5 ? texture(uSpine, vUV).rgb : vec3(-1.0);
+        vec3 a = print.r >= 0.0 ? toLinear(print) : coverEdgeColor();
+        vec3 color = a * irradiance(n, occlusion);
+        float metal = 0.0;
+        if (binding < 0.5) {
+            // Two staples through the fold.
+            float across = abs(vUV.x - 0.5) * PI * size.z * 0.5;
+            float along = min(abs(vUV.y - 0.27), abs(vUV.y - 0.73)) * size.y;
+            metal = (1.0 - smoothstep(0.0003, 0.0005, across)) * (1.0 - smoothstep(0.0055, 0.0065, along));
+        } else if (binding > 1.5 && print.r >= 0.0) {
+            // Gold foil stamped into the cloth.
+            metal = 1.0 - smoothstep(0.03, 0.09, distance(print, FOIL));
+        }
+        color += sparkle(n, v, 200.0, 0.8);
+        color = coat(color, n, v, binding > 1.5 ? 0.6 : 1.0, binding > 1.5 ? 0.05 : 0.0);
+        if (metal > 0.0) {
+            vec3 tint = binding < 0.5 ? vec3(0.62, 0.63, 0.66) : BRASS;
+            vec3 r = reflect(-v, n);
+            vec3 shine = tint * (environment(r, 0.05) * 0.9 + irradiance(n, occlusion) * 0.3) + sparkle(n, v, 90.0, 2.5) * tint;
+            color = mix(color, shine, metal);
+        }
+        return color;
+    }
+
+    if (part == 6) {
+        // The boards' edges, wrapped in the cover.
+        return coverEdgeColor() * 0.85 * irradiance(n, occlusion) + sparkle(n, v, 40.0, 0.2);
+    }
+    if (part == 7) {
+        return ENDPAPER * irradiance(n, occlusion);
+    }
+
+    // The pages: lines of the sheets across the block, the cover's cut edge on the outside.
+    float layer;
+    float leaves;
+    float coverBand;
+    if (binding < 0.5) {
+        // Folded sheets nest inside each other around the fold of a stapled comic.
+        float r = size.z * 0.5;
+        float cx = -size.x * 0.5 + r;
+        float d = p.x < cx ? length(vec2(p.x - cx, p.z)) : abs(p.z);
+        layer = d / r;
+        leaves = max(pages / 4.0, 1.0);
+        coverBand = step(1.0 - 0.00025 / r, layer);
+    } else if (binding < 1.5) {
+        layer = (p.z + size.z * 0.5) / size.z;
+        leaves = pages / 2.0;
+        float c = 0.0003 / size.z;
+        coverBand = max(step(layer, c), step(1.0 - c, layer));
+        coverBand = max(coverBand, step(p.x, -size.x * 0.5 + 0.0003));
+    } else {
+        float blockHalf = size.z * 0.5 - uBook.z;
+        layer = (p.z + blockHalf) / (2.0 * blockHalf);
+        leaves = pages / 2.0;
+        coverBand = 0.0;
+    }
+    float sheet = layer * leaves;
     float width = fwidth(sheet);
     float d = abs(fract(sheet) - 0.5);
     float line = smoothstep(0.5 - max(width, 0.12), 0.5, d) * (1.0 - smoothstep(0.4, 1.2, width));
-    vec3 a = PAPER * (1.0 - 0.25 * line) * (0.96 + 0.04 * noise(vec2(sheet, vLocal.y * 300.0)));
-    float cover = 0.00028 / max(uThickness, 0.0005);
-    if (uHasCover > 0.5) {
-        if (t > 1.0 - cover) a = toLinear(textureLod(uCover, vec2(0.97, 0.5), 5.0).rgb);
-        if (t < cover) a = toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.8;
-    }
-    return a * irradiance(n, occlusion);
+    // Slightly uneven sheets, a little yellower towards the outside.
+    float uneven = noise(vec2(floor(sheet) * 7.0, p.y * 40.0 + p.x * 40.0));
+    // Too many sheets to tell apart from afar: they still show as fine striations.
+    float striation = noise(vec2(layer * 140.0, (p.x + p.y) * 2.0)) * (1.0 - line);
+    vec3 a = PAPER * (1.0 - 0.28 * line) * (0.95 + 0.06 * uneven) * (0.96 + 0.08 * striation);
+    a *= mix(vec3(1.0), vec3(1.0, 0.95, 0.86), smoothstep(0.6, 1.0, abs(layer * 2.0 - 1.0)) * 0.5);
+    if (coverBand > 0.5) a = coverEdgeColor();
+    // Pages sink a little into the shade between the covers.
+    float inner = 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.15, min(layer, 1.0 - layer))) * step(0.5, binding);
+    return a * irradiance(n, occlusion * inner);
 }
 
 vec3 woodAlbedo(vec3 p) {

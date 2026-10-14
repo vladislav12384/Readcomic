@@ -28,6 +28,7 @@ class ShelfRenderer(
     private lateinit var depthProgram: GlProgram
     private lateinit var box: Mesh
     private lateinit var quad: Mesh
+    private val comicMeshes = HashMap<String, Mesh>()
     private var blank = 0
     private var shadowTexture = 0
     private var shadowFramebuffer = 0
@@ -47,6 +48,7 @@ class ShelfRenderer(
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         program = GlProgram.fromAssets(assets, "shelf.vert", "shelf.frag")
         depthProgram = GlProgram.fromAssets(assets, "shelf_depth.vert", "shelf_depth.frag")
+        comicMeshes.clear()
         box = createMesh(boxVertices(), boxIndices())
         quad = createMesh(quadVertices(), shortArrayOf(0, 1, 2, 0, 2, 3))
         blank = createBlankTexture()
@@ -71,6 +73,7 @@ class ShelfRenderer(
         val frame = controller.frame()
         for (comic in frame.comics) {
             art.request("cover:${comic.id}")
+            art.request("spine:${comic.id}")
             if (comic.held) {
                 art.request("front:${comic.id}")
                 art.request("back:${comic.id}")
@@ -103,8 +106,12 @@ class ShelfRenderer(
         for (comic in frame.comics) {
             // A comic lifted off the shelf would throw a hard shadow far behind it; real ones blur away.
             if (comic.held && frame.dim > 0.05f) continue
-            cast(comic.model)
             comic.ribbon?.let(::cast)
+            val mesh = meshFor(comic)
+            GLES30.glBindVertexArray(mesh.vao)
+            GLES30.glUniformMatrix4fv(depthProgram["uModel"], 1, false, comic.model, 0)
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, mesh.count, GLES30.GL_UNSIGNED_SHORT, 0)
+            GLES30.glBindVertexArray(box.vao)
         }
         GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -140,6 +147,7 @@ class ShelfRenderer(
         GLES30.glUniform1i(p["uBack"], 1)
         GLES30.glUniform1i(p["uLabel"], 2)
         GLES30.glUniform1i(p["uShadow"], 3)
+        GLES30.glUniform1i(p["uSpine"], 4)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTexture)
 
@@ -156,17 +164,31 @@ class ShelfRenderer(
             val dim = if (comic.held) 0f else frame.dim
             val cover = (if (comic.held) art["front:${comic.id}"] else null) ?: art["cover:${comic.id}"]
             val back = if (comic.held) art["back:${comic.id}"] else null
-            GLES30.glUniform1f(p["uSheets"], comic.sheets.toFloat())
-            GLES30.glUniform1f(p["uThickness"], comic.size.z)
+            GLES30.glUniform4f(
+                p["uBook"],
+                comic.binding.ordinal.toFloat(),
+                comic.pages.toFloat(),
+                min(ComicShape.BOARD, comic.size.z * 0.2f),
+                ComicShape.spineRadius(comic.binding, comic.size.z),
+            )
             // Once out of the shelf's light, the comic in hand is lit like in a photo studio.
             GLES30.glUniform1f(p["uHeld"], if (comic.held && frame.dim > 0.25f) 1f else 0f)
-            draw(box, comic.model, MATERIAL_COMIC, dim, cover = cover, back = back)
+            draw(meshFor(comic), comic.model, MATERIAL_COMIC, dim, cover = cover, back = back, spine = art["spine:${comic.id}"])
             comic.ribbon?.let { draw(box, it, MATERIAL_RIBBON, dim) }
         }
         GLES30.glBindVertexArray(0)
     }
 
-    private fun draw(mesh: Mesh, model: FloatArray, material: Int, dim: Float, cover: Int? = null, back: Int? = null, label: Int? = null) {
+    private fun draw(
+        mesh: Mesh,
+        model: FloatArray,
+        material: Int,
+        dim: Float,
+        cover: Int? = null,
+        back: Int? = null,
+        label: Int? = null,
+        spine: Int? = null,
+    ) {
         val p = program
         GLES30.glUniformMatrix4fv(p["uModel"], 1, false, model, 0)
         GLES30.glUniformMatrix3fv(p["uNormalMatrix"], 1, false, normalMatrix(model), 0)
@@ -175,6 +197,7 @@ class ShelfRenderer(
         bind(0, cover, p["uHasCover"])
         bind(1, back, p["uHasBack"])
         bind(2, label, p["uHasLabel"])
+        bind(4, spine, p["uHasSpine"])
         GLES30.glBindVertexArray(mesh.vao)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, mesh.count, GLES30.GL_UNSIGNED_SHORT, 0)
     }
@@ -184,6 +207,16 @@ class ShelfRenderer(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture ?: blank)
         GLES30.glUniform1f(flag, if (texture != null) 1f else 0f)
+    }
+
+    /** The shape of a comic, built once for every size and binding. */
+    private fun meshFor(comic: ComicDraw): Mesh {
+        val size = comic.size
+        val key = "${comic.binding}:${(size.x * 1e4f).toInt()}:${(size.y * 1e4f).toInt()}:${(size.z * 1e5f).toInt()}"
+        return comicMeshes.getOrPut(key) {
+            val shape = ComicShape.build(size.x, size.y, size.z, comic.binding)
+            createMesh(shape.vertices, shape.indices)
+        }
     }
 
     /** Inverse transpose of the upper 3x3 of [m], column-major. */

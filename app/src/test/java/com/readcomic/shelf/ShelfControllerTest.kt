@@ -42,7 +42,8 @@ class ShelfControllerTest {
         val thin = frame.comics.single { it.id == "c0" }.size.z
         val thick = frame.comics.single { it.id == "c1" }.size.z
         assertTrue(thick > thin)
-        assertEquals(12, frame.comics.single { it.id == "c0" }.sheets)
+        assertEquals(24, frame.comics.single { it.id == "c0" }.pages)
+        assertEquals(Binding.STAPLED, frame.comics.single { it.id == "c0" }.binding)
     }
 
     @Test

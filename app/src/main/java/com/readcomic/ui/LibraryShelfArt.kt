@@ -12,7 +12,10 @@ import android.text.TextUtils
 import androidx.core.graphics.createBitmap
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
+import com.readcomic.shelf.Binding
+import com.readcomic.shelf.ComicShape
 import com.readcomic.shelf.ShelfArt
+import com.readcomic.shelf.ShelfController
 import java.io.File
 import kotlin.math.abs
 
@@ -74,6 +77,77 @@ class LibraryShelfArt(
         }
     }
 
+    override fun spine(id: String): Bitmap? {
+        val entry = entries[id] ?: return null
+        val binding = ComicShape.binding(entry.pageCount)
+        val thickness = ComicShape.thickness(entry.pageCount)
+        // As wide as the spine is thick, at the same scale as along it: letters keep their shape.
+        val height = SPINE_HEIGHT
+        val width = (height * thickness / ShelfController.COMIC_HEIGHT).toInt().coerceAtLeast(8)
+        val bitmap = createBitmap(width, height)
+        val canvas = Canvas(bitmap)
+        val background = spineColor(entry)
+        canvas.drawColor(background)
+        if (binding == Binding.STAPLED || thickness < 0.004f) return bitmap
+
+        val light = luminance(background) < 0.5f
+        val ink = when {
+            binding == Binding.HARDCOVER -> FOIL
+            light -> Color.rgb(240, 234, 222)
+            else -> Color.rgb(28, 22, 18)
+        }
+        val rule = Paint().apply { color = ink }
+        val bandHeight = (height * 0.004f).coerceAtLeast(3f)
+        // Thin bands near the ends, like on bound books.
+        for (y in listOf(height * 0.035f, height * 0.965f - bandHeight)) canvas.drawRect(0f, y, width.toFloat(), y + bandHeight, rule)
+        if (binding == Binding.HARDCOVER) {
+            for (y in listOf(height * 0.045f, height * 0.955f - bandHeight)) canvas.drawRect(0f, y, width.toFloat(), y + bandHeight * 0.5f, rule)
+        }
+        val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+            textSize = width * 0.46f
+            letterSpacing = 0.06f
+            color = ink
+            textAlign = Paint.Align.CENTER
+        }
+        // The title runs down the spine, as on most comics and books.
+        val title = TextUtils.ellipsize(entry.title, text, height * 0.82f, TextUtils.TruncateAt.END)
+        canvas.save()
+        canvas.translate(width / 2f, height / 2f)
+        canvas.rotate(90f)
+        canvas.drawText(title, 0, title.length, 0f, -(text.descent() + text.ascent()) / 2f, text)
+        canvas.restore()
+        return bitmap
+    }
+
+    /** The colour of the spine: the middle of a wraparound cover, else the cover's spine edge. */
+    private fun spineColor(entry: ComicEntry): Int {
+        val file = coverFile(entry).takeIf { it.exists() } ?: return Color.rgb(60, 50, 44)
+        val cover = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = 4 })
+            ?: return Color.rgb(60, 50, 44)
+        val wide = isWide(cover)
+        val x0 = if (wide) (cover.width * 0.48f).toInt() else 0
+        val x1 = if (wide) (cover.width * 0.52f).toInt() else (cover.width * 0.06f).toInt().coerceAtLeast(1)
+        val stripWidth = (x1.coerceAtMost(cover.width) - x0).coerceAtLeast(1)
+        val strip = IntArray(stripWidth * cover.height)
+        cover.getPixels(strip, 0, stripWidth, x0, 0, stripWidth, cover.height)
+        cover.recycle()
+        var r = 0L
+        var g = 0L
+        var b = 0L
+        val n = strip.size.toLong()
+        for (pixel in strip) {
+            r += Color.red(pixel)
+            g += Color.green(pixel)
+            b += Color.blue(pixel)
+        }
+        if (n == 0L) return Color.rgb(60, 50, 44)
+        return Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
+    }
+
+    private fun luminance(color: Int) =
+        (0.2126f * Color.red(color) + 0.7152f * Color.green(color) + 0.0722f * Color.blue(color)) / 255f
+
     override fun plaque(count: Int): Bitmap {
         val bitmap = createBitmap(PLAQUE_WIDTH, PLAQUE_HEIGHT)
         val canvas = Canvas(bitmap)
@@ -108,6 +182,8 @@ class LibraryShelfArt(
     companion object {
         private const val LABEL_WIDTH = 640
         private const val LABEL_HEIGHT = 100
+        private const val SPINE_HEIGHT = 1536
+        private val FOIL = Color.rgb(217, 178, 106)
         private const val PLAQUE_WIDTH = 1024
         private const val PLAQUE_HEIGHT = 166
         private const val SHARP_WIDTH = 900

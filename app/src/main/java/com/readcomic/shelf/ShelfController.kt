@@ -27,8 +27,9 @@ class ComicDraw(
     val model: FloatArray,
     /** Width, height and thickness in meters. */
     val size: Vec3,
-    /** Sheets of paper in the block, for the lines on the page edges. */
-    val sheets: Int,
+    /** Pages, for the lines of the sheets on the page edges. */
+    val pages: Int,
+    val binding: Binding,
     val ribbon: FloatArray?,
     val held: Boolean,
 )
@@ -181,11 +182,9 @@ class ShelfController(private val density: Float) {
     private fun sizeOf(item: ShelfItem): Vec3 {
         val height = COMIC_HEIGHT
         val width = height * item.aspect.coerceIn(0.5f, 1.0f)
-        val sheets = (item.pageCount + 1) / 2
-        // Real paper is about 0.1 mm per sheet, a bit more with the covers.
-        val thickness = 0.0007f + sheets * 0.00011f
-        return Vec3(width, height, thickness.coerceIn(0.0012f, 0.03f))
+        return Vec3(width, height, ComicShape.thickness(item.pageCount))
     }
+
 
     private fun slotX(column: Int) = (column - (columns - 1) / 2f) * SLOT_WIDTH
 
@@ -305,7 +304,7 @@ class ShelfController(private val density: Float) {
             } else {
                 null
             }
-            val draw = ComicDraw(item.id, model, size, (item.pageCount + 1) / 2, ribbon, isHeld)
+            val draw = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld)
             if (isHeld) held = draw else comics += draw
             labels += LabelDraw(
                 item.id,
