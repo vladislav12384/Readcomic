@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Choreographer
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -16,6 +17,7 @@ import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
@@ -47,16 +49,49 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val textures = PageTextureCache(
         scope = scope,
-        requestRender = { requestRender() },
+        requestRender = { requestFrame() },
         onLoaded = { index, aspect -> controller.setPageAspect(index, aspect) },
     )
     private val renderer: CurlRenderer
+
+    // region Frame pacing
+
+    /*
+     * Frames are drawn once per display refresh, started by the Choreographer, and every frame
+     * knows which refresh it is for. Animations then advance by exactly the time between
+     * refreshes, and the fingers are read at that moment (see TouchTrack): no uneven steps.
+     */
+    private val choreographer = Choreographer.getInstance()
+
+    @Volatile
+    private var vsyncNanos = 0L
+    private val pacing = AtomicBoolean(false)
+
+    @Volatile
+    private var touching = false
+
+    /** No frames while the activity is paused: the surface would not show them anyway. */
+    @Volatile
+    private var paused = false
+
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            vsyncNanos = frameTimeNanos
+            super@PageCurlView.requestRender()
+            pacing.set(false)
+            if (renderer.wantsFrames || touching) requestFrame()
+        }
+    }
+
+    private val startPacing = Runnable { choreographer.postFrameCallback(frameCallback) }
 
     init {
         setEGLContextClientVersion(3)
         setEGLConfigChooser(GlConfigChooser())
         preserveEGLContextOnPause = true
-        renderer = CurlRenderer(context.assets, controller, textures, ::requestRender)
+        renderer = CurlRenderer(context.assets, controller, textures) { requestFrame() }
+        renderer.frameClock = { vsyncNanos }
+        renderer.beforeFrame = ::followFingers
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY
         isHapticFeedbackEnabled = true
@@ -70,6 +105,14 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
             }
         }
     }
+
+    /** Asks for a frame at the next display refresh (and keeps them coming while anything moves). Any thread. */
+    private fun requestFrame() {
+        if (paused || !pacing.compareAndSet(false, true)) return
+        if (Looper.myLooper() == Looper.getMainLooper()) startPacing.run() else mainHandler.post(startPacing)
+    }
+
+    // endregion
 
     // region Public API (UI thread)
 
@@ -93,14 +136,14 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     /** Table colour behind the pages, components in 0..1. */
     fun setBackgroundTint(red: Float, green: Float, blue: Float) {
         renderer.backgroundColor = floatArrayOf(red, green, blue)
-        requestRender()
+        requestFrame()
     }
 
     // endregion
 
     private inline fun onGl(crossinline block: () -> Unit) {
         queueEvent { block() }
-        requestRender()
+        requestFrame()
     }
 
     private val leftEdge = Rect()
@@ -121,8 +164,24 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        paused = true
+        choreographer.removeFrameCallback(frameCallback)
+        mainHandler.removeCallbacks(startPacing)
+        pacing.set(false)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        paused = false
+        requestFrame()
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        choreographer.removeFrameCallback(frameCallback)
+        mainHandler.removeCallbacks(startPacing)
         scope.cancel()
     }
 
@@ -130,21 +189,38 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     private enum class Mode { NONE, TURN, PAN, SCALE, IGNORE }
 
+    /** What the fingers drive, as seen by the render thread (only touched there). */
+    private enum class Follow { NOTHING, TURN, PAN, PINCH }
+
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    private val maxFlingVelocity = ViewConfiguration.get(context).scaledMaximumFlingVelocity.toFloat()
     private var mode = Mode.NONE
+    private var pointerId = MotionEvent.INVALID_POINTER_ID
     private var downX = 0f
     private var downY = 0f
-    private var lastX = 0f
-    private var lastY = 0f
-    private var lastFocusX = 0f
-    private var lastFocusY = 0f
     private var velocityTracker: VelocityTracker? = null
     private var tapTurnedPage = false
+
+    /** Positions of the finger (or the pinch) that drives the page; read by the render thread. */
+    private val track = TouchTrack()
+    private var follow = Follow.NOTHING
+    private val sample = FloatArray(3)
 
     /** A touch that stops a scrolling page is not a tap: it must not turn the page by accident. */
     private var touchStoppedFling = false
     private var flingStartedAt = 0L
     private val minFlingVelocity = ViewConfiguration.get(context).scaledMinimumFlingVelocity
+
+    /** Render thread, start of a frame: puts the page where the fingers were at that moment. */
+    private fun followFingers(frameNanos: Long) {
+        if (follow == Follow.NOTHING || !track.sample(frameNanos - RESAMPLE_DELAY_NANOS, sample)) return
+        when (follow) {
+            Follow.PAN -> controller.panTo(sample[0], sample[1])
+            Follow.PINCH -> controller.pinchTo(sample[0], sample[1], sample[2])
+            Follow.TURN -> controller.drag(sample[0], sample[1])
+            Follow.NOTHING -> Unit
+        }
+    }
 
     private enum class Zone { LEFT, CENTER, RIGHT }
 
@@ -172,30 +248,32 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
                 readingGesture()
-                if (mode == Mode.TURN) onGl { controller.cancelDrag() }
+                val wasTurning = mode == Mode.TURN
                 mode = Mode.SCALE
-                lastFocusX = detector.focusX
-                lastFocusY = detector.focusY
-                return true
-            }
-
-            override fun onScale(detector: ScaleGestureDetector): Boolean {
-                val factor = detector.scaleFactor
                 val fx = detector.focusX
                 val fy = detector.focusY
-                val dx = fx - lastFocusX
-                val dy = fy - lastFocusY
-                lastFocusX = fx
-                lastFocusY = fy
+                val span = detector.currentSpan
+                track.clear()
+                track.add(detector.eventTime * NANOS_PER_MILLI, fx, fy, span)
                 onGl {
-                    controller.scaleBy(factor, fx, fy)
-                    controller.panBy(dx, dy)
+                    if (wasTurning) controller.cancelDrag()
+                    controller.beginPinch(fx, fy, span)
+                    follow = Follow.PINCH
                 }
                 return true
             }
 
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                track.add(detector.eventTime * NANOS_PER_MILLI, detector.focusX, detector.focusY, detector.currentSpan)
+                requestFrame()
+                return true
+            }
+
             override fun onScaleEnd(detector: ScaleGestureDetector) {
-                onGl { controller.endScale() }
+                onGl {
+                    follow = Follow.NOTHING
+                    controller.endPinch()
+                }
             }
         },
     ).apply {
@@ -248,6 +326,16 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     override fun performClick(): Boolean = super.performClick()
 
+    /** Every position the finger [id] passed through since the last event, with its time. */
+    private fun record(event: MotionEvent, id: Int) {
+        val index = event.findPointerIndex(id)
+        if (index < 0) return
+        for (h in 0 until event.historySize) {
+            track.add(historicalNanos(event, h), event.getHistoricalX(index, h), event.getHistoricalY(index, h))
+        }
+        track.add(eventNanos(event), event.getX(index), event.getY(index))
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         scaleDetector.onTouchEvent(event)
@@ -257,94 +345,148 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                pointerId = event.getPointerId(0)
                 downX = event.x
                 downY = event.y
-                lastX = downX
-                lastY = downY
                 mode = Mode.NONE
+                touching = true
+                renderer.touching = true
+                track.clear()
+                record(event, pointerId)
                 touchStoppedFling = SystemClock.uptimeMillis() - flingStartedAt < FLING_STOP_WINDOW_MS
                 flingStartedAt = 0L
-                onGl { controller.flingPan(0f, 0f) }
+                // A finger on the glass stops a thrown page (one stretched past an edge still settles).
+                onGl { controller.catchFling() }
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
-                if (mode == Mode.TURN) onGl { controller.cancelDrag() }
-                mode = Mode.SCALE
+                if (mode != Mode.SCALE) {
+                    val wasTurning = mode == Mode.TURN
+                    mode = Mode.SCALE
+                    onGl {
+                        if (wasTurning) controller.cancelDrag()
+                        if (follow != Follow.PINCH) follow = Follow.NOTHING
+                    }
+                }
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
-                // Continue panning with the finger that stays on the screen.
-                val remaining = if (event.actionIndex == 0) 1 else 0
-                lastX = event.getX(remaining)
-                lastY = event.getY(remaining)
-                mode = if (controller.isZoomed) Mode.PAN else Mode.IGNORE
+                if (event.pointerCount == 2 || event.getPointerId(event.actionIndex) == pointerId) {
+                    // Continue with a finger that stays on the screen.
+                    val remaining = (0 until event.pointerCount).first { it != event.actionIndex }
+                    pointerId = event.getPointerId(remaining)
+                    if (event.pointerCount == 2) {
+                        // Down to one finger after a pinch: it pans the zoomed page from here.
+                        val x = event.getX(remaining)
+                        val y = event.getY(remaining)
+                        track.clear()
+                        track.add(eventNanos(event), x, y)
+                        mode = if (controller.isZoomed) Mode.PAN else Mode.IGNORE
+                        if (mode == Mode.PAN) {
+                            onGl {
+                                controller.beginPan(x, y)
+                                follow = Follow.PAN
+                            }
+                        }
+                    }
+                }
             }
 
             MotionEvent.ACTION_MOVE -> {
-                val x = event.getX(0)
-                val y = event.getY(0)
-                when (mode) {
-                    Mode.NONE -> if (hypot(x - downX, y - downY) > touchSlop) {
+                val index = event.findPointerIndex(pointerId)
+                if (index >= 0 && mode != Mode.SCALE) {
+                    val x = event.getX(index)
+                    val y = event.getY(index)
+                    record(event, pointerId)
+                    if (mode == Mode.NONE && hypot(x - downX, y - downY) > touchSlop) {
                         mode = when {
                             controller.isZoomed -> Mode.PAN
                             abs(x - downX) > abs(y - downY) * 0.7f -> Mode.TURN
                             else -> Mode.IGNORE
                         }
                         if (mode == Mode.TURN || mode == Mode.PAN) readingGesture()
-                        if (mode == Mode.TURN) {
-                            val sx = downX
-                            val sy = downY
-                            onGl { controller.beginDrag(sx, sy, x, y) }
+                        // The gesture starts here: no jump by the slop distance.
+                        track.clear()
+                        track.add(eventNanos(event), x, y)
+                        val sx = downX
+                        val sy = downY
+                        when (mode) {
+                            Mode.TURN -> onGl {
+                                if (controller.beginDrag(sx, sy, x, y)) follow = Follow.TURN
+                            }
+                            Mode.PAN -> onGl {
+                                controller.beginPan(x, y)
+                                follow = Follow.PAN
+                            }
+                            else -> Unit
                         }
-                        lastX = x
-                        lastY = y
                     }
-
-                    Mode.TURN -> onGl { controller.drag(x, y) }
-
-                    Mode.PAN -> {
-                        val dx = x - lastX
-                        val dy = y - lastY
-                        onGl { controller.panBy(dx, dy) }
-                    }
-
-                    Mode.SCALE, Mode.IGNORE -> Unit
+                    if (mode == Mode.TURN || mode == Mode.PAN) requestFrame()
                 }
-                lastX = x
-                lastY = y
             }
 
             MotionEvent.ACTION_UP -> {
-                tracker.computeCurrentVelocity(1000)
-                val vx = tracker.xVelocity
-                val vy = tracker.yVelocity
+                tracker.computeCurrentVelocity(1000, maxFlingVelocity)
+                val vx = tracker.getXVelocity(pointerId)
+                val vy = tracker.getYVelocity(pointerId)
                 when (mode) {
-                    Mode.TURN -> onGl { controller.endDrag(vx) }
+                    Mode.TURN -> onGl {
+                        follow = Follow.NOTHING
+                        controller.endDrag(vx)
+                    }
                     Mode.PAN -> {
                         if (hypot(vx, vy) > minFlingVelocity * 4) flingStartedAt = SystemClock.uptimeMillis()
-                        onGl { controller.flingPan(vx, vy) }
+                        onGl {
+                            follow = Follow.NOTHING
+                            controller.endPan(vx, vy)
+                        }
                     }
-                    else -> Unit
+                    else -> onGl { follow = Follow.NOTHING }
                 }
-                mode = Mode.NONE
-                tracker.recycle()
-                velocityTracker = null
+                finishTouch(tracker)
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                if (mode == Mode.TURN) onGl { controller.cancelDrag() }
-                mode = Mode.NONE
-                tracker.recycle()
-                velocityTracker = null
+                val turning = mode == Mode.TURN
+                val panning = mode == Mode.PAN
+                onGl {
+                    follow = Follow.NOTHING
+                    if (turning) controller.cancelDrag()
+                    if (panning) controller.endPan(0f, 0f)
+                }
+                finishTouch(tracker)
             }
         }
         return true
     }
+
+    private fun finishTouch(tracker: VelocityTracker) {
+        mode = Mode.NONE
+        pointerId = MotionEvent.INVALID_POINTER_ID
+        touching = false
+        renderer.touching = false
+        tracker.recycle()
+        velocityTracker = null
+    }
+
+    private fun eventNanos(event: MotionEvent): Long =
+        if (Build.VERSION.SDK_INT >= 34) event.eventTimeNanos else event.eventTime * NANOS_PER_MILLI
+
+    private fun historicalNanos(event: MotionEvent, h: Int): Long =
+        if (Build.VERSION.SDK_INT >= 34) event.getHistoricalEventTimeNanos(h) else event.getHistoricalEventTime(h) * NANOS_PER_MILLI
 
     // endregion
 
     private companion object {
         /** A fling is considered still running this long after it started. */
         const val FLING_STOP_WINDOW_MS = 700L
+        const val NANOS_PER_MILLI = 1_000_000L
+
+        /**
+         * Fingers are read this long before the refresh a frame is drawn for: the input system
+         * delivers positions measured up to about 5 ms before it, so there is always a real
+         * sample on both sides to interpolate between.
+         */
+        const val RESAMPLE_DELAY_NANOS = 6_000_000L
     }
 }

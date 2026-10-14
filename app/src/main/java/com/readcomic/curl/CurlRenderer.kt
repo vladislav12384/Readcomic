@@ -4,6 +4,7 @@ import android.content.res.AssetManager
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
+import android.os.Process
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import javax.microedition.khronos.egl.EGLConfig
@@ -50,7 +51,27 @@ class CurlRenderer(
     @Volatile
     var backgroundColor = floatArrayOf(0.12f, 0.115f, 0.11f)
 
+    /**
+     * The display refresh this frame is drawn for (System.nanoTime clock); 0 when unknown.
+     * Animations advance by whole refreshes, so motion stays even when frames start a little early or late.
+     */
+    var frameClock: () -> Long = { 0L }
+
+    /** Called at the start of every frame with its time, to apply the fingers' current positions. */
+    var beforeFrame: ((frameNanos: Long) -> Unit)? = null
+
+    /** Whether a finger is on the page: frames keep coming even if nothing animates by itself. */
+    @Volatile
+    var touching = false
+
+    /** Set at the end of every frame: whether the next one is needed. */
+    @Volatile
+    var wantsFrames = false
+        private set
+
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        // Drawing comes before decoding pages in the background: frames keep their pace.
+        Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
         pageProgram = GlProgram.fromAssets(assets, "page.vert", "page.frag")
         shadowProgram = GlProgram.fromAssets(assets, "shadow.vert", "shadow.frag")
         blurProgram = GlProgram.fromAssets(assets, "fullscreen.vert", "blur.frag")
@@ -92,19 +113,22 @@ class CurlRenderer(
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        val now = System.nanoTime()
+        val now = frameClock().takeIf { it > 0L } ?: System.nanoTime()
         val dt = if (lastFrameNanos == 0L) 1f / 60f else ((now - lastFrameNanos) / 1e9f).coerceIn(0f, 1f / 20f)
+        beforeFrame?.invoke(now)
         var animating = controller.step(dt)
 
-        // A few milliseconds per frame for GPU uploads: pages appear without stalling a turn.
-        if (textures.uploadPending(budgetMillis = if (controller.isTurning) 4L else 12L)) animating = true
+        // A few milliseconds per frame for GPU uploads: pages appear without stalling a turn or a pinch.
+        val busy = animating || touching
+        if (textures.uploadPending(budgetMillis = if (busy) 3L else 10L)) animating = true
         textures.update(
             sharp = controller.wantedImages(),
             previews = controller.previewImages(),
             zoomed = if (controller.scale > 1.3f) controller.visibleImageSet() else emptySet(),
             box = controller::displayBox,
         )
-        lastFrameNanos = if (animating) now else 0L
+        lastFrameNanos = if (animating || touching) now else 0L
+        wantsFrames = animating
 
         updateMatrices()
         val scene = controller.scene()

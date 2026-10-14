@@ -3,11 +3,14 @@ package com.readcomic.curl
 import android.graphics.Bitmap
 import android.opengl.GLES30
 import android.opengl.GLUtils
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.math.max
 import kotlin.math.min
@@ -25,7 +28,9 @@ fun interface PageLoader {
  * - a **zoom** version of the pages on screen while the reader zooms in.
  *
  * Bitmaps are decoded in the background; uploading them to the GPU happens on the render thread
- * with a small time budget per frame so that animations never stutter.
+ * with a small time budget per frame so that animations never stutter. A big page goes up in
+ * bands of rows over several frames (a whole zoomed page at once would hold a frame for tens of
+ * milliseconds, right while the reader pinches or turns), and is shown once it is complete.
  */
 class PageTextureCache(
     private val scope: CoroutineScope,
@@ -34,7 +39,26 @@ class PageTextureCache(
 ) {
     class Texture(val id: Int, val width: Int, val height: Int, val quality: Int)
 
-    private class Decoded(val index: Int, val quality: Int, val bitmap: Bitmap?, val generation: Int)
+    /** A decoded page: a small bitmap for previews, raw RGBA rows for the big ones. */
+    private class Decoded(
+        val index: Int,
+        val quality: Int,
+        val bitmap: Bitmap?,
+        val pixels: ByteBuffer?,
+        val width: Int,
+        val height: Int,
+        val generation: Int,
+    )
+
+    /** A big texture going up band by band. */
+    private class Upload(val index: Int, val quality: Int, val id: Int, val width: Int, val height: Int, val pixels: ByteBuffer) {
+        var row = 0
+    }
+
+    private var uploading: Upload? = null
+
+    /** Reused pixel buffers: big pages come one after another, no need to allocate each time. */
+    private val pool = ArrayList<ByteBuffer>()
 
     private val textures = HashMap<Int, Texture>()
     private val inFlight = HashSet<Long>()
@@ -61,6 +85,8 @@ class PageTextureCache(
         textures.clear()
         inFlight.clear()
         failed.clear()
+        uploading?.let { release(it.pixels) }
+        uploading = null
         drainDecoded()
         generation++
         val size = IntArray(1)
@@ -81,6 +107,7 @@ class PageTextureCache(
         textures.clear()
         inFlight.clear()
         failed.clear()
+        abortUpload()
         drainDecoded()
         generation++
     }
@@ -113,6 +140,16 @@ class PageTextureCache(
             }
         }
 
+        // A big texture still going up for a page that no longer needs it is not finished.
+        uploading?.let { u ->
+            val wanted = when (u.index) {
+                in zoomed -> ZOOM
+                in sharp -> SHARP
+                else -> PREVIEW
+            }
+            if (wanted < u.quality) abortUpload()
+        }
+
         // First a placeholder for whatever is needed right now, then the crisp versions in order.
         for (index in sharp.take(4)) request(index, PREVIEW, box)
         for (index in sharp) request(index, SHARP, box)
@@ -143,6 +180,8 @@ class PageTextureCache(
         val requestGeneration = generation
         scope.launch(if (quality == PREVIEW) previewDispatcher else sharpDispatcher) {
             if (requestGeneration != generation) return@launch
+            // Decoding yields to drawing: a busy decoder must not cost the animation a frame.
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
             val bitmap = try {
                 loader.load(index, width, height)
             } catch (e: Exception) {
@@ -151,58 +190,148 @@ class PageTextureCache(
             } catch (e: OutOfMemoryError) {
                 Log.w(TAG, "Out of memory loading page $index", e)
                 null
+            } finally {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT)
             }
-            decoded += Decoded(index, quality, bitmap, requestGeneration)
+            if (bitmap == null || quality == PREVIEW) {
+                decoded += Decoded(index, quality, bitmap, null, bitmap?.width ?: 0, bitmap?.height ?: 0, requestGeneration)
+            } else {
+                // Raw rows can be uploaded a band at a time; a bitmap only as a whole.
+                val pixels = obtain(bitmap.byteCount)
+                bitmap.copyPixelsToBuffer(pixels)
+                pixels.rewind()
+                decoded += Decoded(index, quality, null, pixels, bitmap.width, bitmap.height, requestGeneration)
+                bitmap.recycle()
+            }
             requestRender()
         }
     }
 
     /**
-     * Uploads decoded pages to the GPU, previews first, spending at most about [budgetMillis]
-     * (but always at least one page). Returns true if more are waiting.
+     * Uploads decoded pages to the GPU, previews first, spending about [budgetMillis] (but always
+     * making some progress). Returns true if more are waiting.
      */
     fun uploadPending(budgetMillis: Long): Boolean {
         val start = SystemClock.uptimeMillis()
-        var uploaded = 0
         while (true) {
+            uploading?.let { u ->
+                if (!continueUpload(u, start, budgetMillis)) return true
+            }
             // Small previews jump the queue: they are what makes a page appear instantly.
             val next = decoded.firstOrNull { it.quality == PREVIEW } ?: decoded.peek() ?: return false
             decoded.remove(next)
             val key = key(next.index, next.quality)
             if (next.generation != generation) {
-                next.bitmap?.recycle()
+                discard(next)
                 continue
             }
             inFlight -= key
-            val bitmap = next.bitmap
-            if (bitmap == null) {
+            if (next.bitmap == null && next.pixels == null) {
                 failed += key
                 continue
             }
             val current = textures[next.index]
             if (current != null && current.quality >= next.quality) {
-                bitmap.recycle()
+                discard(next)
                 continue
             }
-            current?.let { GLES30.glDeleteTextures(1, intArrayOf(it.id), 0) }
-            textures[next.index] = upload(bitmap, next.quality)
-            onLoaded(next.index, bitmap.width.toFloat() / bitmap.height)
-            bitmap.recycle()
-            uploaded++
-            if (next.quality != PREVIEW && SystemClock.uptimeMillis() - start >= budgetMillis) {
-                return decoded.isNotEmpty()
+            val bitmap = next.bitmap
+            if (bitmap != null) {
+                current?.let { GLES30.glDeleteTextures(1, intArrayOf(it.id), 0) }
+                textures[next.index] = uploadWhole(bitmap, next.quality)
+                onLoaded(next.index, bitmap.width.toFloat() / bitmap.height)
+                bitmap.recycle()
+            } else {
+                uploading = beginUpload(next)
             }
+            if (next.quality != PREVIEW && SystemClock.uptimeMillis() - start >= budgetMillis) {
+                return uploading != null || decoded.isNotEmpty()
+            }
+        }
+    }
+
+    private fun discard(decoded: Decoded) {
+        decoded.bitmap?.recycle()
+        decoded.pixels?.let(::release)
+    }
+
+    private fun beginUpload(page: Decoded): Upload {
+        val id = newTexture()
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, mipLevels(page.width, page.height), GLES30.GL_RGBA8, page.width, page.height)
+        return Upload(page.index, page.quality, id, page.width, page.height, page.pixels!!)
+    }
+
+    /** Uploads bands of rows within the budget; true once the texture is complete and in use. */
+    private fun continueUpload(u: Upload, start: Long, budgetMillis: Long): Boolean {
+        val bandRows = max(16, BAND_BYTES / (u.width * 4))
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, u.id)
+        do {
+            val rows = min(bandRows, u.height - u.row)
+            u.pixels.position(u.row * u.width * 4)
+            GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D, 0, 0, u.row, u.width, rows, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, u.pixels)
+            u.row += rows
+        } while (u.row < u.height && SystemClock.uptimeMillis() - start < budgetMillis)
+        if (u.row < u.height) return false
+
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        textures[u.index]?.let { GLES30.glDeleteTextures(1, intArrayOf(it.id), 0) }
+        textures[u.index] = Texture(u.id, u.width, u.height, u.quality)
+        onLoaded(u.index, u.width.toFloat() / u.height)
+        release(u.pixels)
+        uploading = null
+        return true
+    }
+
+    private fun abortUpload() {
+        val u = uploading ?: return
+        GLES30.glDeleteTextures(1, intArrayOf(u.id), 0)
+        release(u.pixels)
+        inFlight -= key(u.index, u.quality)
+        uploading = null
+    }
+
+    private fun mipLevels(width: Int, height: Int): Int {
+        var levels = 1
+        var size = max(width, height)
+        while (size > 1) {
+            size /= 2
+            levels++
+        }
+        return levels
+    }
+
+    private fun obtain(bytes: Int): ByteBuffer {
+        val reused = synchronized(pool) {
+            val i = pool.indexOfFirst { it.capacity() >= bytes && it.capacity() <= bytes * 2 }
+            if (i >= 0) pool.removeAt(i) else null
+        }
+        val buffer = reused ?: ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
+        buffer.clear()
+        buffer.limit(bytes)
+        return buffer
+    }
+
+    private fun release(buffer: ByteBuffer) {
+        synchronized(pool) {
+            if (pool.size < POOL_SIZE) pool += buffer
         }
     }
 
     private fun drainDecoded() {
         while (true) {
-            val next = decoded.poll() ?: break
-            next.bitmap?.recycle()
+            discard(decoded.poll() ?: break)
         }
     }
 
-    private fun upload(bitmap: Bitmap, quality: Int): Texture {
+    private fun uploadWhole(bitmap: Bitmap, quality: Int): Texture {
+        val id = newTexture()
+        GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        return Texture(id, bitmap.width, bitmap.height, quality)
+    }
+
+    /** A new bound texture with the page sampling settings. */
+    private fun newTexture(): Int {
         val ids = IntArray(1)
         GLES30.glGenTextures(1, ids, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
@@ -213,9 +342,7 @@ class PageTextureCache(
         if (anisotropy > 1f) {
             GLES30.glTexParameterf(GLES30.GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, anisotropy)
         }
-        GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
-        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-        return Texture(ids[0], bitmap.width, bitmap.height, quality)
+        return ids[0]
     }
 
     private fun key(index: Int, quality: Int) = index.toLong() * 4 + quality
@@ -228,6 +355,10 @@ class PageTextureCache(
 
         /** Longest side of a preview, in pixels. */
         const val PREVIEW_SIZE = 480f
+
+        /** About this much goes to the GPU at once: well under a millisecond on phones. */
+        const val BAND_BYTES = 1024 * 1024
+        const val POOL_SIZE = 2
 
         const val GL_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FE
         const val GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FF

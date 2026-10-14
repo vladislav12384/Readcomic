@@ -144,6 +144,23 @@ class PageTurnController(private val density: Float) {
     private var flingVx = 0f
     private var flingVy = 0f
 
+    // Past an edge (after a fling, or let go while stretched) the page springs back on its own.
+    private var bounceX = false
+    private var bounceY = false
+
+    // The gesture in progress is applied from where it started, not step by step, so the content
+    // point under the fingers stays exactly under them (no drift adding up from many small steps).
+    private var anchorOffsetX = 0f
+    private var anchorOffsetY = 0f
+    private var anchorFingerX = 0f
+    private var anchorFingerY = 0f
+    private var pinchScale = 1f
+    private var pinchSpan = 1f
+    private var pinchContentX = 0f
+    private var pinchContentY = 0f
+    private var focusX = 0f
+    private var focusY = 0f
+
     val isZoomed get() = scale > 1.01f
     val isTurning get() = turn != null
 
@@ -717,6 +734,140 @@ class PageTurnController(private val density: Float) {
     fun flingPan(velocityX: Float, velocityY: Float) {
         flingVx = velocityX
         flingVy = velocityY
+        bounceX = false
+        bounceY = false
+    }
+
+    /** A finger touched the page: a thrown page stops, one stretched past an edge still settles. */
+    fun catchFling() {
+        if (!bounceX) flingVx = 0f
+        if (!bounceY) flingVy = 0f
+    }
+
+    /** A finger starts moving the zoomed page from ([x], [y]). */
+    fun beginPan(x: Float, y: Float) {
+        stopMotion()
+        // Continue from where a stretch past the edge left the page, without a jump.
+        anchorOffsetX = unstretch(offsetX, limitsX(scale), viewWidth)
+        anchorOffsetY = unstretch(offsetY, limitsY(scale), viewHeight)
+        anchorFingerX = x
+        anchorFingerY = y
+        focusX = x
+        focusY = y
+    }
+
+    /** The finger is at ([x], [y]): the page follows it, giving way softly past the edges. */
+    fun panTo(x: Float, y: Float) {
+        offsetX = stretch(anchorOffsetX + x - anchorFingerX, limitsX(scale), viewWidth)
+        offsetY = stretch(anchorOffsetY + y - anchorFingerY, limitsY(scale), viewHeight)
+        focusX = x
+        focusY = y
+    }
+
+    /** The finger left with a velocity in pixels per second: glide on, bounce off the edges. */
+    fun endPan(velocityX: Float, velocityY: Float) {
+        if (scale < 1f || scale > MAX_SCALE) {
+            settleZoom()
+            return
+        }
+        flingVx = velocityX
+        flingVy = velocityY
+        // Already stretched past an edge: straight back, the throw only softens the return.
+        bounceX = offsetX !in limitsX(scale)
+        bounceY = offsetY !in limitsY(scale)
+        if (bounceX) flingVx *= 0.3f
+        if (bounceY) flingVy *= 0.3f
+    }
+
+    /** Two fingers start a pinch centred at ([fx], [fy]), [span] apart. */
+    fun beginPinch(fx: Float, fy: Float, span: Float) {
+        if (turn != null) cancelDrag()
+        stopMotion()
+        pinchScale = unstretchScale(scale)
+        pinchSpan = max(span, 1f)
+        pinchContentX = (fx - offsetX) / scale
+        pinchContentY = (fy - offsetY) / scale
+        focusX = fx
+        focusY = fy
+    }
+
+    /** The pinch is now centred at ([fx], [fy]) and [span] apart. */
+    fun pinchTo(fx: Float, fy: Float, span: Float) {
+        val s = stretchScale(pinchScale * max(span, 1f) / pinchSpan)
+        scale = s
+        offsetX = stretch(fx - pinchContentX * s, limitsX(s), viewWidth)
+        offsetY = stretch(fy - pinchContentY * s, limitsY(s), viewHeight)
+        focusX = fx
+        focusY = fy
+    }
+
+    fun endPinch() = settleZoom()
+
+    /** Brings a stretched zoom or position back into range, around the last point the fingers held. */
+    private fun settleZoom() {
+        val target = if (scale < 1.1f) 1f else scale.coerceIn(1f, MAX_SCALE)
+        val contentX = (focusX - offsetX) / scale
+        val contentY = (focusY - offsetY) / scale
+        val (x, y) = clamp(target, focusX - contentX * target, focusY - contentY * target)
+        if (target != scale || abs(x - offsetX) > 0.5f || abs(y - offsetY) > 0.5f) {
+            animateZoomTo(target, x, y)
+        } else if (target <= 1f) {
+            resetZoom()
+        }
+    }
+
+    private fun stopMotion() {
+        zoomAnimation = null
+        flingVx = 0f
+        flingVy = 0f
+        bounceX = false
+        bounceY = false
+    }
+
+    private fun limitsX(s: Float): ClosedFloatingPointRange<Float> {
+        if (s <= 1f) return 0f..0f
+        val r = contentRect()
+        if (r.width * s <= viewWidth) return (viewWidth / 2f - (r.left + r.width / 2f) * s).let { it..it }
+        return (viewWidth - r.right * s)..(-r.left * s)
+    }
+
+    private fun limitsY(s: Float): ClosedFloatingPointRange<Float> {
+        if (s <= 1f) return 0f..0f
+        val r = contentRect()
+        if (r.height * s <= viewHeight) return (viewHeight / 2f - (r.top + r.height / 2f) * s).let { it..it }
+        return (viewHeight - r.bottom * s)..(-r.top * s)
+    }
+
+    /** Past the edge the page moves less and less, up to a quarter of the screen: a rubber band. */
+    private fun stretch(raw: Float, limits: ClosedFloatingPointRange<Float>, size: Float): Float {
+        if (raw in limits) return raw
+        val edge = if (raw < limits.start) limits.start else limits.endInclusive
+        val over = abs(raw - edge)
+        val reach = size * OVERSCROLL
+        val shown = reach * over * RUBBER / (over * RUBBER + reach)
+        return edge + if (raw < edge) -shown else shown
+    }
+
+    private fun unstretch(shown: Float, limits: ClosedFloatingPointRange<Float>, size: Float): Float {
+        if (shown in limits) return shown
+        val edge = if (shown < limits.start) limits.start else limits.endInclusive
+        val reach = size * OVERSCROLL
+        val r = min(abs(shown - edge), reach * 0.99f)
+        val over = reach * r / ((reach - r) * RUBBER)
+        return edge + if (shown < edge) -over else over
+    }
+
+    /** Zooming out past the fit or in past the maximum gives way the same way. */
+    private fun stretchScale(raw: Float): Float = when {
+        raw < 1f -> 1f - 0.25f * (1f - raw) / ((1f - raw) + 0.25f)
+        raw > MAX_SCALE -> MAX_SCALE + MAX_SCALE * 0.3f * (raw - MAX_SCALE) / ((raw - MAX_SCALE) + MAX_SCALE * 0.3f)
+        else -> raw
+    }
+
+    private fun unstretchScale(shown: Float): Float = when {
+        shown < 1f -> (1f - shown).coerceAtMost(0.249f).let { d -> 1f - 0.25f * d / (0.25f - d) }
+        shown > MAX_SCALE -> (shown - MAX_SCALE).coerceAtMost(MAX_SCALE * 0.299f).let { d -> MAX_SCALE + MAX_SCALE * 0.3f * d / (MAX_SCALE * 0.3f - d) }
+        else -> shown
     }
 
     fun doubleTap(x: Float, y: Float) {
@@ -731,9 +882,7 @@ class PageTurnController(private val density: Float) {
     }
 
     fun resetZoom() {
-        zoomAnimation = null
-        flingVx = 0f
-        flingVy = 0f
+        stopMotion()
         scale = 1f
         offsetX = 0f
         offsetY = 0f
@@ -745,6 +894,8 @@ class PageTurnController(private val density: Float) {
         zoomAnimation = ZoomAnimation(scale, offsetX, offsetY, toScale, cx, cy)
         flingVx = 0f
         flingVy = 0f
+        bounceX = false
+        bounceY = false
     }
 
     private fun clampOffsets() {
@@ -818,21 +969,55 @@ class PageTurnController(private val density: Float) {
             animating = true
         }
 
-        if (abs(flingVx) > 1f || abs(flingVy) > 1f) {
-            offsetX += flingVx * dt
-            offsetY += flingVy * dt
-            val decay = exp(-FLING_FRICTION * dt)
-            flingVx *= decay
-            flingVy *= decay
-            clampOffsets()
-            if (abs(flingVx) < 20f && abs(flingVy) < 20f) {
-                flingVx = 0f
-                flingVy = 0f
-            }
-            animating = true
+        if (zoomAnimation == null && (bounceX || bounceY || abs(flingVx) > 1f || abs(flingVy) > 1f)) {
+            val (x, vx, bx) = glide(offsetX, flingVx, bounceX, limitsX(scale), dt)
+            val (y, vy, by) = glide(offsetY, flingVy, bounceY, limitsY(scale), dt)
+            offsetX = x
+            offsetY = y
+            flingVx = vx
+            flingVy = vy
+            bounceX = bx
+            bounceY = by
+            animating = bounceX || bounceY || abs(flingVx) > 1f || abs(flingVy) > 1f
         }
 
         return animating
+    }
+
+    private data class Glide(val position: Float, val velocity: Float, val bouncing: Boolean)
+
+    /**
+     * One axis of a thrown page: it slows down by friction; once past an edge a critically damped
+     * spring takes it back, so a fast throw bounces softly off the edge instead of stopping dead.
+     */
+    private fun glide(position: Float, velocity: Float, bouncing: Boolean, limits: ClosedFloatingPointRange<Float>, dt: Float): Glide {
+        var p = position
+        var v = velocity
+        var spring = bouncing
+        if (!spring) {
+            p += v * dt
+            v *= exp(-FLING_FRICTION * dt)
+            if (p !in limits) {
+                // Hitting the edge: however hard the throw, the page only bounces a little.
+                spring = true
+                v = v.coerceIn(-BOUNCE_MAX_SPEED * density, BOUNCE_MAX_SPEED * density)
+            }
+            if (!spring && abs(v) < 20f) v = 0f
+        }
+        if (spring) {
+            val target = p.coerceIn(limits.start, limits.endInclusive)
+            val e = exp(-BOUNCE_OMEGA * dt)
+            val d = p - target
+            val c = v + BOUNCE_OMEGA * d
+            p = target + (d + c * dt) * e
+            v = (v - BOUNCE_OMEGA * c * dt) * e
+            if (abs(p - target) < 0.5f && abs(v) < 10f) {
+                p = target
+                v = 0f
+                spring = false
+            }
+        }
+        return Glide(p, v, spring)
     }
 
     companion object {
@@ -852,5 +1037,13 @@ class PageTurnController(private val density: Float) {
         private const val SPREAD_GUIDE_DURATION = 0.55f
         private const val ZOOM_DURATION = 0.28f
         private const val FLING_FRICTION = 4.5f
+        private const val BOUNCE_OMEGA = 14f
+
+        /** Speed (dp per second) a thrown page keeps when it hits an edge. */
+        private const val BOUNCE_MAX_SPEED = 1400f
+
+        /** How far past an edge the page can be stretched (part of the screen), and how stiffly. */
+        private const val OVERSCROLL = 0.22f
+        private const val RUBBER = 0.55f
     }
 }
