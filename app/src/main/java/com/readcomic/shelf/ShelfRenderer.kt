@@ -46,10 +46,6 @@ class ShelfRenderer(
     @Volatile
     var wallColor = floatArrayOf(0.17f, 0.22f, 0.17f)
 
-    /** Colour of the reading table the room fades into when a comic is opened, sRGB. */
-    @Volatile
-    var fadeColor = floatArrayOf(0.12f, 0.114f, 0.106f)
-
     /** The display refresh the frame is drawn for (System.nanoTime clock), 0 when unknown. */
     var frameClock: () -> Long = { 0L }
 
@@ -142,9 +138,7 @@ class ShelfRenderer(
     private fun renderScene(frame: ShelfFrame) {
         GLES30.glViewport(0, 0, width, height)
         val c = clearColor
-        val f = fadeColor
-        fun fade(a: Float, b: Float) = a + (b - a) * frame.fade
-        GLES30.glClearColor(fade(c[0], f[0]), fade(c[1], f[1]), fade(c[2], f[2]), 1f)
+        GLES30.glClearColor(c[0], c[1], c[2], 1f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glDepthFunc(GLES30.GL_LEQUAL)
@@ -175,9 +169,6 @@ class ShelfRenderer(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTexture)
 
-        GLES30.glUniform3f(p["uFadeColor"], f[0], f[1], f[2])
-        GLES30.glUniform1f(p["uFade"], frame.fade)
-        GLES30.glUniform1f(p["uFlat"], 0f)
         GLES30.glUniform1f(p["uHeld"], 0f)
         draw(quad, frame.wall, MATERIAL_WALL, frame.dim)
         frame.planks.forEach { draw(box, it, MATERIAL_WOOD, frame.dim) }
@@ -200,12 +191,7 @@ class ShelfRenderer(
             )
             // Once out of the shelf's light, the comic in hand is lit like in a photo studio.
             GLES30.glUniform1f(p["uHeld"], if (comic.held && frame.dim > 0.25f) 1f else 0f)
-            // The comic being opened stays: it is what the reader picks up.
-            GLES30.glUniform1f(p["uFade"], if (comic.held) 0f else frame.fade)
-            GLES30.glUniform1f(p["uFlat"], if (comic.held) frame.fade else 0f)
             draw(meshFor(comic), comic.model, MATERIAL_COMIC, dim, cover = cover, back = back, spine = art["spine:${comic.id}"])
-            GLES30.glUniform1f(p["uFade"], frame.fade)
-            GLES30.glUniform1f(p["uFlat"], 0f)
             comic.ribbon?.let { draw(box, it, MATERIAL_RIBBON, dim) }
         }
         GLES30.glBindVertexArray(0)

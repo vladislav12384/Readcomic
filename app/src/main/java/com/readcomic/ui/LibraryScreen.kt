@@ -5,8 +5,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -90,7 +88,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -109,7 +106,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.readcomic.curl.PageTurnController.ReadingMode
 import com.readcomic.data.ComicEntry
 import com.readcomic.shelf.ShelfItem
 import com.readcomic.shelf.ShelfView
@@ -137,11 +133,6 @@ fun LibraryScreen(
     onAdd: () -> Unit,
     onOpen: (ComicEntry) -> Unit,
     onRemove: (ComicEntry) -> Unit,
-    /** Colour of the reading table: the shelves fade into it when a comic is opened from them. */
-    readerTint: Color = Color.Black,
-    readingMode: ReadingMode = ReadingMode.AUTO,
-    /** A comic from the shelf is on its way to the reader ([onOpen] follows once it is there). */
-    onPresenting: (ComicEntry) -> Unit = {},
 ) {
     var toRemove by remember { mutableStateOf<ComicEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -163,9 +154,6 @@ fun LibraryScreen(
             onAdd = { adding = true },
             onOpen = onOpen,
             onRemove = { toRemove = it },
-            readerTint = readerTint,
-            readingMode = readingMode,
-            onPresenting = onPresenting,
         )
     } else {
         GridLibrary(
@@ -222,17 +210,11 @@ private fun ShelfLibrary(
     onAdd: () -> Unit,
     onOpen: (ComicEntry) -> Unit,
     onRemove: (ComicEntry) -> Unit,
-    readerTint: Color,
-    readingMode: ReadingMode,
-    onPresenting: (ComicEntry) -> Unit,
 ) {
     val context = LocalContext.current
     var view by remember { mutableStateOf<ShelfView?>(null) }
     var heldId by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
-    // The comic in hand is on its way to the reader: everything else gets out of the way.
-    var presenting by remember { mutableStateOf(false) }
-    val chrome by animateFloatAsState(if (presenting) 0f else 1f, tween(durationMillis = 260), label = "chrome")
     // A real shelf keeps its order: the newest additions first, nothing jumps around after reading.
     val ordered = remember(comics) { comics.sortedByDescending { it.addedAt } }
     val aspects by produceState<Map<String, Float>?>(null, ordered) {
@@ -243,7 +225,6 @@ private fun ShelfLibrary(
     val currentComics by rememberUpdatedState(comics)
     val currentOnOpen by rememberUpdatedState(onOpen)
     val currentOnHintSeen by rememberUpdatedState(onHintSeen)
-    val currentOnPresenting by rememberUpdatedState(onPresenting)
 
     LaunchedEffect(view, ordered, aspects) {
         val shelf = view ?: return@LaunchedEffect
@@ -263,10 +244,6 @@ private fun ShelfLibrary(
         val paint = ShelfThemes[theme]
         view?.setWallColor(paint.red, paint.green, paint.blue)
     }
-    LaunchedEffect(view, readerTint, readingMode) {
-        view?.setFadeColor(readerTint.red, readerTint.green, readerTint.blue)
-        view?.readingMode = readingMode
-    }
 
     val held = comics.firstOrNull { it.id == heldId }
     BackHandler(enabled = held != null || picking) {
@@ -275,7 +252,6 @@ private fun ShelfLibrary(
 
     BoxWithConstraints(Modifier.fillMaxSize().background(ShelfRoom)) {
         val landscape = maxWidth > maxHeight
-        val cardWidth = (maxWidth * 0.4f).coerceAtMost(380.dp)
 
         AndroidView(
             factory = { ctx ->
@@ -287,11 +263,6 @@ private fun ShelfLibrary(
                         override fun onHeldChanged(id: String?) {
                             heldId = id
                             if (id != null) currentOnHintSeen()
-                        }
-
-                        override fun onPresenting(id: String) {
-                            presenting = true
-                            currentComics.firstOrNull { it.id == id }?.let(currentOnPresenting)
                         }
 
                         override fun onOpen(id: String) {
@@ -309,159 +280,153 @@ private fun ShelfLibrary(
             onDispose { shelf?.let { onScroll(it.scroll) } }
         }
 
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = chrome }) {
-            // A soft vignette, like a photo of the room.
+        // A soft vignette, like a photo of the room.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .drawWithCache {
+                    val vignette = Brush.radialGradient(
+                        0.6f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.3f),
+                        center = Offset(size.width / 2f, size.height * 0.45f),
+                        radius = max(size.width, size.height) * 0.75f,
+                    )
+                    onDrawBehind { drawRect(vignette) }
+                },
+        )
+        // Keeps the status bar readable over a light wall.
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .windowInsetsTopHeight(WindowInsets.statusBars)
+                .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.45f), 1f to Color.Black.copy(alpha = 0.1f))),
+        )
+
+        AnimatedVisibility(
+            visible = held == null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopEnd),
+        ) {
+            ShelfToolbar(
+                theme = theme,
+                busy = busy,
+                onPickTheme = { picking = !picking },
+                onShowGrid = onShowGrid,
+            )
+        }
+
+        if (comics.isEmpty()) {
+            EmptyShelves(Modifier.align(Alignment.Center))
+        }
+
+        AnimatedVisibility(
+            visible = !hintDone && held == null && comics.isNotEmpty() && !picking,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(SafeInsets)
+                .padding(start = 20.dp, end = 20.dp, bottom = 92.dp),
+        ) {
+            Text(
+                "Коснись комикса — он окажется у тебя в руках",
+                style = MaterialTheme.typography.labelLarge,
+                color = ShelfInk,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCC1B1713))
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+            )
+        }
+
+        AnimatedVisibility(
+            visible = held == null,
+            enter = fadeIn() + scaleIn(initialScale = 0.8f),
+            exit = fadeOut() + scaleOut(targetScale = 0.8f),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .windowInsetsPadding(SafeInsets)
+                .padding(20.dp),
+        ) {
+            ExtendedFloatingActionButton(
+                onClick = onAdd,
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("Добавить") },
+                containerColor = ShelfInk,
+                contentColor = Color(0xFF3A2A1C),
+            )
+        }
+
+        // The card of the comic in hand: at the bottom in portrait, on the right in landscape.
+        AnimatedContent(
+            targetState = held,
+            contentKey = { it?.id },
+            transitionSpec = {
+                if (landscape) {
+                    (slideInHorizontally { it / 2 } + fadeIn()) togetherWith (slideOutHorizontally { it / 2 } + fadeOut())
+                } else {
+                    (slideInVertically { it / 2 } + fadeIn()) togetherWith (slideOutVertically { it / 2 } + fadeOut())
+                }
+            },
+            label = "held",
+            modifier = if (landscape) {
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .windowInsetsPadding(SafeInsets)
+                    .padding(16.dp)
+                    .width((maxWidth * 0.4f).coerceAtMost(380.dp))
+            } else {
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(SafeInsets)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .widthIn(max = 520.dp)
+                    .fillMaxWidth()
+            },
+        ) { entry ->
+            if (entry != null) {
+                HeldComicCard(
+                    entry = entry,
+                    coverFile = coverFile(entry),
+                    onRead = { onOpen(entry) },
+                    onRemove = { onRemove(entry) },
+                    onPutBack = { view?.putBack() },
+                )
+            } else {
+                Spacer(Modifier.fillMaxWidth())
+            }
+        }
+
+        // Choosing the paint of the wall; a tap anywhere else closes it.
+        if (picking) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .drawWithCache {
-                        val vignette = Brush.radialGradient(
-                            0.6f to Color.Transparent,
-                            1f to Color.Black.copy(alpha = 0.3f),
-                            center = Offset(size.width / 2f, size.height * 0.45f),
-                            radius = max(size.width, size.height) * 0.75f,
-                        )
-                        onDrawBehind { drawRect(vignette) }
-                    },
-            )
-            // Keeps the status bar readable over a light wall.
-            Box(
-                Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .windowInsetsTopHeight(WindowInsets.statusBars)
-                    .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.45f), 1f to Color.Black.copy(alpha = 0.1f))),
-            )
-
-            AnimatedVisibility(
-                visible = held == null,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.TopEnd),
-            ) {
-                ShelfToolbar(
-                    theme = theme,
-                    busy = busy,
-                    onPickTheme = { picking = !picking },
-                    onShowGrid = onShowGrid,
-                )
-            }
-
-            if (comics.isEmpty()) {
-                EmptyShelves(Modifier.align(Alignment.Center))
-            }
-
-            AnimatedVisibility(
-                visible = !hintDone && held == null && comics.isNotEmpty() && !picking,
-                enter = fadeIn() + slideInVertically { it },
-                exit = fadeOut(),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .windowInsetsPadding(SafeInsets)
-                    .padding(start = 20.dp, end = 20.dp, bottom = 92.dp),
-            ) {
-                Text(
-                    "Коснись комикса — он окажется у тебя в руках",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = ShelfInk,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(Color(0xCC1B1713))
-                        .padding(horizontal = 18.dp, vertical = 10.dp),
-                )
-            }
-
-            AnimatedVisibility(
-                visible = held == null,
-                enter = fadeIn() + scaleIn(initialScale = 0.8f),
-                exit = fadeOut() + scaleOut(targetScale = 0.8f),
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .windowInsetsPadding(SafeInsets)
-                    .padding(20.dp),
-            ) {
-                ExtendedFloatingActionButton(
-                    onClick = onAdd,
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text("Добавить") },
-                    containerColor = ShelfInk,
-                    contentColor = Color(0xFF3A2A1C),
-                )
-            }
-
-            // The card of the comic in hand: at the bottom in portrait, on the right in landscape.
-            AnimatedContent(
-                targetState = held,
-                contentKey = { it?.id },
-                transitionSpec = {
-                    if (landscape) {
-                        (slideInHorizontally { it / 2 } + fadeIn()) togetherWith (slideOutHorizontally { it / 2 } + fadeOut())
-                    } else {
-                        (slideInVertically { it / 2 } + fadeIn()) togetherWith (slideOutVertically { it / 2 } + fadeOut())
-                    }
-                },
-                label = "held",
-                modifier = if (landscape) {
-                    Modifier
-                        .align(Alignment.CenterEnd)
-                        .windowInsetsPadding(SafeInsets)
-                        .padding(16.dp)
-                        .width(cardWidth)
-                } else {
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .windowInsetsPadding(SafeInsets)
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                        .widthIn(max = 520.dp)
-                        .fillMaxWidth()
-                },
-            ) { entry ->
-                if (entry != null) {
-                    HeldComicCard(
-                        entry = entry,
-                        coverFile = coverFile(entry),
-                        onRead = { view?.present() ?: onOpen(entry) },
-                        onRemove = { onRemove(entry) },
-                        onPutBack = { view?.putBack() },
-                    )
-                } else {
-                    Spacer(Modifier.fillMaxWidth())
-                }
-            }
-
-            // Choosing the paint of the wall; a tap anywhere else closes it.
-            if (picking) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) { detectTapGestures { picking = false } },
-                )
-            }
-            AnimatedVisibility(
-                visible = picking && held == null,
-                enter = fadeIn() + slideInVertically { -it / 3 },
-                exit = fadeOut() + slideOutVertically { -it / 3 },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .windowInsetsPadding(SafeInsets)
-                    .padding(top = 64.dp, end = 12.dp),
-            ) {
-                ThemePicker(selected = theme, onSelect = onThemeChange)
-            }
-
-            SnackbarHost(
-                snackbar,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .windowInsetsPadding(SafeInsets)
-                    .padding(bottom = 80.dp),
+                    .pointerInput(Unit) { detectTapGestures { picking = false } },
             )
         }
-        // On its way to the reader: nothing more to touch.
-        if (presenting) {
-            Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } })
+        AnimatedVisibility(
+            visible = picking && held == null,
+            enter = fadeIn() + slideInVertically { -it / 3 },
+            exit = fadeOut() + slideOutVertically { -it / 3 },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .windowInsetsPadding(SafeInsets)
+                .padding(top = 64.dp, end = 12.dp),
+        ) {
+            ThemePicker(selected = theme, onSelect = onThemeChange)
         }
+
+        SnackbarHost(
+            snackbar,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(SafeInsets)
+                .padding(bottom = 80.dp),
+        )
     }
 }
 

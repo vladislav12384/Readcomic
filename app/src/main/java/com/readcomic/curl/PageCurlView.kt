@@ -40,9 +40,6 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
         /** The comic lies closed on the table, waiting for a touch ([closed]), or was opened. */
         fun onClosedChanged(closed: Boolean) = Unit
-
-        /** The comic is on screen: a closed one starts to fall from where it is held up. */
-        fun onShown() = Unit
     }
 
     var callbacks: Callbacks? = null
@@ -85,10 +82,6 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
             override fun onClosedChanged(closed: Boolean) {
                 mainHandler.post { callbacks?.onClosedChanged(closed) }
-            }
-
-            override fun onShown() {
-                mainHandler.post { callbacks?.onShown() }
             }
         }
     }

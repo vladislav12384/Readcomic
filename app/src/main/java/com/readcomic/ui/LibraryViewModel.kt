@@ -43,7 +43,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     val backgroundTint: StateFlow<Int> = _backgroundTint.asStateFlow()
 
     private val _readingMode = MutableStateFlow(
-        runCatching { ReadingMode.valueOf(prefs.getString(KEY_READING_MODE, null) ?: "") }.getOrDefault(ReadingMode.AUTO),
+        runCatching { ReadingMode.valueOf(prefs.getString(KEY_READING_MODE, null) ?: "") }.getOrDefault(ReadingMode.SPREAD),
     )
     val readingMode: StateFlow<ReadingMode> = _readingMode.asStateFlow()
 

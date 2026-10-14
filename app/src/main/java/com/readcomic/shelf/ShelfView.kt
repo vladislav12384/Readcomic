@@ -12,7 +12,6 @@ import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import com.readcomic.curl.FramePacer
 import com.readcomic.curl.GlConfigChooser
-import com.readcomic.curl.PageTurnController
 import com.readcomic.curl.TouchTrack
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -23,7 +22,7 @@ import kotlin.math.hypot
  *
  * - drag up / down to scroll the shelves;
  * - tap a comic to take it off the shelf, drag to turn it around in hand;
- * - tap the comic in hand to open it ([present]), tap anywhere else to put it back.
+ * - tap the comic in hand to open it ([Callbacks.onOpen]), tap anywhere else to put it back.
  */
 @SuppressLint("ViewConstructor")
 class ShelfView(context: Context) : GLSurfaceView(context) {
@@ -31,16 +30,8 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     interface Callbacks {
         /** The comic in hand changed (null: back on the shelf). */
         fun onHeldChanged(id: String?)
-
-        /** The comic in hand is being brought before the eyes to be read; the room fades out. */
-        fun onPresenting(id: String) = Unit
-
-        /** Time for the reader to take over the comic [id]. */
         fun onOpen(id: String)
     }
-
-    /** How the reader will lay pages out: the comic is presented at the size it starts at there. */
-    var readingMode = PageTurnController.ReadingMode.AUTO
 
     var callbacks: Callbacks? = null
 
@@ -69,10 +60,6 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
                     callbacks?.onHeldChanged(id)
                 }
             }
-
-            override fun onPresented(id: String) {
-                mainHandler.post { callbacks?.onOpen(id) }
-            }
         }
     }
 
@@ -85,30 +72,6 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     }
 
     fun putBack() = onGl { controller.putBack() }
-
-    /**
-     * Opens the comic in hand: it comes to the middle of the screen, as large as the reader will
-     * first show it, while the room fades into the colour of the reading table
-     * ([setFadeColor]); then [Callbacks.onOpen]. Nothing happens if no comic is in hand.
-     */
-    fun present() {
-        val spread = when (readingMode) {
-            PageTurnController.ReadingMode.SPREAD -> true
-            PageTurnController.ReadingMode.SINGLE -> false
-            PageTurnController.ReadingMode.AUTO -> width > height
-        }
-        onGl {
-            val id = controller.inHandId ?: return@onGl
-            if (controller.present(controller.readerFill(id, spread))) {
-                mainHandler.post { callbacks?.onPresenting(id) }
-            }
-        }
-    }
-
-    /** Colour of the reading table (sRGB components in 0..1) the room fades into when a comic opens. */
-    fun setFadeColor(red: Float, green: Float, blue: Float) {
-        renderer.fadeColor = floatArrayOf(red, green, blue)
-    }
 
     /** How far the shelves are scrolled, to come back to the same place. */
     val scroll: Float get() = controller.scroll
@@ -281,7 +244,7 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     private fun tap(x: Float, y: Float) = onGl {
         val inHand = controller.inHandId
         val hit = controller.tap(x, y)
-        if (inHand != null && hit == inHand) mainHandler.post { present() }
+        if (inHand != null && hit == inHand) mainHandler.post { callbacks?.onOpen(inHand) }
     }
 
     private fun finishGesture() {

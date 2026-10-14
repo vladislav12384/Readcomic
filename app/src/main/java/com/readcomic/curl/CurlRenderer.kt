@@ -56,8 +56,6 @@ class CurlRenderer(
     private var shadowAlpha = 1f
     private var stackAlpha = 1f
     private var hidden = false
-    private var spot = 0f
-    private var ambience = 1f
 
     /** Background colour of the "table" (linear 0..1 RGB). */
     @Volatile
@@ -146,9 +144,8 @@ class CurlRenderer(
         updateMatrices()
         val scene = controller.scene()
         val turning = scene.turning
-        val lifted = (listOfNotNull(turning) + scene.flying).filter { it.curl != null }
-        val shadowOn = lifted.isNotEmpty()
-        if (shadowOn) renderShadow(lifted)
+        val shadowOn = turning?.curl != null
+        if (turning != null && turning.curl != null) renderShadow(turning, turning.curl)
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
@@ -162,16 +159,6 @@ class CurlRenderer(
         pageProgram.use()
         setCommonPageUniforms(scene)
         if (!hidden) for (sheet in scene.flats) drawSheet(sheet, shadowOn, depth = -1f)
-        if (scene.flying.isNotEmpty()) {
-            // Several sheets in the air: each hides its own back where it curls, the later ones above.
-            GLES30.glEnable(GLES30.GL_DEPTH_TEST)
-            GLES30.glDepthFunc(GLES30.GL_LEQUAL)
-            for (sheet in scene.flying) {
-                GLES30.glClear(GLES30.GL_DEPTH_BUFFER_BIT)
-                drawSheet(sheet, shadowOn, depth = 0f)
-            }
-            GLES30.glDisable(GLES30.GL_DEPTH_TEST)
-        }
         if (turning != null) {
             GLES30.glEnable(GLES30.GL_DEPTH_TEST)
             GLES30.glDepthFunc(GLES30.GL_LEQUAL)
@@ -219,8 +206,6 @@ class CurlRenderer(
             shadowAlpha = 1f
             stackAlpha = 1f
             hidden = false
-            spot = 0f
-            ambience = 1f
             return
         }
 
@@ -230,7 +215,7 @@ class CurlRenderer(
         Matrix.translateM(poseMatrix, 0, pose.pivotX + pose.shiftX, pose.pivotY + pose.shiftY, 0f)
         Matrix.rotateM(poseMatrix, 0, pose.angle, 0f, 0f, 1f)
         Matrix.rotateM(poseMatrix, 0, pose.tilt, 1f, 0f, 0f)
-        Matrix.translateM(poseMatrix, 0, 0f, 0f, pose.lift * pose.height * eye)
+        Matrix.translateM(poseMatrix, 0, 0f, 0f, pose.lift * LIFT * eye)
         Matrix.scaleM(poseMatrix, 0, pose.scale, pose.scale, 1f)
         Matrix.translateM(poseMatrix, 0, -pose.pivotX, -pose.pivotY, 0f)
         Matrix.multiplyMM(posed, 0, view, 0, poseMatrix, 0)
@@ -246,11 +231,9 @@ class CurlRenderer(
             pose.scale * (1f + 0.06f * pose.lift),
         )
         shadowSoft = 1f + 7f * pose.lift
-        shadowAlpha = if (pose.hidden) 0f else (1f - 0.5f * pose.lift) * pose.ambience
+        shadowAlpha = if (pose.hidden) 0f else 1f - 0.5f * pose.lift
         stackAlpha = if (pose.hidden) 0f else pose.stacks
         hidden = pose.hidden
-        spot = pose.spot
-        ambience = pose.ambience
     }
 
     /**
@@ -294,7 +277,7 @@ class CurlRenderer(
         }
     }
 
-    private fun renderShadow(sheets: List<Sheet>) {
+    private fun renderShadow(sheet: Sheet, curl: CurlGeometry) {
         GLES30.glViewport(0, 0, shadowWidth, shadowHeight)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, shadowFramebuffers[0])
         GLES30.glClearColor(0f, 0f, 0f, 0f)
@@ -305,17 +288,12 @@ class CurlRenderer(
         GLES30.glUniformMatrix4fv(shadowProgram["uMVP"], 1, false, mvp, 0)
         GLES30.glUniform3f(shadowProgram["uLight"], LIGHT[0], LIGHT[1], LIGHT[2])
         GLES30.glUniform1f(shadowProgram["uStrength"], SHADOW_STRENGTH)
+        GLES30.glUniform1f(shadowProgram["uShadowScale"], sheet.rect.width * 0.3f)
+        setSheetUniforms(shadowProgram, sheet)
         GLES30.glEnable(GLES30.GL_BLEND)
         GLES30.glBlendEquation(GLES30.GL_MAX)
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
-        var radius = 0f
-        for (sheet in sheets) {
-            val curl = sheet.curl ?: continue
-            GLES30.glUniform1f(shadowProgram["uShadowScale"], sheet.rect.width * 0.3f)
-            setSheetUniforms(shadowProgram, sheet)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, gridIndexCount, GLES30.GL_UNSIGNED_SHORT, 0)
-            radius = max(radius, max(curl.radius, sheet.rect.width * 0.04f))
-        }
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, gridIndexCount, GLES30.GL_UNSIGNED_SHORT, 0)
         GLES30.glDisable(GLES30.GL_BLEND)
         GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
 
@@ -324,6 +302,7 @@ class CurlRenderer(
         GLES30.glBindVertexArray(emptyVao)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glUniform1i(blurProgram["uTex"], 0)
+        val radius = max(curl.radius, sheet.rect.width * 0.04f)
         val spread = 0.5f * radius * controller.scale / SHADOW_DOWNSCALE / 3.2f
         repeat(2) {
             blurPass(shadowFramebuffers[1], shadowTextures[0], spread / shadowWidth, 0f)
@@ -352,8 +331,6 @@ class CurlRenderer(
         GLES30.glUniform1f(p["uShadowSoft"], shadowSoft)
         GLES30.glUniform1f(p["uShadowAlpha"], shadowAlpha)
         GLES30.glUniform1f(p["uStackAlpha"], stackAlpha)
-        GLES30.glUniform1f(p["uSpot"], spot)
-        GLES30.glUniform1f(p["uAmbience"], ambience)
         val drops = scene.drops.take(2)
         val dropRects = FloatArray(8)
         val dropAlphas = FloatArray(2)
@@ -492,6 +469,8 @@ class CurlRenderer(
         /** Distance from the eye to the screen, in screen sizes: sets the perspective and reflections. */
         const val EYE_DISTANCE = 2.2f
 
+        /** How high a comic in the hand is above the table, as a part of the distance to the eye. */
+        const val LIFT = 0.16f
 
         /** Direction towards the light: from the top left, mostly from the front. */
         val LIGHT = floatArrayOf(-0.30f, -0.45f, 0.84f).let { v ->

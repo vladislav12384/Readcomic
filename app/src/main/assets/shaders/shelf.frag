@@ -36,15 +36,8 @@ uniform float uShadowTexel;
 uniform float uRowHeight;
 uniform vec4 uPlank;          // shelf thickness, shelf depth, z of the comics' bottom edge, cornice height
 uniform vec3 uWall;           // paint of the back wall, linear
-uniform float uFade;          // going to read: the room fades into the colour of the reading table
-uniform vec3 uFadeColor;      // that colour, sRGB
-uniform float uFlat;          // and the front of the comic in hand into its plain picture, as the reader shows it
 
 out vec4 fragColor;
-
-// The front cover's picture as it is printed (sRGB), where this fragment shows it.
-vec3 gPrint = vec3(0.0);
-float gPrintMask = 0.0;
 
 const float PI = 3.14159265;
 const vec3 PAPER = vec3(0.80, 0.76, 0.66);
@@ -257,9 +250,7 @@ vec3 comic(vec3 v) {
         vec3 n = coverNormal(part == 0 ? 1.0 : -1.0, p, size);
         vec3 a;
         if (part == 0) {
-            gPrint = uHasCover > 0.5 ? texture(uCover, vUV).rgb : pow(PAPER * 0.6, vec3(1.0 / 2.2));
-            gPrintMask = 1.0;
-            a = uHasCover > 0.5 ? toLinear(gPrint) : PAPER * 0.6;
+            a = uHasCover > 0.5 ? toLinear(texture(uCover, vUV).rgb) : PAPER * 0.6;
             // Ink on coated paper: a touch richer.
             a = max(mix(vec3(luminance(a)), a, 1.12), 0.0);
         } else if (uHasBack > 0.5) {
@@ -474,9 +465,5 @@ void main() {
     // Filmic tone curve (ACES fit), then back to sRGB.
     color *= EXPOSURE;
     color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
-    vec3 srgb = pow(color, vec3(1.0 / 2.2));
-    // Going to read: the front of the comic in hand turns into its plain picture and whatever
-    // else of it shows (a sliver of a round spine) goes with the room.
-    srgb = mix(srgb, mix(uFadeColor, gPrint, gPrintMask), uFlat);
-    fragColor = vec4(mix(srgb, uFadeColor, uFade), 1.0);
+    fragColor = vec4(pow(color, vec3(1.0 / 2.2)), 1.0);
 }

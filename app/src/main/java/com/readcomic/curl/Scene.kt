@@ -59,6 +59,4 @@ class Scene(
     val drops: List<DropShadow>,
     /** Strength of the shading in the gutter next to the spine. */
     val gutter: Float,
-    /** More sheets in the air (pages flying over while a comic opens at its bookmark), top-most last. */
-    val flying: List<Sheet> = emptyList(),
 )
