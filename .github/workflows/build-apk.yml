@@ -1,0 +1,47 @@
+name: Build APK
+
+# Builds the app on every push and publishes it as a GitHub release, so the newest APK is always at
+# https://github.com/vladislav12384/Readcomic/releases/latest/download/Readcomic.apk
+
+on:
+  push:
+    branches: [ccr-33b43d48-ibef97, main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Test and build
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease assembleDebug -PversionCode=${{ github.run_number }}
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk Readcomic.apk
+          cp app/build/outputs/apk/debug/app-debug.apk Readcomic-debug.apk
+          gh release create "build-${{ github.run_number }}" Readcomic.apk Readcomic-debug.apk \
+            --target "${{ github.sha }}" \
+            --title "Readcomic 0.2.${{ github.run_number }}" \
+            --latest \
+            --notes "Сборка из коммита ${{ github.sha }}.
+
+          **Readcomic.apk** — обычная версия, её и ставить.
+          **Readcomic-debug.apk** — отладочная, на случай если обычная не запустится.
+
+          Обе подписаны одним ключом, каждая новая сборка ставится поверх старой."

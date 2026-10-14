@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// CI passes its run number so every published build is an update of the previous one.
+val buildNumber = (findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+
 android {
     namespace = "com.readcomic"
     compileSdk = 37
@@ -11,17 +14,30 @@ android {
         applicationId = "com.readcomic"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = buildNumber
+        versionName = "0.2.$buildNumber"
+    }
+
+    signingConfigs {
+        // A development key kept in the repository, so builds from any machine or from CI
+        // install over each other. Use a private key for a store release.
+        create("shared") {
+            storeFile = rootProject.file("keystore/readcomic.jks")
+            storePassword = "readcomic"
+            keyAlias = "readcomic"
+            keyPassword = "readcomic"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("shared")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key so a release build can be installed right away.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("shared")
         }
     }
     compileOptions {
