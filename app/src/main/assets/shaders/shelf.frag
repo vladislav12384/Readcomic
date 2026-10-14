@@ -266,6 +266,17 @@ vec3 comic(vec3 v) {
     if (part == 2) {
         vec3 print = uHasSpine > 0.5 ? texture(uSpine, vUV).rgb : vec3(-1.0);
         vec3 a = print.r >= 0.0 ? toLinear(print) : coverEdgeColor();
+        if (binding < 0.5 && uHasCover > 0.5) {
+            // A stapled issue is one folded sheet: the covers' own pictures run round the fold.
+            float edge = size.z * 0.5 / size.x;
+            if (vUV.x >= 0.5) {
+                a = toLinear(texture(uCover, vec2(mix(0.0, edge, (vUV.x - 0.5) * 2.0), vUV.y)).rgb);
+            } else if (uHasBack > 0.5) {
+                a = toLinear(texture(uBack, vec2(mix(1.0 - edge, 1.0, vUV.x * 2.0), vUV.y)).rgb);
+            } else {
+                a = toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.8;
+            }
+        }
         vec3 color = a * irradiance(n, occlusion);
         float metal = 0.0;
         if (binding < 0.5) {

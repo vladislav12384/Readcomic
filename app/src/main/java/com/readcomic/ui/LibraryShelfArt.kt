@@ -81,28 +81,65 @@ class LibraryShelfArt(
     override fun spine(id: String): Bitmap? {
         val entry = entries[id] ?: return null
         val binding = ComicShape.binding(entry.pageCount)
+        // A stapled issue has no printed spine: the covers run round its fold (drawn from the cover itself).
+        if (binding == Binding.STAPLED) return null
         val thickness = ComicShape.thickness(entry.pageCount)
         // As wide as the spine is thick, at the same scale as along it: letters keep their shape.
         val height = SPINE_HEIGHT
         val width = (height * thickness / ShelfController.COMIC_HEIGHT).toInt().coerceAtLeast(8)
         val bitmap = createBitmap(width, height)
         val canvas = Canvas(bitmap)
-        val background = spineColor(entry)
+        val colors = spineColors(entry)
+        val hardcover = binding == Binding.HARDCOVER
+        val background = if (hardcover) SpinePalette.cloth(colors.background) else colors.background
         canvas.drawColor(background)
-        if (binding == Binding.STAPLED || thickness < 0.004f) return bitmap
+        if (thickness < 0.004f) return bitmap
 
-        val light = luminance(background) < 0.5f
-        val ink = when {
-            binding == Binding.HARDCOVER -> FOIL
-            light -> Color.rgb(240, 234, 222)
-            else -> Color.rgb(28, 22, 18)
-        }
+        // Gold foil on cloth, the cover's own colour on a paperback.
+        val ink = if (hardcover) FOIL else colors.ink
         val rule = Paint().apply { color = ink }
-        val bandHeight = (height * 0.004f).coerceAtLeast(3f)
-        // Thin bands near the ends, like on bound books.
-        for (y in listOf(height * 0.035f, height * 0.965f - bandHeight)) canvas.drawRect(0f, y, width.toFloat(), y + bandHeight, rule)
-        if (binding == Binding.HARDCOVER) {
-            for (y in listOf(height * 0.045f, height * 0.955f - bandHeight)) canvas.drawRect(0f, y, width.toFloat(), y + bandHeight * 0.5f, rule)
+        val band = (height * 0.004f).coerceAtLeast(3f)
+        for (y in listOf(height * 0.03f, height * 0.97f - band)) canvas.drawRect(0f, y, width.toFloat(), y + band, rule)
+        if (hardcover) {
+            for (y in listOf(height * 0.04f, height * 0.96f - band)) canvas.drawRect(0f, y, width.toFloat(), y + band * 0.5f, rule)
+        }
+
+        // "Series #12": the number goes into a badge at the top, the series down the middle.
+        val numbered = NUMBER.find(entry.title)
+        val title = numbered?.let { entry.title.substring(0, it.range.first).trim() }?.ifEmpty { null } ?: entry.title
+        var top = height * 0.06f
+        if (numbered != null) {
+            val number = numbered.groupValues[1]
+            val badge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ink }
+            val side = width * 0.78f
+            val left = (width - side) / 2f
+            canvas.drawRoundRect(left, top, left + side, top + side, side * 0.18f, side * 0.18f, badge)
+            val digits = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                textSize = side * if (number.length <= 2) 0.58f else 0.42f
+                color = background
+                textAlign = Paint.Align.CENTER
+            }
+            canvas.drawText(number, width / 2f, top + side / 2f - (digits.descent() + digits.ascent()) / 2f, digits)
+            top += side + width * 0.3f
+        }
+        var bottom = height * 0.94f
+        entry.writer?.let { writer ->
+            val small = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+                textSize = width * 0.3f
+                color = ink
+                alpha = 210
+                textAlign = Paint.Align.CENTER
+            }
+            val room = height * 0.2f
+            val text = TextUtils.ellipsize(writer, small, room, TextUtils.TruncateAt.END)
+            val center = bottom - room / 2f
+            canvas.withTranslation(width / 2f, center) {
+                rotate(90f)
+                drawText(text, 0, text.length, 0f, -(small.descent() + small.ascent()) / 2f, small)
+            }
+            bottom -= room + width * 0.3f
         }
         val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
@@ -112,41 +149,30 @@ class LibraryShelfArt(
             textAlign = Paint.Align.CENTER
         }
         // The title runs down the spine, as on most comics and books.
-        val title = TextUtils.ellipsize(entry.title, text, height * 0.82f, TextUtils.TruncateAt.END)
-        canvas.withTranslation(width / 2f, height / 2f) {
+        val fitted = TextUtils.ellipsize(title, text, bottom - top, TextUtils.TruncateAt.END)
+        canvas.withTranslation(width / 2f, (top + bottom) / 2f) {
             rotate(90f)
-            drawText(title, 0, title.length, 0f, -(text.descent() + text.ascent()) / 2f, text)
+            drawText(fitted, 0, fitted.length, 0f, -(text.descent() + text.ascent()) / 2f, text)
         }
         return bitmap
     }
 
-    /** The colour of the spine: the middle of a wraparound cover, else the cover's spine edge. */
-    private fun spineColor(entry: ComicEntry): Int {
-        val file = coverFile(entry).takeIf { it.exists() } ?: return Color.rgb(60, 50, 44)
+    /** Spine colours from the cover; a wraparound cover's own spine is its middle. */
+    private fun spineColors(entry: ComicEntry): SpinePalette.Colors {
+        val file = coverFile(entry).takeIf { it.exists() } ?: return SpinePalette.pick(IntArray(0), 0, 0, 0)
         val cover = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = 4 })
-            ?: return Color.rgb(60, 50, 44)
+            ?: return SpinePalette.pick(IntArray(0), 0, 0, 0)
+        val pixels = IntArray(cover.width * cover.height)
+        cover.getPixels(pixels, 0, cover.width, 0, 0, cover.width, cover.height)
         val wide = isWide(cover)
-        val x0 = if (wide) (cover.width * 0.48f).toInt() else 0
-        val x1 = if (wide) (cover.width * 0.52f).toInt() else (cover.width * 0.06f).toInt().coerceAtLeast(1)
-        val stripWidth = (x1.coerceAtMost(cover.width) - x0).coerceAtLeast(1)
-        val strip = IntArray(stripWidth * cover.height)
-        cover.getPixels(strip, 0, stripWidth, x0, 0, stripWidth, cover.height)
+        val width = cover.width
         cover.recycle()
-        var r = 0L
-        var g = 0L
-        var b = 0L
-        val n = strip.size.toLong()
-        for (pixel in strip) {
-            r += Color.red(pixel)
-            g += Color.green(pixel)
-            b += Color.blue(pixel)
+        return if (wide) {
+            SpinePalette.pick(pixels, width, (width * 0.47f).toInt(), (width * 0.53f).toInt() + 1)
+        } else {
+            SpinePalette.pick(pixels, width, 0, (width * 0.08f).toInt() + 1)
         }
-        if (n == 0L) return Color.rgb(60, 50, 44)
-        return Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
     }
-
-    private fun luminance(color: Int) =
-        (0.2126f * Color.red(color) + 0.7152f * Color.green(color) + 0.0722f * Color.blue(color)) / 255f
 
     override fun plaque(count: Int): Bitmap {
         val bitmap = createBitmap(PLAQUE_WIDTH, PLAQUE_HEIGHT)
@@ -184,6 +210,7 @@ class LibraryShelfArt(
         private const val LABEL_HEIGHT = 100
         private const val SPINE_HEIGHT = 1536
         private val FOIL = Color.rgb(217, 178, 106)
+        private val NUMBER = Regex("""#\s*(\S{1,4})\s*$""")
         private const val PLAQUE_WIDTH = 1024
         private const val PLAQUE_HEIGHT = 166
         private const val SHARP_WIDTH = 900

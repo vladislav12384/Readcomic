@@ -10,16 +10,11 @@ import java.io.File
 import java.io.IOException
 
 object ComicOpener {
-    const val DEMO_URI = "readcomic://demo"
-
-    fun isDemo(uri: String) = uri == DEMO_URI
-
     /**
      * Opens a comic; the format is detected from the content, not from the file name: PDF,
      * anything libarchive reads (ZIP, RAR, 7z, TAR, also compressed; EPUB), or a folder of pictures.
      */
     fun open(context: Context, uri: String): ComicSource {
-        if (isDemo(uri)) return DemoComicSource()
         val parsed = uri.toUri()
         if (Documents.isFolder(context, parsed)) return FolderComicSource(context, parsed)
         val pfd = seekableDescriptor(context, parsed)

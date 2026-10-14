@@ -7,6 +7,7 @@ import android.util.LruCache
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -128,6 +129,8 @@ fun ReaderScreen(
     var overlay by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var curlView by remember { mutableStateOf<PageCurlView?>(null) }
+    // The comic arrives closed on the table and waits for a touch to open.
+    var closed by remember(entry.id) { mutableStateOf(true) }
     val latestOnPageChanged by rememberUpdatedState(onPageChanged)
 
     LaunchedEffect(entry.uri) {
@@ -194,9 +197,13 @@ fun ReaderScreen(
                                     overlay = false
                                     settings = false
                                 }
+
+                                override fun onClosedChanged(isClosed: Boolean) {
+                                    closed = isClosed
+                                }
                             }
                             setReadingMode(readingMode)
-                            setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, shapes, entry.currentPage)
+                            setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, shapes, entry.currentPage, closed = true)
                             curlView = this
                         }
                     },
@@ -223,6 +230,27 @@ fun ReaderScreen(
                     CircularProgressIndicator()
                 }
             }
+        }
+
+        // A quiet hint while the comic lies closed.
+        AnimatedVisibility(
+            visible = closed && opened != null && shapes != null && error == null,
+            enter = fadeIn(tween(durationMillis = 600, delayMillis = 900)),
+            exit = fadeOut(tween(durationMillis = 200)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(barInsets)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                "Коснись, чтобы открыть",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .padding(horizontal = 18.dp, vertical = 9.dp),
+            )
         }
 
         // Tapping anywhere outside the settings closes them.

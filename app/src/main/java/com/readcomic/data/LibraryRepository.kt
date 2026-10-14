@@ -69,9 +69,11 @@ class LibraryRepository private constructor(context: Context) {
     init {
         scope.launch {
             var list = store.load()
-            if (!prefs.getBoolean(KEY_DEMO_ADDED, false)) {
-                runCatching { import(ComicOpener.DEMO_URI, "Демо: как пользоваться") }.getOrNull()?.let { list = list + it }
-                prefs.edit { putBoolean(KEY_DEMO_ADDED, true) }
+            // Earlier versions put a built-in demo booklet on the shelf; it is gone now.
+            val demos = list.filter { it.uri == OLD_DEMO_URI }
+            if (demos.isNotEmpty()) {
+                list = list - demos.toSet()
+                demos.forEach { store.deleteCover(it.id) }
                 store.save(list)
             }
             _comics.value = list
@@ -111,7 +113,7 @@ class LibraryRepository private constructor(context: Context) {
     suspend fun remove(entry: ComicEntry) = withContext(Dispatchers.IO) {
         forget(listOf(entry))
         // Comics from watched folders are reached through the folder's permission, not their own.
-        if (entry.folder == null && !ComicOpener.isDemo(entry.uri)) {
+        if (entry.folder == null) {
             runCatching { app.contentResolver.releasePersistableUriPermission(entry.uri.toUri(), Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         }
     }
@@ -136,11 +138,10 @@ class LibraryRepository private constructor(context: Context) {
                 _comics.update { list -> list.map { if (it.id == entry.id) it.copy(pageCount = count) else it } }
                 persist()
             }
-            val demo = ComicOpener.isDemo(entry.uri)
-            if (!demo) store.loadAspects(entry.id, count)?.let { return@withContext it }
+            store.loadAspects(entry.id, count)?.let { return@withContext it }
             val sizes = runCatching { source.readPageSizes(onProgress) }.getOrDefault(emptyList())
             val aspects = FloatArray(count) { i -> sizes.getOrNull(i)?.let { (w, h) -> w.toFloat() / h } ?: 0f }
-            if (!demo && sizes.isNotEmpty()) store.saveAspects(entry.id, aspects)
+            if (sizes.isNotEmpty()) store.saveAspects(entry.id, aspects)
             aspects
         }
 
@@ -340,7 +341,7 @@ class LibraryRepository private constructor(context: Context) {
 
     companion object {
         private const val TAG = "Library"
-        private const val KEY_DEMO_ADDED = "demo_added"
+        private const val OLD_DEMO_URI = "readcomic://demo"
         private const val KEY_FOLDERS = "watched_folders"
         private const val KEY_SCAN_INTERVAL = "scan_interval"
         private const val MAX_DEPTH = 8

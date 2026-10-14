@@ -5,7 +5,11 @@ precision highp float;
 // the visible edges of the stacks of sheets and the shadow of a turning page.
 
 uniform vec2 uViewport;
-uniform vec3 uTransform;     // scale, offsetX, offsetY: view = world * scale + offset
+uniform mat3 uBookInverse;   // view pixels to layout coordinates, for the edges of the stacks
+uniform mat3 uShadowInverse; // the same for the comic's shadow, which falls away as it is lifted
+uniform float uShadowSoft;   // shadow of a lifted comic: softer
+uniform float uShadowAlpha;  // and lighter
+uniform float uStackAlpha;   // edges of the stacks fade in as the comic lands
 uniform vec4 uDropRect[2];   // where the comic lies on the table (one per side of a spread)
 uniform float uDropAlpha[2];
 uniform int uDropCount;
@@ -52,7 +56,8 @@ void stackEdge(vec2 w, vec4 rect, vec2 shift, float lines, inout vec3 color) {
 
 void main() {
     vec2 frag = vec2(gl_FragCoord.x, uViewport.y - gl_FragCoord.y);
-    vec2 w = (frag - uTransform.yz) / uTransform.x;
+    vec2 w = (uBookInverse * vec3(frag, 1.0)).xy;
+    vec2 ws = (uShadowInverse * vec3(frag, 1.0)).xy;
 
     vec2 q = frag / uViewport - 0.5;
     vec3 color = uBgColor * (1.0 - 0.55 * dot(q, q));
@@ -62,17 +67,19 @@ void main() {
     for (int i = 0; i < 2; i++) {
         if (i >= uDropCount) break;
         vec4 r = uDropRect[i];
-        float blur = 0.03 * min(r.z, r.w * 0.7);
+        float blur = 0.03 * min(r.z, r.w * 0.7) * uShadowSoft;
         vec2 center = r.xy + r.zw * 0.5 + vec2(0.0, blur * 0.6);
         vec2 halfSize = r.zw * 0.5 + vec2(blur * 0.2);
-        float d = sdBox(w - center, halfSize);
+        float d = sdBox(ws - center, halfSize);
         drop = max(drop, uDropAlpha[i] * (1.0 - smoothstep(-blur, blur * 1.8, d)));
     }
-    color *= 1.0 - 0.6 * drop;
+    color *= 1.0 - 0.6 * drop * uShadowAlpha;
 
+    vec3 table = color;
     for (int i = 0; i < 2; i++) {
         if (i < uStackCount) stackEdge(w, uStackRect[i], uStackShift[i], uStackLines[i], color);
     }
+    color = mix(table, color, uStackAlpha);
 
     if (uShadowOn > 0.5) {
         color *= 1.0 - texture(uShadowTex, gl_FragCoord.xy / uViewport).r;

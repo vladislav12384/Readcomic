@@ -46,6 +46,16 @@ class CurlRenderer(
     private val projection = FloatArray(16)
     private val view = FloatArray(16)
     private val mvp = FloatArray(16)
+    private val poseMatrix = FloatArray(16)
+    private val posed = FloatArray(16)
+
+    /** View pixels back to layout coordinates: for the edges of the stacks, and for the comic's shadow. */
+    private val bookInverse = FloatArray(9)
+    private val shadowInverse = FloatArray(9)
+    private var shadowSoft = 1f
+    private var shadowAlpha = 1f
+    private var stackAlpha = 1f
+    private var hidden = false
 
     /** Background colour of the "table" (linear 0..1 RGB). */
     @Volatile
@@ -116,6 +126,7 @@ class CurlRenderer(
         val now = frameClock().takeIf { it > 0L } ?: System.nanoTime()
         val dt = if (lastFrameNanos == 0L) 1f / 60f else ((now - lastFrameNanos) / 1e9f).coerceIn(0f, 1f / 20f)
         beforeFrame?.invoke(now)
+        controller.coverReady = textures[0] != null
         var animating = controller.step(dt)
 
         // A few milliseconds per frame for GPU uploads: pages appear without stalling a turn or a pinch.
@@ -147,7 +158,7 @@ class CurlRenderer(
         GLES30.glBindVertexArray(gridVao)
         pageProgram.use()
         setCommonPageUniforms(scene)
-        for (sheet in scene.flats) drawSheet(sheet, shadowOn, depth = -1f)
+        if (!hidden) for (sheet in scene.flats) drawSheet(sheet, shadowOn, depth = -1f)
         if (turning != null) {
             GLES30.glEnable(GLES30.GL_DEPTH_TEST)
             GLES30.glDepthFunc(GLES30.GL_LEQUAL)
@@ -176,14 +187,78 @@ class CurlRenderer(
         projection[15] = 1f
 
         val s = controller.scale
+        val ox = controller.offsetX
+        val oy = controller.offsetY
         view.fill(0f)
         view[0] = s
         view[5] = s
         view[10] = s
-        view[12] = controller.offsetX
-        view[13] = controller.offsetY
+        view[12] = ox
+        view[13] = oy
         view[15] = 1f
-        Matrix.multiplyMM(mvp, 0, projection, 0, view, 0)
+
+        val pose = controller.pose()
+        if (pose == null) {
+            Matrix.multiplyMM(mvp, 0, projection, 0, view, 0)
+            inverseAffine(bookInverse, s, ox, oy, 0f, 0f, 0f, 0f, 0f, 1f)
+            shadowInverse.indices.forEach { shadowInverse[it] = bookInverse[it] }
+            shadowSoft = 1f
+            shadowAlpha = 1f
+            stackAlpha = 1f
+            hidden = false
+            return
+        }
+
+        // The closed comic above the table: turned and tilted around its middle, lifted towards
+        // the eye (the perspective makes it larger), moved over as it opens.
+        Matrix.setIdentityM(poseMatrix, 0)
+        Matrix.translateM(poseMatrix, 0, pose.pivotX + pose.shiftX, pose.pivotY + pose.shiftY, 0f)
+        Matrix.rotateM(poseMatrix, 0, pose.angle, 0f, 0f, 1f)
+        Matrix.rotateM(poseMatrix, 0, pose.tilt, 1f, 0f, 0f)
+        Matrix.translateM(poseMatrix, 0, 0f, 0f, pose.lift * LIFT * eye)
+        Matrix.scaleM(poseMatrix, 0, pose.scale, pose.scale, 1f)
+        Matrix.translateM(poseMatrix, 0, -pose.pivotX, -pose.pivotY, 0f)
+        Matrix.multiplyMM(posed, 0, view, 0, poseMatrix, 0)
+        Matrix.multiplyMM(mvp, 0, projection, 0, posed, 0)
+
+        // On the table its shadow falls away from the light the higher it is, larger and softer.
+        val a = Math.toRadians(pose.angle.toDouble()).toFloat()
+        inverseAffine(bookInverse, s, ox, oy, a, pose.pivotX, pose.pivotY, pose.shiftX, pose.shiftY, pose.scale)
+        val reach = pose.lift * min(w, h)
+        inverseAffine(
+            shadowInverse, s, ox, oy, a, pose.pivotX, pose.pivotY,
+            pose.shiftX + reach * 0.07f, pose.shiftY + reach * 0.11f,
+            pose.scale * (1f + 0.06f * pose.lift),
+        )
+        shadowSoft = 1f + 7f * pose.lift
+        shadowAlpha = if (pose.hidden) 0f else 1f - 0.5f * pose.lift
+        stackAlpha = if (pose.hidden) 0f else pose.stacks
+        hidden = pose.hidden
+    }
+
+    /**
+     * Column-major 3x3 matrix taking view pixels back to layout coordinates, for a layout drawn
+     * zoomed by [s] and moved by ([ox], [oy]), with the comic turned by [angle] (radians) around
+     * ([px], [py]), moved by ([dx], [dy]) and scaled by [k].
+     */
+    private fun inverseAffine(
+        out: FloatArray, s: Float, ox: Float, oy: Float,
+        angle: Float, px: Float, py: Float, dx: Float, dy: Float, k: Float,
+    ) {
+        val c = kotlin.math.cos(angle) / (k * s)
+        val n = kotlin.math.sin(angle) / (k * s)
+        // p = R(-angle) (frag - o - s (pivot + d)) / (k s) + pivot
+        val tx = -ox - s * (px + dx)
+        val ty = -oy - s * (py + dy)
+        out[0] = c
+        out[1] = -n
+        out[2] = 0f
+        out[3] = n
+        out[4] = c
+        out[5] = 0f
+        out[6] = c * tx + n * ty + px
+        out[7] = -n * tx + c * ty + py
+        out[8] = 1f
     }
 
     private fun setSheetUniforms(program: GlProgram, sheet: Sheet) {
@@ -251,7 +326,11 @@ class CurlRenderer(
         GLES30.glUniform1i(p["uShadowTex"], 1)
         GLES30.glUniform1f(p["uShadowOn"], if (shadowOn) 1f else 0f)
         GLES30.glUniform2f(p["uViewport"], width.toFloat(), height.toFloat())
-        GLES30.glUniform3f(p["uTransform"], controller.scale, controller.offsetX, controller.offsetY)
+        GLES30.glUniformMatrix3fv(p["uBookInverse"], 1, false, bookInverse, 0)
+        GLES30.glUniformMatrix3fv(p["uShadowInverse"], 1, false, shadowInverse, 0)
+        GLES30.glUniform1f(p["uShadowSoft"], shadowSoft)
+        GLES30.glUniform1f(p["uShadowAlpha"], shadowAlpha)
+        GLES30.glUniform1f(p["uStackAlpha"], stackAlpha)
         val drops = scene.drops.take(2)
         val dropRects = FloatArray(8)
         val dropAlphas = FloatArray(2)
@@ -389,6 +468,9 @@ class CurlRenderer(
 
         /** Distance from the eye to the screen, in screen sizes: sets the perspective and reflections. */
         const val EYE_DISTANCE = 2.2f
+
+        /** How high a comic in the hand is above the table, as a part of the distance to the eye. */
+        const val LIFT = 0.16f
 
         /** Direction towards the light: from the top left, mostly from the front. */
         val LIGHT = floatArrayOf(-0.30f, -0.45f, 0.84f).let { v ->

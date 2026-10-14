@@ -37,6 +37,9 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
         /** The reader went on reading (turning, zooming, panning): menus should get out of the way. */
         fun onReadingGesture() = Unit
+
+        /** The comic lies closed on the table, waiting for a touch ([closed]), or was opened. */
+        fun onClosedChanged(closed: Boolean) = Unit
     }
 
     var callbacks: Callbacks? = null
@@ -72,6 +75,14 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
             override fun onPageTurned() {
                 mainHandler.post { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) }
             }
+
+            override fun onLanded() {
+                mainHandler.post { performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK) }
+            }
+
+            override fun onClosedChanged(closed: Boolean) {
+                mainHandler.post { callbacks?.onClosedChanged(closed) }
+            }
         }
     }
 
@@ -84,9 +95,9 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
      * @param aspects width / height of every page image (0 where unknown); wide images are
      * shown as two facing pages in the book layout.
      */
-    fun setComic(loader: PageLoader, aspects: FloatArray, startPage: Int) = onGl {
+    fun setComic(loader: PageLoader, aspects: FloatArray, startPage: Int, closed: Boolean = false) = onGl {
         textures.loader = loader
-        controller.setPages(aspects, startPage)
+        controller.setPages(aspects, startPage, closed)
     }
 
     fun setReadingMode(mode: PageTurnController.ReadingMode) = onGl { controller.setReadingMode(mode) }
@@ -206,6 +217,8 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         context,
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                // A closed comic is opened, not zoomed.
+                if (controller.isClosed) return false
                 readingGesture()
                 val wasTurning = mode == Mode.TURN
                 mode = Mode.SCALE
@@ -247,6 +260,12 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
             override fun onSingleTapUp(e: MotionEvent): Boolean {
                 tapTurnedPage = false
+                if (controller.isClosed) {
+                    // Anywhere on the table: the comic lying there opens.
+                    tapTurnedPage = true
+                    onGl { controller.open() }
+                    return true
+                }
                 if (touchStoppedFling) {
                     tapTurnedPage = true
                     return true
@@ -268,6 +287,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (controller.isClosed) return true
                 val zone = zoneOf(e.x)
                 if (zone != Zone.CENTER) {
                     // Quick taps on the side keep turning pages; zooming is a double tap in the middle.
