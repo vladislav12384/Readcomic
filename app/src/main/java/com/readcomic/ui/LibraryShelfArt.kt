@@ -81,6 +81,96 @@ class LibraryShelfArt(
         return bitmap
     }
 
+    override fun box(count: Int): Bitmap {
+        // The front of a shipping carton: stencilled name and arrows, and a white label.
+        val width = BOX_WIDTH
+        val height = BOX_HEIGHT
+        val bitmap = createBitmap(width, height)
+        val canvas = Canvas(bitmap)
+        val ink = Color.argb(225, 38, 24, 14)
+        val logo = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
+            textSize = height * 0.25f
+            letterSpacing = 0.04f
+            color = ink
+        }
+        // As wide as the room left of the arrows.
+        logo.textSize *= ((width * 0.5f) / logo.measureText("READCOMIC")).coerceAtMost(1f)
+        canvas.drawText("READCOMIC", width * 0.05f, height * 0.42f, logo)
+        val small = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create("sans-serif-condensed", Typeface.NORMAL)
+            textSize = height * 0.085f
+            letterSpacing = 0.12f
+            color = ink
+        }
+        small.textSize *= ((width * 0.48f) / small.measureText("КОМИКСЫ · ОБРАЩАТЬСЯ БЕРЕЖНО")).coerceAtMost(1f)
+        canvas.drawText("КОМИКСЫ · ОБРАЩАТЬСЯ БЕРЕЖНО", width * 0.055f, height * 0.58f, small)
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = ink
+            strokeWidth = height * 0.018f
+        }
+        canvas.drawLine(width * 0.05f, height * 0.66f, width * 0.53f, height * 0.66f, line)
+        // "This way up": two arrows over a bar.
+        val arrow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ink }
+        val ax = width * 0.6f
+        val top = height * 0.22f
+        val bottom = height * 0.66f
+        for (k in 0..1) {
+            val cx = ax + k * height * 0.15f
+            val shaft = height * 0.035f
+            canvas.drawRect(cx - shaft, top + height * 0.1f, cx + shaft, bottom - height * 0.08f, arrow)
+            val path = android.graphics.Path().apply {
+                moveTo(cx, top)
+                lineTo(cx - height * 0.075f, top + height * 0.12f)
+                lineTo(cx + height * 0.075f, top + height * 0.12f)
+                close()
+            }
+            canvas.drawPath(path, arrow)
+        }
+        canvas.drawRect(ax - height * 0.08f, bottom - height * 0.05f, ax + height * 0.23f, bottom, arrow)
+
+        // The label, stuck on a little crooked.
+        canvas.withTranslation(width * 0.81f, height * 0.5f) {
+            rotate(-2.5f)
+            val w = height * 0.95f
+            val h = height * 0.72f
+            val paper = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(246, 243, 236) }
+            drawRect(-w / 2f, -h / 2f, w / 2f, h / 2f, paper)
+            val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 3f
+                color = Color.rgb(60, 52, 46)
+            }
+            drawRect(-w / 2f + 10f, -h / 2f + 10f, w / 2f - 10f, h / 2f - 10f, frame)
+            val heading = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
+                textSize = h * 0.13f
+                letterSpacing = 0.12f
+                color = Color.rgb(60, 52, 46)
+                textAlign = Paint.Align.CENTER
+            }
+            drawText("НОВЫЕ КОМИКСЫ", 0f, -h * 0.25f, heading)
+            val number = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+                textSize = h * if (count < 100) 0.42f else 0.32f
+                color = Color.rgb(150, 34, 28)
+                textAlign = Paint.Align.CENTER
+            }
+            drawText("× $count", 0f, h * 0.17f, number)
+            // A barcode along the bottom.
+            val bar = Paint().apply { color = Color.rgb(40, 36, 32) }
+            var x = -w * 0.36f
+            var k = count * 7 + 3
+            while (x < w * 0.36f) {
+                k = (k * 1103515245 + 12345) and 0x7fffffff
+                val thick = 2f + (k % 4)
+                drawRect(x, h * 0.27f, x + thick, h * 0.4f, bar)
+                x += thick + 2f + (k / 7 % 3)
+            }
+        }
+        return bitmap
+    }
+
     override fun page(id: String, back: Boolean): Bitmap? {
         val entry = entries[id] ?: return null
         ComicOpener.open(context, entry.uri).use { source ->
@@ -287,6 +377,9 @@ class LibraryShelfArt(
             if (w <= 0f) return null
             return Color.rgb((red[best] / w).toInt(), (green[best] / w).toInt(), (blue[best] / w).toInt())
         }
+
+        private const val BOX_WIDTH = 1024
+        private const val BOX_HEIGHT = 364
 
         /** Width / height of the front cover saved in [file], null if there is none. */
         fun coverAspect(file: File): Float? {

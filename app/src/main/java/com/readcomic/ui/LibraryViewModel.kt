@@ -93,6 +93,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _groupSeries = MutableStateFlow(prefs.getBoolean(KEY_GROUP_SERIES, false))
     val groupSeries: StateFlow<Boolean> = _groupSeries.asStateFlow()
 
+    /** Whether new comics arrive wrapped in a box, to be unwrapped by hand before they go on the shelf. */
+    private val _wrapNew = MutableStateFlow(library.wrapNew)
+    val wrapNew: StateFlow<Boolean> = _wrapNew.asStateFlow()
+
+    /** The rustle of paper and the rest of the sounds of unpacking. */
+    private val _unboxSound = MutableStateFlow(prefs.getBoolean(KEY_UNBOX_SOUND, true))
+    val unboxSound: StateFlow<Boolean> = _unboxSound.asStateFlow()
+
+    /** Whether the reader has already opened the box of new comics once. */
+    private val _boxHintDone = MutableStateFlow(prefs.getBoolean(KEY_BOX_HINT, false))
+    val boxHintDone: StateFlow<Boolean> = _boxHintDone.asStateFlow()
+
     /** Whether the reader has already found out that comics can be taken off the shelf. */
     private val _shelfHintDone = MutableStateFlow(prefs.getBoolean(KEY_SHELF_HINT, false))
     val shelfHintDone: StateFlow<Boolean> = _shelfHintDone.asStateFlow()
@@ -151,6 +163,28 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun setShelfSize(size: ShelfSize) {
         _shelfSize.value = size
         prefs.edit { putString(KEY_SHELF_SIZE, size.name) }
+    }
+
+    /** The paper is off [id]: it goes on its shelf. */
+    fun unwrap(id: String) = library.unwrap(listOf(id))
+
+    /** Everything in the box goes on the shelves at once. */
+    fun unwrapAll() = library.unwrap(comics.value.filter { it.wrapped }.map { it.id })
+
+    fun setWrapNew(enabled: Boolean) {
+        _wrapNew.value = enabled
+        library.wrapNew = enabled
+    }
+
+    fun setUnboxSound(enabled: Boolean) {
+        _unboxSound.value = enabled
+        prefs.edit { putBoolean(KEY_UNBOX_SOUND, enabled) }
+    }
+
+    fun boxHintSeen() {
+        if (_boxHintDone.value) return
+        _boxHintDone.value = true
+        prefs.edit { putBoolean(KEY_BOX_HINT, true) }
     }
 
     /** Reading [entry] again from the first page. */
@@ -251,5 +285,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_SHELF_ORDER = "shelf_order"
         private const val KEY_SHELF_SIZE = "shelf_size"
         private const val KEY_GROUP_SERIES = "group_series"
+        private const val KEY_UNBOX_SOUND = "unbox_sound"
+        private const val KEY_BOX_HINT = "box_hint"
     }
 }

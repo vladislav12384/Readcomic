@@ -13,8 +13,10 @@ in vec3 vLocal;
 in vec2 vUV;
 in vec4 vLight;
 flat in int vFace;   // boxes: 0 front, 1 back, 2 left, 3 right, 4 top, 5 bottom; comics: their part (ComicShape)
+in float vPart;      // the same unrounded (torn strips keep their fade in it)
 
-uniform int uMaterial;        // 0 comic, 1 wood, 2 wall, 3 label, 4 ribbon, 5 name plate
+uniform int uMaterial;        // 0 comic, 1 wood, 2 wall, 3 label, 4 ribbon, 5 name plate,
+                              // 6 cardboard, 7 tape, 8 wrapping paper, 9 torn strips, 10 glint
 uniform mat4 uModel;
 uniform mat3 uNormalMatrix;
 uniform sampler2D uCover;
@@ -37,6 +39,14 @@ uniform float uShadowTexel;
 uniform float uRowHeight;
 uniform vec4 uPlank;          // shelf thickness, shelf depth, z of the comics' bottom edge, cornice height
 uniform vec3 uWall;           // paint of the back wall, linear
+uniform float uShine;         // a glint running over a cover, 0..1; negative for none
+uniform vec4 uWrap;           // wrapping: comic width, height, how far the paper reaches past the edges, 1 if torn
+uniform sampler2D uMask;      // what is torn of the wrapping (red: 1 torn)
+uniform float uPaperLift;     // how far the paper lies in front of the comic's centre
+uniform int uPrintFace;       // cardboard: the face with the print (uLabel), -1 none
+uniform int uInnerFace;       // cardboard: the face inside the box; tape: the side of the cut seam
+uniform vec2 uTapeCut;        // the tape is cut open from..to along its length (0..1)
+uniform float uAlpha;         // fading things: their opacity
 
 out vec4 fragColor;
 
@@ -220,6 +230,22 @@ vec3 bevelNormal(float radius) {
 
 // region Materials
 
+// Where a point on the comic's front (meters from its centre) is on the mask of torn paper.
+vec2 maskCoord(vec2 p) {
+    vec2 extent = uWrap.xy * 0.5 + uWrap.z;
+    return (p + extent) / (2.0 * extent);
+}
+
+// A freshly unwrapped cover catches the light: a bright band sweeps across it, corner to corner.
+vec3 glint(vec2 uv) {
+    float across = uv.x * 0.8 + uv.y * 0.6;
+    float centre = mix(-0.35, 1.75, uShine);
+    float band = exp(-pow((across - centre) / 0.035, 2.0)) + 0.4 * exp(-pow((across - centre + 0.09) / 0.016, 2.0));
+    float fade = sin(PI * clamp(uShine, 0.0, 1.0));
+    return vec3(1.0, 0.96, 0.88) * band * 0.95 * fade + vec3(0.05, 0.045, 0.04) * fade;
+}
+
+
 // A normal given in the comic's own meters, to the world.
 vec3 comicNormal(vec3 n) {
     return normalize(uNormalMatrix * normalize(n * boxSize()));
@@ -264,7 +290,14 @@ vec3 comic(vec3 v) {
             a = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.8 : PAPER * 0.5;
         }
         vec3 color = a * irradiance(n, occlusion) + sparkle(n, v, 300.0, 1.2);
-        return coat(color, n, v, binding > 1.5 ? 0.8 : 1.0, binding > 1.5 ? 0.02 : 0.0);
+        color = coat(color, n, v, binding > 1.5 ? 0.8 : 1.0, binding > 1.5 ? 0.02 : 0.0);
+        if (part == 0 && uWrap.w > 0.5) {
+            // Where the paper is torn open, its edges throw a soft shadow on the cover.
+            float paper = 1.0 - textureLod(uMask, maskCoord(p.xy), 2.2).r;
+            color *= 1.0 - 0.42 * paper;
+        }
+        if (part == 0 && uShine >= 0.0) color += glint(vUV);
+        return color;
     }
 
     vec3 n = normalize(vNormal);
@@ -351,6 +384,155 @@ vec3 comic(vec3 v) {
     float inner = 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.15, min(layer, 1.0 - layer))) * step(0.5, binding);
     return a * irradiance(n, occlusion * inner);
 }
+
+// endregion
+
+// region Unpacking
+
+// Bumps a normal by a height field [h] (meters) given at this pixel, without tangents.
+vec3 bump(vec3 n, float h) {
+    vec3 dpdx = dFdx(vWorld);
+    vec3 dpdy = dFdy(vWorld);
+    vec3 r1 = cross(dpdy, n);
+    vec3 r2 = cross(n, dpdx);
+    float det = dot(dpdx, r1);
+    vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
+    return normalize(abs(det) * n - grad);
+}
+
+// Fine creases of thin paper: ridges along crossing directions.
+float creases(vec2 p) {
+    float a = 1.0 - abs(noise(p * 46.0) * 2.0 - 1.0);
+    float b = 1.0 - abs(noise(vec2(p.x * 0.7 - p.y * 0.5, p.x * 0.5 + p.y * 0.7) * 90.0 + 13.0) * 2.0 - 1.0);
+    return a * a * 0.00028 + b * b * 0.00012 + noise(p * 400.0) * 0.00002;
+}
+
+// Corrugated cardboard: kraft liners, the wavy flutes between them showing on the cut edges,
+// a print on the outside of the front, and lighter, rougher board inside.
+vec3 cardboard(vec3 v) {
+    vec3 size = boxSize();
+    vec3 p = vLocal * size;
+    int thin = size.x < size.y ? (size.x < size.z ? 0 : 2) : (size.y < size.z ? 1 : 2);
+    vec3 fn = faceNormal(vFace);
+    vec3 n = bevelNormal(0.0012);
+    bool inside = vFace == uInnerFace;
+    vec3 kraft = inside ? vec3(0.50, 0.37, 0.22) : vec3(0.43, 0.27, 0.13);
+    // Paper fibres, and the flutes faintly showing through the liner as soft ridges.
+    vec2 q = abs(fn.x) > 0.5 ? p.zy : (abs(fn.y) > 0.5 ? p.xz : p.xy);
+    float fibres = noise(q * vec2(900.0, 260.0)) * 0.06 + fbm(q * 40.0) * 0.08;
+    float flutes = sin(q.x * 2.0 * PI / 0.0042) * 0.025;
+    vec3 a = kraft * (0.92 + fibres + flutes);
+    if (abs(fn[thin]) < 0.5) {
+        // A cut edge: two liners and the wave of the flute between them.
+        float t = vLocal[thin];
+        int faceAxis = abs(fn.x) > 0.5 ? 0 : (abs(fn.y) > 0.5 ? 1 : 2);
+        float along = p[3 - faceAxis - thin];
+        float wave = sin(along * 2.0 * PI / 0.0042) * 0.3;
+        float liner = step(0.38, abs(t));
+        float flute = 1.0 - smoothstep(0.05, 0.12, abs(t - wave));
+        float gap = (1.0 - liner) * (1.0 - flute);
+        a = mix(vec3(0.46, 0.33, 0.19), vec3(0.08, 0.05, 0.03), gap * 0.85);
+    }
+    // Rubbed a little darker towards the edges of every face.
+    vec3 dist = (0.5 - abs(vLocal)) * size;
+    float wear = min(min(fn.x == 0.0 ? dist.x : 1.0, fn.y == 0.0 ? dist.y : 1.0), fn.z == 0.0 ? dist.z : 1.0);
+    a *= 0.86 + 0.14 * smoothstep(0.0, 0.012, wear);
+    if (vFace == uPrintFace && uHasLabel > 0.5) {
+        vec4 print = texture(uLabel, vUV);
+        // Ink soaks into the board unevenly.
+        float soak = 0.82 + 0.18 * noise(vUV * vec2(500.0, 180.0));
+        a = mix(a, toLinear(print.rgb), print.a * soak);
+    }
+    float occlusion = inside ? 0.72 : 1.0;
+    return a * irradiance(n, occlusion) + sparkle(n, v, 20.0, 0.03);
+}
+
+// Brown packing tape: glossy, a little see-through, stretched; cut open along the seam.
+vec3 tape(vec3 v) {
+    vec3 size = boxSize();
+    vec3 p = vLocal * size;
+    vec3 n = normalize(uNormalMatrix * faceNormal(vFace));
+    float along = vLocal.z + 0.5;
+    float streaks = noise(vec2(p.x * 1400.0, p.z * 30.0)) * 0.08;
+    vec3 a = vec3(0.30, 0.15, 0.045) * (0.92 + streaks);
+    vec3 color = a * irradiance(n, 1.0);
+    if (uInnerFace >= 0 && along >= uTapeCut.x && along <= uTapeCut.y && uTapeCut.y > uTapeCut.x) {
+        // The slit of the cutter along the seam, the edges lifting a hair.
+        float seam = uInnerFace == 3 ? (0.5 - vLocal.x) * size.x : (vLocal.x + 0.5) * size.x;
+        float slit = 1.0 - smoothstep(0.0003, 0.0009, seam);
+        color = mix(color, vec3(0.02, 0.012, 0.006), slit * 0.9);
+        color += sparkle(normalize(n + uNormalMatrix * vec3(uInnerFace == 3 ? 0.6 : -0.6, 0.0, 0.0)), v, 90.0, 0.8) * (1.0 - smoothstep(0.0008, 0.0022, seam));
+    }
+    color += sparkle(n, v, 260.0, 1.8) + sparkle(n, v, 40.0, 0.12);
+    return coat(color, n, v, 1.4, 0.01);
+}
+
+// Glassine wrapping: thin, milky, crinkled paper through which the cover shows softly; torn
+// away where the mask says, with white fibrous edges where it tore.
+vec3 paper(vec3 v, out float alpha) {
+    alpha = uAlpha;
+    vec2 u = vUV;
+    bool back = vFace == 1;
+    float rim = 0.0;
+    if (!back && uWrap.w > 0.5) {
+        float m = texture(uMask, maskCoord(u)).r;
+        float fibre = noise(u * 2600.0) * 0.6 + noise(u * 700.0) * 0.4;
+        float edge = 0.5 + (fibre - 0.5) * 0.55;
+        if (m > edge) discard;
+        rim = smoothstep(edge - 0.2, edge, m);
+    }
+    vec3 n = normalize(vNormal);
+    if (!gl_FrontFacing) n = -n;
+    // Creases are fine: seen edge on, or from inside, they should not turn into hills.
+    n = bump(n, creases(u) * (gl_FrontFacing ? 0.75 : 0.35) * smoothstep(0.1, 0.5, abs(dot(n, v))));
+    // What lies under the paper: the cover in front, a dull colour behind and round the edges.
+    vec2 coverUV = vec2(u.x / uWrap.x + 0.5, 0.5 - u.y / uWrap.y);
+    bool onCover = !back && abs(u.x) < uWrap.x * 0.5 && abs(u.y) < uWrap.y * 0.5;
+    vec3 under = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.75 : PAPER * 0.5;
+    if (onCover && uHasCover > 0.5) under = toLinear(textureLod(uCover, coverUV, 2.4).rgb);
+    // The further the paper stands off the cover, the less of it shows through.
+    float off = back ? 0.0 : smoothstep(0.0004, 0.0035, max(vLocal.z - uPaperLift, 0.0));
+    vec3 milk = vec3(0.84, 0.82, 0.77);
+    vec3 a = mix(under * 0.95, milk, 0.17 + 0.5 * off);
+    a = mix(a, vec3(0.95, 0.94, 0.91), rim * 0.9);
+    // Thin paper: light coming through from behind brightens it too.
+    vec3 color = a * (irradiance(n, 1.0) + irradiance(-n, 1.0) * 0.25);
+    color += sparkle(n, v, 70.0, 0.30) + sparkle(n, v, 300.0, 0.55);
+    return coat(color, n, v, 0.55, 0.12);
+}
+
+// A strip of torn paper in the air: ragged along both edges, whiter where it tore.
+vec3 strip(vec3 v, out float alpha) {
+    float across = abs(vUV.x - 0.5) * 2.0;
+    float side = vUV.x > 0.5 ? 3.0 : 9.0;
+    float ragged = noise(vec2(vUV.y * 240.0, side)) * 0.55 + noise(vec2(vUV.y * 900.0, side + 5.0)) * 0.3;
+    float edge = 1.0 - 0.42 * ragged;
+    if (across > edge) discard;
+    float rim = smoothstep(edge - 0.14, edge, across);
+    vec3 n = normalize(vNormal);
+    if (!gl_FrontFacing) n = -n;
+    n = bump(n, creases(vec2(vUV.x * 0.02, vUV.y)));
+    vec3 a = mix(vec3(0.82, 0.81, 0.78), vec3(0.95, 0.94, 0.92), rim * 0.8);
+    alpha = 0.9 * clamp(vPart, 0.0, 1.0);
+    vec3 color = a * (irradiance(n, 1.0) + irradiance(-n, 1.0) * 0.45) + sparkle(n, v, 70.0, 0.3);
+    return coat(color, n, v, 0.5, 0.15);
+}
+
+// A four-pointed star of light on a gleaming cover.
+vec3 star() {
+    vec2 q = (vUV - 0.5) * 2.0;
+    float r = length(q);
+    float cross1 = exp(-abs(q.y) * 34.0) * exp(-abs(q.x) * 2.4) + exp(-abs(q.x) * 34.0) * exp(-abs(q.y) * 2.4);
+    vec2 d = vec2(q.x + q.y, q.x - q.y) * 0.7071;
+    float cross2 = exp(-abs(d.y) * 40.0) * exp(-abs(d.x) * 5.0) + exp(-abs(d.x) * 40.0) * exp(-abs(d.y) * 5.0);
+    float glow = exp(-r * 7.0);
+    float pulse = sin(PI * clamp(uShine * 1.5, 0.0, 1.0));
+    return vec3(1.0, 0.95, 0.84) * (cross1 + 0.4 * cross2 + glow) * pulse * 1.4;
+}
+
+// endregion
+
+// region Shelves
 
 vec3 woodAlbedo(vec3 p) {
     // Oak: long streaks along the board, a little wavy, with fine pores.
@@ -472,6 +654,7 @@ vec3 ribbon(vec3 v) {
 void main() {
     vec3 v = normalize(uEye - vWorld);
     vec3 color;
+    float alpha = 1.0;
     if (uMaterial == 0) {
         color = comic(v);
     } else if (uMaterial == 1) {
@@ -482,8 +665,20 @@ void main() {
         color = label(v);
     } else if (uMaterial == 4) {
         color = ribbon(v);
-    } else {
+    } else if (uMaterial == 5) {
         color = namePlate(v);
+    } else if (uMaterial == 6) {
+        color = cardboard(v);
+    } else if (uMaterial == 7) {
+        color = tape(v);
+    } else if (uMaterial == 8) {
+        color = paper(v, alpha);
+    } else if (uMaterial == 9) {
+        color = strip(v, alpha);
+    } else {
+        // Light itself, added on top of what is there.
+        fragColor = vec4(star(), 1.0);
+        return;
     }
 
     // The comic in hand stands out: the rest of the room dims and loses some colour.
@@ -492,5 +687,5 @@ void main() {
     // Filmic tone curve (ACES fit), then back to sRGB.
     color *= EXPOSURE;
     color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
-    fragColor = vec4(pow(color, vec3(1.0 / 2.2)), 1.0);
+    fragColor = vec4(pow(color, vec3(1.0 / 2.2)), alpha);
 }

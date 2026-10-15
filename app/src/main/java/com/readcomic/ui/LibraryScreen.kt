@@ -68,6 +68,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -114,6 +116,8 @@ import com.readcomic.data.ComicEntry
 import com.readcomic.shelf.ShelfItem
 import com.readcomic.shelf.ShelfSize
 import com.readcomic.shelf.ShelfView
+import com.readcomic.shelf.UnboxPhase
+import com.readcomic.shelf.UnboxState
 import java.io.File
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -145,6 +149,8 @@ fun LibraryScreen(
     onShelfSizeChange: (ShelfSize) -> Unit = {},
     /** Reading [ComicEntry] again from its first page. */
     onStartOver: (ComicEntry) -> Unit = {},
+    /** The box of new comics: what it does, and what the reader does with it. */
+    unboxing: UnboxSettings = UnboxSettings(),
 ) {
     var toRemove by remember { mutableStateOf<ComicEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -173,6 +179,7 @@ fun LibraryScreen(
             shelfSize = shelfSize,
             onShelfSizeChange = onShelfSizeChange,
             onStartOver = onStartOver,
+            unboxing = unboxing,
         )
     } else {
         GridLibrary(
@@ -250,8 +257,15 @@ private fun ShelfLibrary(
     shelfSize: ShelfSize,
     onShelfSizeChange: (ShelfSize) -> Unit,
     onStartOver: (ComicEntry) -> Unit,
+    unboxing: UnboxSettings,
 ) {
     val context = LocalContext.current
+    // New comics wait in their box until unwrapped; only the others stand on the shelves.
+    val shelved = remember(comics) { comics.filter { !it.wrapped } }
+    val boxed = remember(comics) { comics.filter { it.wrapped }.sortedWith(compareBy({ it.addedAt }, { it.title })) }
+    var unbox by remember { mutableStateOf(UnboxState(UnboxPhase.NONE, 0)) }
+    val unpacking = unbox.phase == UnboxPhase.SEALED || unbox.phase == UnboxPhase.TEARING || unbox.phase == UnboxPhase.BUSY
+    val currentUnboxing by rememberUpdatedState(unboxing)
     var view by remember { mutableStateOf<ShelfView?>(null) }
     var heldId by remember { mutableStateOf<String?>(null) }
     // The small panels from the corner buttons: the wall paint, the order.
@@ -259,7 +273,7 @@ private fun ShelfLibrary(
     var ordering by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    val placed = remember(comics, order) { CollectionOrder.arrange(comics, order) }
+    val placed = remember(shelved, order) { CollectionOrder.arrange(shelved, order) }
     val ordered = remember(placed) { placed.map { it.entry } }
     val found = remember(comics, order, query) {
         if (query.isBlank()) emptyList() else ordered.filter { CollectionOrder.matches(it, query) }
@@ -287,8 +301,24 @@ private fun ShelfLibrary(
                 series = place.series,
             )
         }
-        val art = LibraryShelfArt(context.applicationContext, ordered.associateBy { it.id }, coverFile)
+        val art = LibraryShelfArt(context.applicationContext, comics.associateBy { it.id }, coverFile)
         shelf.setItems(items, art)
+    }
+    LaunchedEffect(view, boxed, aspects) {
+        val shelf = view ?: return@LaunchedEffect
+        val known = aspects ?: return@LaunchedEffect
+        shelf.setBox(
+            boxed.map { entry ->
+                ShelfItem(id = entry.id, aspect = known[entry.id] ?: DEFAULT_ASPECT, pageCount = entry.pageCount, inProgress = false, label = entry.title)
+            },
+        )
+    }
+    LaunchedEffect(view, unboxing.sound) {
+        view?.setSoundEnabled(unboxing.sound)
+    }
+    // Once the box has been opened, the hint about it is not needed any more.
+    LaunchedEffect(unpacking) {
+        if (unpacking) currentUnboxing.onHintSeen()
     }
     LaunchedEffect(view, theme) {
         val paint = ShelfThemes[theme]
@@ -308,8 +338,9 @@ private fun ShelfLibrary(
     }
 
     val held = comics.firstOrNull { it.id == heldId }
-    BackHandler(enabled = held != null || picking || ordering || searching) {
+    BackHandler(enabled = held != null || picking || ordering || searching || unpacking) {
         when {
+            unpacking -> view?.putAwayBox()
             picking -> picking = false
             ordering -> ordering = false
             searching -> closeSearch()
@@ -334,6 +365,14 @@ private fun ShelfLibrary(
 
                         override fun onOpen(id: String) {
                             currentComics.firstOrNull { it.id == id }?.let(currentOnOpen)
+                        }
+
+                        override fun onUnwrapped(id: String) {
+                            currentUnboxing.onUnwrap(id)
+                        }
+
+                        override fun onUnboxState(state: UnboxState) {
+                            unbox = state
                         }
                     }
                     view = shelf
@@ -371,7 +410,7 @@ private fun ShelfLibrary(
         )
 
         AnimatedVisibility(
-            visible = held == null && !searching,
+            visible = held == null && !searching && !unpacking,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopEnd),
@@ -396,12 +435,13 @@ private fun ShelfLibrary(
             )
         }
 
-        if (comics.isEmpty()) {
+        if (shelved.isEmpty() && boxed.isEmpty()) {
             EmptyShelves(Modifier.align(Alignment.Center))
         }
 
+        val boxHint = !unboxing.hintDone && unbox.phase == UnboxPhase.PEEK && held == null && !picking && !ordering && !searching
         AnimatedVisibility(
-            visible = !hintDone && held == null && comics.isNotEmpty() && !picking && !ordering && !searching,
+            visible = !hintDone && !boxHint && !unpacking && held == null && shelved.isNotEmpty() && !picking && !ordering && !searching,
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut(),
             modifier = Modifier
@@ -421,8 +461,48 @@ private fun ShelfLibrary(
             )
         }
 
+        // The box of new comics peeking in: a word about it, the first time.
         AnimatedVisibility(
-            visible = held == null && !searching,
+            visible = boxHint,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(SafeInsets)
+                .padding(start = 20.dp, end = 20.dp, bottom = if (landscape) 96.dp else 150.dp),
+        ) {
+            Text(
+                "Новые комиксы ждут в коробке — коснись её",
+                style = MaterialTheme.typography.labelLarge,
+                color = ShelfInk,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCC1B1713))
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+            )
+        }
+
+        AnimatedVisibility(
+            visible = unpacking,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(SafeInsets)
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .widthIn(max = 560.dp)
+                .fillMaxWidth(),
+        ) {
+            UnboxBar(
+                state = unbox,
+                onClose = { view?.putAwayBox() },
+                onUnwrapAll = unboxing.onUnwrapAll,
+            )
+        }
+
+        AnimatedVisibility(
+            visible = held == null && !searching && !unpacking,
             enter = fadeIn() + scaleIn(initialScale = 0.8f),
             exit = fadeOut() + scaleOut(targetScale = 0.8f),
             modifier = Modifier
@@ -540,7 +620,7 @@ private fun ShelfLibrary(
                 .windowInsetsPadding(SafeInsets)
                 .padding(top = 64.dp, end = 12.dp),
         ) {
-            ThemePicker(selected = theme, onSelect = onThemeChange, size = shelfSize, onSizeChange = onShelfSizeChange)
+            ThemePicker(selected = theme, onSelect = onThemeChange, size = shelfSize, onSizeChange = onShelfSizeChange, unboxing = unboxing)
         }
 
         SnackbarHost(
@@ -612,7 +692,7 @@ private fun RoundButton(onClick: () -> Unit, description: String, content: @Comp
 }
 
 @Composable
-private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit, size: ShelfSize, onSizeChange: (ShelfSize) -> Unit) {
+private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit, size: ShelfSize, onSizeChange: (ShelfSize) -> Unit, unboxing: UnboxSettings) {
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = Color(0xF21B1713),
@@ -661,6 +741,102 @@ private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit, size: ShelfSize,
                             .clickable(onClickLabel = option.label) { onSizeChange(option) }
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Text("Новые комиксы", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
+            SettingSwitch("Приходят в коробке, распаковывать самому", unboxing.wrapNew, unboxing.onWrapNewChange)
+            SettingSwitch("Звук распаковки", unboxing.sound, unboxing.onSoundChange)
+        }
+    }
+}
+
+@Composable
+private fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .widthIn(max = 300.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onChange(!checked) }
+            .padding(vertical = 4.dp),
+    ) {
+        Text(label, fontSize = 15.sp, modifier = Modifier.weight(1f, fill = false).padding(end = 12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color(0xFF2A1F17),
+                checkedTrackColor = ShelfInk,
+                uncheckedThumbColor = ShelfInk.copy(alpha = 0.7f),
+                uncheckedTrackColor = Color.Transparent,
+                uncheckedBorderColor = ShelfInk.copy(alpha = 0.4f),
+            ),
+        )
+    }
+}
+
+/** What the box of new comics does, and what to call when the reader acts on it. */
+class UnboxSettings(
+    /** New comics arrive wrapped in the box (else they go straight on the shelves). */
+    val wrapNew: Boolean = true,
+    val onWrapNewChange: (Boolean) -> Unit = {},
+    val sound: Boolean = true,
+    val onSoundChange: (Boolean) -> Unit = {},
+    /** The reader has opened the box before. */
+    val hintDone: Boolean = true,
+    val onHintSeen: () -> Unit = {},
+    /** The paper is off the comic with this id. */
+    val onUnwrap: (String) -> Unit = {},
+    val onUnwrapAll: () -> Unit = {},
+)
+
+/** Under the box while it is open: what to do now, putting it away, unwrapping the rest at once. */
+@Composable
+private fun UnboxBar(state: UnboxState, onClose: () -> Unit, onUnwrapAll: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        val hint = when {
+            state.phase == UnboxPhase.SEALED -> "Проведи пальцем по скотчу — или коснись коробки"
+            state.phase == UnboxPhase.TEARING && state.progress < 0.12f -> "Рви бумагу пальцем: тяни, куда хочется"
+            state.phase == UnboxPhase.TEARING && state.progress >= 0.4f -> "Ещё немного…"
+            else -> null
+        }
+        AnimatedContent(targetState = hint, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "unbox hint") { text ->
+            if (text != null) {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = ShelfInk,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .padding(bottom = 10.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xCC1B1713))
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                )
+            } else {
+                Spacer(Modifier.height(1.dp))
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xCC1B1713)),
+            ) {
+                Icon(Icons.Filled.Close, contentDescription = "Убрать коробку", tint = ShelfInk)
+            }
+            Spacer(Modifier.weight(1f))
+            if (state.count > 1) {
+                TextButton(
+                    onClick = onUnwrapAll,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xCC1B1713)),
+                ) {
+                    Text("Распаковать все · ${state.count}", color = ShelfInk, fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 16.sp)
                 }
             }
         }

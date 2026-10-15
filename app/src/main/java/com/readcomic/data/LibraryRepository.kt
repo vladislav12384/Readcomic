@@ -111,9 +111,23 @@ class LibraryRepository private constructor(context: Context) {
         val id = LibraryStore.idFor(uri.toString())
         if (_comics.value.any { it.id == id }) return@withContext id
         keepAccess(uri)
-        val entry = runCatching { importFile(uri) }.getOrNull() ?: return@withContext null
+        // Opened straight away, so there is nothing to unwrap.
+        val entry = runCatching { importFile(uri) }.getOrNull()?.copy(wrapped = false) ?: return@withContext null
         upsert(entry)
         id
+    }
+
+    /** Whether comics added from now on arrive wrapped in the box of new comics. */
+    var wrapNew: Boolean
+        get() = prefs.getBoolean(KEY_WRAP_NEW, true)
+        set(value) = prefs.edit { putBoolean(KEY_WRAP_NEW, value) }
+
+    /** Takes the paper off the comics [ids]: they go on the shelves. */
+    fun unwrap(ids: Collection<String>) {
+        val set = ids.toSet()
+        if (_comics.value.none { it.id in set && it.wrapped }) return
+        _comics.update { list -> list.map { if (it.id in set && it.wrapped) it.copy(wrapped = false) else it } }
+        scope.launch { persist() }
     }
 
     suspend fun remove(entry: ComicEntry) = withContext(Dispatchers.IO) {
@@ -218,6 +232,7 @@ class LibraryRepository private constructor(context: Context) {
                 writer = metadata?.writer ?: existing?.writer,
                 year = metadata?.year ?: existing?.year,
                 series = series,
+                wrapped = existing?.wrapped ?: wrapNew,
             )
         }
     }
@@ -384,6 +399,7 @@ class LibraryRepository private constructor(context: Context) {
         private const val OLD_DEMO_URI = "readcomic://demo"
         private const val KEY_FOLDERS = "watched_folders"
         private const val KEY_SCAN_INTERVAL = "scan_interval"
+        private const val KEY_WRAP_NEW = "wrap_new"
         private const val MAX_DEPTH = 8
         private const val MIN_FOLDER_PAGES = 2
         const val COVER_WIDTH = 360

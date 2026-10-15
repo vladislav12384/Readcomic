@@ -29,6 +29,12 @@ interface ShelfArt {
 
     /** The engraving of the sign of the series [name], [aspect] times as wide as high. */
     fun sign(name: String, aspect: Float): Bitmap?
+
+    /**
+     * The print on the front of the box of new comics, with its label saying how many are in it
+     * ([count]); transparent where the cardboard shows.
+     */
+    fun box(count: Int): Bitmap? = null
 }
 
 /** GL textures for the shelf, keyed like "cover:<id>". Everything but decoding runs on the render thread. */
@@ -80,6 +86,7 @@ class ShelfArtCache(
                     "back" -> art.page(id, back = true)
                     "spine" -> art.spine(id)
                     "sign" -> art.sign(id.substringAfter(':'), id.substringBefore(':').toFloat())
+                    "box" -> art.box(id.toInt())
                     else -> art.plaque(id.toInt())
                 }
             } catch (e: Exception) {

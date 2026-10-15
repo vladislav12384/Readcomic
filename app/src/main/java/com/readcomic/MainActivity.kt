@@ -52,6 +52,7 @@ import com.readcomic.ui.OrientationLock
 import com.readcomic.ui.ReadcomicTheme
 import com.readcomic.ui.ReaderScreen
 import com.readcomic.ui.ScreenSaver
+import com.readcomic.ui.UnboxSettings
 import com.readcomic.ui.VolumeKeyHost
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -159,6 +160,9 @@ private fun App(viewModel: LibraryViewModel) {
     val shelfOrder by viewModel.shelfOrder.collectAsStateWithLifecycle()
     val shelfSize by viewModel.shelfSize.collectAsStateWithLifecycle()
     val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
+    val wrapNew by viewModel.wrapNew.collectAsStateWithLifecycle()
+    val unboxSound by viewModel.unboxSound.collectAsStateWithLifecycle()
+    val boxHintDone by viewModel.boxHintDone.collectAsStateWithLifecycle()
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     MessagesEffect(viewModel.messages, snackbar)
@@ -303,7 +307,11 @@ private fun App(viewModel: LibraryViewModel) {
                     onGroupSeriesChange = viewModel::setGroupSeries,
                 ),
                 onAdd = { picker.launch(arrayOf("*/*")) },
-                onOpen = { openId = it.id },
+                onOpen = {
+                    // Opened from the plain grid while still in its box: no need to unwrap it any more.
+                    if (it.wrapped) viewModel.unwrap(it.id)
+                    openId = it.id
+                },
                 onRemove = viewModel::remove,
                 order = shelfOrder,
                 onOrderChange = viewModel::setShelfOrder,
@@ -314,6 +322,16 @@ private fun App(viewModel: LibraryViewModel) {
                     viewModel.startOver(entry)
                     openId = entry.id
                 },
+                unboxing = UnboxSettings(
+                    wrapNew = wrapNew,
+                    onWrapNewChange = viewModel::setWrapNew,
+                    sound = unboxSound,
+                    onSoundChange = viewModel::setUnboxSound,
+                    hintDone = boxHintDone,
+                    onHintSeen = viewModel::boxHintSeen,
+                    onUnwrap = viewModel::unwrap,
+                    onUnwrapAll = viewModel::unwrapAll,
+                ),
             )
         }
 

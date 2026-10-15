@@ -19,6 +19,7 @@ out vec3 vLocal;
 out vec2 vUV;
 out vec4 vLight;
 flat out int vFace;
+out float vPart;        // the same, unrounded: some meshes keep a fade in it
 
 void main() {
     vec4 world = uModel * vec4(aPos, 1.0);
@@ -27,6 +28,7 @@ void main() {
     vLocal = aPos;
     vUV = aUV;
     vFace = int(aFace + 0.5);
+    vPart = aFace;
     vLight = uLightViewProj * world;
     gl_Position = uViewProj * world;
 }

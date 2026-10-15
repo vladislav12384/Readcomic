@@ -44,6 +44,22 @@ class ShelfRenderer(
     private var comicShadowTexture = 0
     private var comicShadowFramebuffer = 0
     private var shadowSize = 2048
+
+    // The paper round new comics: two halves each, rebuilt as the paper is torn.
+    private class WrapperGl(val left: Int, val right: Int, val buffers: IntArray, var counts: IntArray, var version: Int)
+
+    private val wrappers = HashMap<String, WrapperGl>()
+
+    // What is torn of the wrapping in hand, one byte a cell.
+    private class MaskGl(val texture: Int, val columns: Int, val rows: Int, var version: Int)
+
+    private val masks = HashMap<WrapTear, MaskGl>()
+    private var blankMask = 0
+    private var maskData: ByteBuffer = ByteBuffer.allocateDirect(64 * 1024)
+
+    // Torn strips in the air, all in one buffer, filled anew every frame.
+    private var stripVao = 0
+    private val stripBuffers = IntArray(2)
     private var width = 1
     private var height = 1
     private var lastFrameNanos = 0L
@@ -78,7 +94,11 @@ class ShelfRenderer(
         box = createMesh(boxVertices(), boxIndices())
         quad = createMesh(quadVertices(), shortArrayOf(0, 1, 2, 0, 2, 3))
         createRibbonMesh()
+        createStripMesh()
+        wrappers.clear()
+        masks.clear()
         blank = createBlankTexture()
+        blankMask = createBlankMask()
         createShadowMaps()
         art.onContextCreated()
         lastFrameNanos = 0L
@@ -108,6 +128,11 @@ class ShelfRenderer(
             }
         }
         frame.labels.forEach { art.request("label:${it.text}") }
+        frame.unbox?.let { box ->
+            art.request("box:${box.count}")
+            box.comics.forEach { art.request("cover:${it.comic.id}") }
+            box.frontId?.let { art.request("front:$it") }
+        }
         frame.signs.forEach { art.request(signKey(it)) }
         if (frame.plaque != null) art.request("plaque:${frame.count}")
 
@@ -201,6 +226,16 @@ class ShelfRenderer(
         GLES30.glUniform1i(p["uShadow"], 3)
         GLES30.glUniform1i(p["uSpine"], 4)
         GLES30.glUniform1i(p["uComicShadow"], 5)
+        GLES30.glUniform1i(p["uMask"], 6)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, blankMask)
+        GLES30.glUniform1f(p["uShine"], -1f)
+        GLES30.glUniform4f(p["uWrap"], 0f, 0f, 0f, 0f)
+        GLES30.glUniform1f(p["uAlpha"], 1f)
+        GLES30.glUniform1i(p["uPrintFace"], -1)
+        GLES30.glUniform1i(p["uInnerFace"], -1)
+        GLES30.glUniform2f(p["uTapeCut"], 0f, 0f)
+        GLES30.glUniform1f(p["uPaperLift"], 0f)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTexture)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE5)
@@ -235,13 +270,226 @@ class ShelfRenderer(
             )
             // Once out of the shelf's light, the comic in hand is lit like in a photo studio.
             GLES30.glUniform1f(p["uHeld"], if (comic.held && frame.dim > 0.25f) 1f else 0f)
+            GLES30.glUniform1f(p["uShine"], comic.shine)
             draw(meshFor(comic), comic.model, MATERIAL_COMIC, dim, cover = cover, back = back, spine = art["spine:${comic.id}"])
+            GLES30.glUniform1f(p["uShine"], -1f)
             comic.ribbon?.let { vertices ->
                 fillRibbon(vertices)
                 draw(Mesh(ribbonVao, Ribbon.INDICES.size), identity, MATERIAL_RIBBON, dim)
             }
         }
+        frame.unbox?.let(::renderUnbox)
+        if (frame.unbox == null && (wrappers.isNotEmpty() || masks.isNotEmpty())) {
+            // The box is gone: so is the paper.
+            wrappers.values.forEach(::deleteWrapper)
+            wrappers.clear()
+            masks.values.forEach { GLES30.glDeleteTextures(1, intArrayOf(it.texture), 0) }
+            masks.clear()
+        }
         GLES30.glBindVertexArray(0)
+    }
+
+    /** The box of new comics, the comics in their paper, the torn strips and the glint, over everything. */
+    private fun renderUnbox(box: UnboxDraw) {
+        val p = program
+        // Lit like the comic in hand: in front of the darkened room.
+        GLES30.glUniform1f(p["uHeld"], 1f)
+        val print = art["box:${box.count}"]
+        for (part in box.parts) {
+            if (part.kind == CardboardBox.KIND_TAPE) {
+                GLES30.glUniform2f(p["uTapeCut"], box.tapeCut[0], box.tapeCut[1])
+                // The halves on the flaps know which side of them the seam is.
+                GLES30.glUniform1i(p["uInnerFace"], part.innerFace)
+                draw(this.box, part.model, MATERIAL_TAPE, 0f)
+            } else {
+                GLES30.glUniform1i(p["uPrintFace"], part.printFace)
+                GLES30.glUniform1i(p["uInnerFace"], part.innerFace)
+                draw(this.box, part.model, MATERIAL_CARDBOARD, 0f, label = if (part.printFace >= 0) print else null)
+            }
+        }
+        GLES30.glUniform1i(p["uPrintFace"], -1)
+        GLES30.glUniform1i(p["uInnerFace"], -1)
+
+        for (wrapped in box.comics) {
+            val comic = wrapped.comic
+            val cover = (if (comic.held) art["front:${comic.id}"] else null) ?: art["cover:${comic.id}"]
+            val wrapper = wrapped.wrapper
+            val tear = wrapper?.tear
+            val mask = tear?.let(::maskFor)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, mask ?: blankMask)
+            val margin = WrapperShape.margin(comic.size.z)
+            GLES30.glUniform4f(p["uWrap"], comic.size.x, comic.size.y, margin, if (mask != null && (wrapper.alpha > 0.99f)) 1f else 0f)
+            if (wrapped.drawComic) {
+                GLES30.glUniform4f(
+                    p["uBook"],
+                    comic.binding.ordinal.toFloat(),
+                    comic.pages.toFloat(),
+                    min(ComicShape.BOARD, comic.size.z * 0.2f),
+                    ComicShape.spineRadius(comic.binding, comic.size.z),
+                )
+                GLES30.glUniform1f(p["uShine"], wrapped.shine)
+                draw(meshFor(comic), comic.model, MATERIAL_COMIC, 0f, cover = cover, spine = art["spine:${comic.id}"])
+                GLES30.glUniform1f(p["uShine"], -1f)
+            }
+            if (wrapper != null && wrapper.alpha > 0.01f) {
+                GLES30.glUniform4f(p["uWrap"], comic.size.x, comic.size.y, margin, if (mask != null) 1f else 0f)
+                GLES30.glUniform1f(p["uPaperLift"], WrapperShape.radius(comic.size.z))
+                GLES30.glUniform1f(p["uAlpha"], wrapper.alpha)
+                val blend = wrapper.alpha < 0.999f
+                if (blend) {
+                    GLES30.glEnable(GLES30.GL_BLEND)
+                    GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+                }
+                val gl = wrapperFor(wrapper)
+                draw(Mesh(gl.left, gl.counts[0]), wrapper.left, MATERIAL_PAPER, 0f, cover = cover)
+                draw(Mesh(gl.right, gl.counts[1]), wrapper.right, MATERIAL_PAPER, 0f, cover = cover)
+                if (blend) GLES30.glDisable(GLES30.GL_BLEND)
+                GLES30.glUniform1f(p["uAlpha"], 1f)
+            }
+        }
+        GLES30.glUniform4f(p["uWrap"], 0f, 0f, 0f, 0f)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, blankMask)
+        // Forget the paper of comics no longer there.
+        val shown = box.comics.mapNotNull { it.wrapper?.id }.toSet()
+        wrappers.keys.filter { it !in shown }.forEach { id -> wrappers.remove(id)?.let(::deleteWrapper) }
+        val tears = box.comics.mapNotNull { it.wrapper?.tear }.toSet()
+        masks.keys.filter { it !in tears }.forEach { t -> masks.remove(t)?.let { GLES30.glDeleteTextures(1, intArrayOf(it.texture), 0) } }
+
+        box.scraps?.let { (vertices, indices) ->
+            GLES30.glEnable(GLES30.GL_BLEND)
+            GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+            fillStrips(vertices, indices)
+            draw(Mesh(stripVao, indices.size), identity, MATERIAL_STRIP, 0f)
+            GLES30.glDisable(GLES30.GL_BLEND)
+        }
+
+        box.star?.let { star ->
+            GLES30.glEnable(GLES30.GL_BLEND)
+            GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+            GLES30.glDepthMask(false)
+            GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+            GLES30.glUniform1f(p["uShine"], star.t)
+            val turn = Quat.axisAngle(Vec3(0f, 0f, 1f), 0.5f * star.t)
+            draw(quad, Mat4.compose(star.position, turn, Vec3(star.size, star.size, 1f)), MATERIAL_STAR, 0f)
+            GLES30.glUniform1f(p["uShine"], -1f)
+            GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+            GLES30.glDepthMask(true)
+            GLES30.glDisable(GLES30.GL_BLEND)
+        }
+        GLES30.glUniform1f(p["uHeld"], 0f)
+    }
+
+    private fun wrapperFor(wrapper: WrapperDraw): WrapperGl {
+        val version = wrapper.tear?.version ?: -1
+        val existing = wrappers[wrapper.id]
+        if (existing != null && existing.version == version) return existing
+        val shape = WrapperShape.build(wrapper.size, wrapper.tear, wrapper.seed)
+        val gl = existing ?: run {
+            val vaos = IntArray(2)
+            GLES30.glGenVertexArrays(2, vaos, 0)
+            val buffers = IntArray(4)
+            GLES30.glGenBuffers(4, buffers, 0)
+            for (k in 0..1) {
+                GLES30.glBindVertexArray(vaos[k])
+                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, buffers[k * 2])
+                vertexLayout()
+                GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, buffers[k * 2 + 1])
+            }
+            GLES30.glBindVertexArray(0)
+            WrapperGl(vaos[0], vaos[1], buffers, IntArray(2), version).also { wrappers[wrapper.id] = it }
+        }
+        upload(gl.left, gl.buffers[0], gl.buffers[1], shape.left, shape.leftIndices)
+        upload(gl.right, gl.buffers[2], gl.buffers[3], shape.right, shape.rightIndices)
+        gl.counts = intArrayOf(shape.leftIndices.size, shape.rightIndices.size)
+        gl.version = version
+        return gl
+    }
+
+    private fun deleteWrapper(gl: WrapperGl) {
+        GLES30.glDeleteVertexArrays(2, intArrayOf(gl.left, gl.right), 0)
+        GLES30.glDeleteBuffers(4, gl.buffers, 0)
+    }
+
+    private fun upload(vao: Int, vertexBuffer: Int, indexBuffer: Int, vertices: FloatArray, indices: ShortArray) {
+        val v = ByteBuffer.allocateDirect(vertices.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        v.put(vertices).position(0)
+        val i = ByteBuffer.allocateDirect(indices.size * 2).order(ByteOrder.nativeOrder()).asShortBuffer()
+        i.put(indices).position(0)
+        GLES30.glBindVertexArray(vao)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBuffer)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, vertices.size * 4, v, GLES30.GL_DYNAMIC_DRAW)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBuffer)
+        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, indices.size * 2, i, GLES30.GL_DYNAMIC_DRAW)
+        GLES30.glBindVertexArray(0)
+    }
+
+    /** The texture of what is torn of [tear], updated when it changed. */
+    private fun maskFor(tear: WrapTear): Int {
+        val existing = masks[tear]
+        if (existing != null && existing.version == tear.version) return existing.texture
+        val gl = existing ?: run {
+            val ids = IntArray(1)
+            GLES30.glGenTextures(1, ids, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
+            val levels = 1 + (31 - Integer.numberOfLeadingZeros(maxOf(tear.columns, tear.rows)))
+            GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, levels, GLES30.GL_R8, tear.columns, tear.rows)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            MaskGl(ids[0], tear.columns, tear.rows, -1).also { masks[tear] = it }
+        }
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gl.texture)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        if (maskData.capacity() < tear.mask.size) maskData = ByteBuffer.allocateDirect(tear.mask.size)
+        maskData.clear()
+        maskData.put(tear.mask).position(0)
+        GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D, 0, 0, 0, gl.columns, gl.rows, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, maskData)
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+        gl.version = tear.version
+        return gl.texture
+    }
+
+    private fun createBlankMask(): Int {
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, 1, 1, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, ByteBuffer.allocateDirect(4))
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        return ids[0]
+    }
+
+    private fun createStripMesh() {
+        val ids = IntArray(1)
+        GLES30.glGenVertexArrays(1, ids, 0)
+        stripVao = ids[0]
+        GLES30.glGenBuffers(2, stripBuffers, 0)
+        GLES30.glBindVertexArray(stripVao)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, stripBuffers[0])
+        vertexLayout()
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, stripBuffers[1])
+        GLES30.glBindVertexArray(0)
+    }
+
+    private fun fillStrips(vertices: FloatArray, indices: ShortArray) = upload(stripVao, stripBuffers[0], stripBuffers[1], vertices, indices)
+
+    /** Position, normal, uv, part: the layout of every mesh of the shelf, on the bound buffer. */
+    private fun vertexLayout() {
+        val stride = 9 * 4
+        GLES30.glEnableVertexAttribArray(0)
+        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
+        GLES30.glEnableVertexAttribArray(1)
+        GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, stride, 12)
+        GLES30.glEnableVertexAttribArray(2)
+        GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, stride, 24)
+        GLES30.glEnableVertexAttribArray(3)
+        GLES30.glVertexAttribPointer(3, 1, GLES30.GL_FLOAT, false, stride, 32)
     }
 
     private fun draw(
@@ -424,6 +672,11 @@ class ShelfRenderer(
         const val MATERIAL_LABEL = 3
         const val MATERIAL_RIBBON = 4
         const val MATERIAL_PLAQUE = 5
+        const val MATERIAL_CARDBOARD = 6
+        const val MATERIAL_TAPE = 7
+        const val MATERIAL_PAPER = 8
+        const val MATERIAL_STRIP = 9
+        const val MATERIAL_STAR = 10
 
         /**
          * Unit box, -0.5..0.5. Per vertex: position, normal, uv, face (0 front, 1 back, 2 left,

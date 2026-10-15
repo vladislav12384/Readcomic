@@ -31,6 +31,12 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
         /** The comic in hand changed (null: back on the shelf). */
         fun onHeldChanged(id: String?)
         fun onOpen(id: String)
+
+        /** The wrapping of the comic [id] is off: it goes on the shelf. */
+        fun onUnwrapped(id: String) {}
+
+        /** What the box of new comics is doing. */
+        fun onUnboxState(state: UnboxState) {}
     }
 
     var callbacks: Callbacks? = null
@@ -42,6 +48,8 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     private val artCache = ShelfArtCache(scope) { requestFrame() }
     private val renderer: ShelfRenderer
     private val pacer = FramePacer(render = { requestRender() }, wantsFrames = { renderer.wantsFrames })
+    private val sound = UnboxSound()
+    private var lastTick = 0L
 
     init {
         setEGLContextClientVersion(3)
@@ -61,9 +69,37 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
                 }
             }
         }
+        controller.unboxing.listener = object : Unboxing.Listener {
+            override fun onUnwrapped(id: String) {
+                mainHandler.post { callbacks?.onUnwrapped(id) }
+            }
+
+            override fun onStateChanged(state: UnboxState) {
+                mainHandler.post { callbacks?.onUnboxState(state) }
+            }
+
+            override fun onCue(cue: UnboxCue, strength: Float) {
+                sound.cue(cue, strength)
+                mainHandler.post { feel(cue) }
+            }
+        }
     }
 
     // region Public API (UI thread)
+
+    /** The comics in the box of new ones, the next to come out first. */
+    fun setBox(items: List<ShelfItem>) = onGl { controller.setBox(items) }
+
+    /** Brings the box of new comics up in front of the reader. */
+    fun openBox() = onGl { controller.openBox() }
+
+    /** Puts the box back down. */
+    fun putAwayBox() = onGl { controller.putAwayBox() }
+
+    /** The rustle of paper while unpacking. */
+    fun setSoundEnabled(enabled: Boolean) {
+        sound.enabled = enabled
+    }
 
     /** The comics on the shelves, in order, and where their pictures come from. */
     fun setItems(items: List<ShelfItem>, art: ShelfArt) = onGl {
@@ -114,6 +150,7 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     override fun onPause() {
         super.onPause()
         pacer.pause()
+        sound.loudness(0f, 0f)
     }
 
     override fun onResume() {
@@ -125,6 +162,7 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
         super.onDetachedFromWindow()
         pacer.stop()
         scope.cancel()
+        sound.release()
     }
 
     // region Touch handling
@@ -143,12 +181,39 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
 
     // Render thread only: whether the finger drives the shelves, and where it was last frame.
     private var following = false
+
+    // Whether this gesture belongs to the box of new comics (decided when it begins).
+    @Volatile
+    private var boxGesture = false
     private var appliedX = 0f
     private var appliedY = 0f
 
+    /** A touch to go with a sound: a tick as paper tears, a knock as the box lands. */
+    private fun feel(cue: UnboxCue) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val kind = when (cue) {
+            UnboxCue.TEAR_TICK -> {
+                if (now - lastTick < 35) return
+                lastTick = now
+                HapticFeedbackConstants.CLOCK_TICK
+            }
+            UnboxCue.POKE -> HapticFeedbackConstants.KEYBOARD_TAP
+            UnboxCue.SHINE -> if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY
+            UnboxCue.BOX_LANDS, UnboxCue.TAPE_DONE -> HapticFeedbackConstants.VIRTUAL_KEY
+            UnboxCue.FLAP, UnboxCue.RELEASE, UnboxCue.BOX_SHAKES -> HapticFeedbackConstants.CONTEXT_CLICK
+        }
+        performHapticFeedback(kind)
+    }
+
     /** Render thread, start of a frame: moves the shelves (or the comic) by where the finger went since. */
     private fun followFinger(frameNanos: Long) {
+        if (controller.unboxing.present) sound.loudness(controller.unboxing.tearLoudness, controller.unboxing.tapeLoudness)
         if (!following || !track.sample(frameNanos - RESAMPLE_DELAY_NANOS, sample)) return
+        if (boxGesture) {
+            // The box takes the finger where it is, not how far it went.
+            controller.boxMove(sample[0], sample[1])
+            return
+        }
         val dx = sample[0] - appliedX
         val dy = sample[1] - appliedY
         appliedX = sample[0]
@@ -171,6 +236,23 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
                 downX = event.x
                 downY = event.y
                 dragging = false
+                if (controller.boxTakesTouches) {
+                    // Tearing starts at the touch, without waiting for the finger to travel.
+                    boxGesture = true
+                    pacer.touching = true
+                    renderer.touching = true
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    track.clear()
+                    track.add(eventNanos(event), event.x, event.y)
+                    val x = event.x
+                    val y = event.y
+                    onGl {
+                        following = true
+                        controller.boxDown(x, y)
+                    }
+                    return true
+                }
+                boxGesture = false
                 velocity?.recycle()
                 velocity = VelocityTracker.obtain().also { it.addMovement(event) }
                 pacer.touching = true
@@ -182,6 +264,12 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
             MotionEvent.ACTION_MOVE -> {
                 val index = event.findPointerIndex(pointerId)
                 if (index < 0) return true
+                if (boxGesture) {
+                    if (!dragging && hypot(event.getX(index) - downX, event.getY(index) - downY) > touchSlop) dragging = true
+                    record(event, index)
+                    requestFrame()
+                    return true
+                }
                 velocity?.addMovement(event)
                 val x = event.getX(index)
                 val y = event.getY(index)
@@ -219,6 +307,21 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
             }
 
             MotionEvent.ACTION_UP -> {
+                if (boxGesture) {
+                    val x = event.x
+                    val y = event.y
+                    val tapped = !dragging
+                    record(event, 0.coerceAtLeast(event.findPointerIndex(pointerId)))
+                    onGl {
+                        // The last stretch of the finger, then let go.
+                        if (track.sample(Long.MAX_VALUE, sample)) controller.boxMove(sample[0], sample[1])
+                        following = false
+                        controller.boxUp()
+                        if (tapped) controller.boxTap(x, y)
+                    }
+                    finishGesture()
+                    return true
+                }
                 val tracker = velocity
                 if (dragging) {
                     tracker?.addMovement(event)
@@ -240,9 +343,10 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                val box = boxGesture
                 onGl {
                     following = false
-                    controller.release(0f, 0f)
+                    if (box) controller.boxUp() else controller.release(0f, 0f)
                 }
                 finishGesture()
             }

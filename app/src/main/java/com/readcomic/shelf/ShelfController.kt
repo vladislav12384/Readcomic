@@ -53,6 +53,8 @@ class ComicDraw(
     val held: Boolean,
     /** Not among what is being searched for: it stays in the shade. */
     val faded: Boolean = false,
+    /** A glint running over the cover, 0..1; negative for none. */
+    val shine: Float = -1f,
 )
 
 /** The paper label saying [text], under a comic. */
@@ -86,6 +88,8 @@ class ShelfFrame(
     val lightsTime: Float,
     /** From one shelf to the next, metres. */
     val rowHeight: Float,
+    /** The box of new comics, when there is one. */
+    val unbox: UnboxDraw? = null,
 )
 
 /**
@@ -103,6 +107,21 @@ class ShelfController(private val density: Float) {
     var listener: Listener? = null
 
     private var items: List<ShelfItem> = emptyList()
+
+    /** The box of new comics and their unwrapping. */
+    val unboxing = Unboxing(object : Unboxing.Host {
+        override val aspect get() = viewWidth / viewHeight
+        override fun pointInFront(sx: Float, sy: Float, depth: Float) = this@ShelfController.pointInFront(sx, sy, depth)
+        override fun eyeRay(x: Float, y: Float) = this@ShelfController.eyeRay(x, y)
+        override fun handPose(size: Vec3) = this@ShelfController.handPose(size, 0f, 0f)
+        override fun sizeOf(item: ShelfItem) = this@ShelfController.sizeOf(item)
+        override val shelving get() = placing != null || (heldId != null && heldId == quietHeld)
+    })
+
+    /** Whether the box is up in front of the reader and takes the touches (read from the UI thread). */
+    @Volatile
+    var boxTakesTouches = false
+        private set
     private var sized = false
     private var viewWidth = 1f
     private var viewHeight = 1f
@@ -155,7 +174,40 @@ class ShelfController(private val density: Float) {
         }
 
     fun setItems(newItems: List<ShelfItem>) {
+        val before = items
+        // Where the comics on screen stand now, so those that change places can walk there.
+        val oldIndex = HashMap<String, Int>(before.size * 2)
+        before.forEachIndexed { index, item -> oldIndex[item.id] = index }
+        val visible = visibleRows()
+        val from = HashMap<String, Vec3>()
+        if (sized && before.isNotEmpty()) {
+            before.forEachIndexed { index, item ->
+                if (index / columns in visible) from[item.id] = restingPose(index, item, sizeOf(item)).first
+            }
+        }
         items = newItems
+        if (sized && before.isNotEmpty()) {
+            newItems.forEachIndexed { index, item ->
+                val old = oldIndex[item.id] ?: return@forEachIndexed
+                val start = from[item.id]
+                if (old != index && start != null && (old / columns in visible || index / columns in visible)) {
+                    moves[item.id] = SlotMove(start, old / columns != index / columns, index > old)
+                } else if (old != index) {
+                    moves.remove(item.id)
+                }
+            }
+            // Comics just out of the box gleam once in their places (the one in hand has gleamed already).
+            val boxed = unboxing.boxedIds
+            val inHand = unboxing.inHandId
+            newItems.forEach { item ->
+                if (item.id !in oldIndex && item.id in boxed && item.id != inHand) appearing[item.id] = -0.1f * appearing.size
+            }
+        }
+        moves.keys.retainAll(newItems.map { it.id }.toSet())
+        // The comic unwrapped in hand is the shelves' now: it goes to its place from the hands.
+        unboxing.inHandId?.let { id ->
+            if (newItems.any { it.id == id } && unboxing.handOver(id)) adopt(id)
+        }
         val reading = newItems.filter { it.inProgress }.map { it.id }.toSet()
         ribbons.keys.retainAll(reading)
         if (heldId != null && items.none { it.id == heldId }) {
@@ -174,6 +226,64 @@ class ShelfController(private val density: Float) {
         cameraY = value * rowHeight
         scrollVelocity = 0f
         clampScroll(hard = true)
+    }
+
+    /** The comics in the box of new ones, the next to come out first. */
+    fun setBox(boxed: List<ShelfItem>) {
+        // Coming back to the library (the lights are on already) the box is simply there; it
+        // drops in when the room is entered, or when new comics come.
+        unboxing.setContents(boxed, quietly = !boxSeen && lightsTime >= LIGHTS_DONE)
+        boxSeen = true
+        boxTakesTouches = unboxing.active
+    }
+
+    private var boxSeen = false
+
+    // A comic changing places: from where it stood, [t] 0..1 of the way; [forward] to a later place.
+    private class SlotMove(val from: Vec3, val acrossRows: Boolean, val forward: Boolean) {
+        var t = 0f
+    }
+
+    private val moves = HashMap<String, SlotMove>()
+
+    // Comics just put on the shelves, seconds into their glint (negative: still waiting for it).
+    private val appearing = HashMap<String, Float>()
+
+    // A comic just unwrapped: the shelves scroll to its place, then it goes there.
+    private var placing: String? = null
+    private var placingTime = 0f
+
+    // The held comic that is only passing through the hands: the room does not darken for it.
+    private var quietHeld: String? = null
+
+    private fun adopt(id: String) {
+        val index = items.indexOfFirst { it.id == id }
+        if (index < 0) return
+        if (heldId != null && heldId != id) {
+            hold.snapTo(0f, 0f)
+            heldId = null
+        }
+        heldId = id
+        yaw = 0f
+        pitch = 0f
+        yawVelocity = 0f
+        rotating = false
+        hold.snapTo(1f, 0f)
+        // Held without the card of a comic in hand: it is on its way to the shelf.
+        holding = true
+        quietHeld = id
+        placing = id
+        placingTime = 0f
+        focusId = null
+        scrollVelocity = 0f
+    }
+
+    private fun visibleRows(): IntRange {
+        if (!sized) return IntRange.EMPTY
+        val halfH = visibleHalfHeight
+        val topRow = max(0, floor(-(cameraY + halfH * 1.3f) / rowHeight).toInt())
+        val bottomRow = ceil(-(cameraY - halfH * 1.3f) / rowHeight).toInt() + 1
+        return (topRow - 1)..bottomRow
     }
 
     /** How large the comics are on the shelves; the shelves follow them, the same room above. */
@@ -282,7 +392,7 @@ class ShelfController(private val density: Float) {
         return eye + direction * (depth / direction.dot(forward))
     }
 
-    private fun handPose(size: Vec3): Pair<Vec3, Quat> {
+    private fun handPose(size: Vec3, yaw: Float = this.yaw, pitch: Float = this.pitch): Pair<Vec3, Quat> {
         val depth = size.y / (2f * tan(FOV / 2f) * handFill)
         val position = pointInFront(handAnchorX, handAnchorY, depth)
         // Face the eye (the camera looks slightly down), then the reader's own turning.
@@ -291,13 +401,45 @@ class ShelfController(private val density: Float) {
         return position to rotation
     }
 
+    /** The line of sight through the screen point (x, y) in pixels: its near and far ends. */
+    private fun eyeRay(x: Float, y: Float): Pair<Vec3, Vec3>? {
+        val inverse = Mat4.invert(Mat4.multiply(projection(), viewMatrix())) ?: return null
+        val nx = x / viewWidth * 2f - 1f
+        val ny = 1f - y / viewHeight * 2f
+        return Mat4.transformPoint(inverse, Vec3(nx, ny, -1f)) to Mat4.transformPoint(inverse, Vec3(nx, ny, 1f))
+    }
+
+    /** A comic on its shelf, or on its way there from where it stood before. */
+    private fun restingPose(index: Int, item: ShelfItem, size: Vec3): Pair<Vec3, Quat> {
+        val pose = shelfPose(index, size)
+        val move = moves[item.id] ?: return pose
+        if (move.acrossRows) {
+            // To another shelf: off the end of its own, in from the other end of the next one,
+            // never across the others.
+            val out = (visibleHalfWidth + slotWidth * 0.7f) * if (move.forward) 1f else -1f
+            return if (move.t < 0.5f) {
+                val u = move.t * 2f
+                val e = u * u
+                Vec3(move.from.x + (out - move.from.x) * e, move.from.y, move.from.z + 0.012f * u) to pose.second
+            } else {
+                val u = (move.t - 0.5f) * 2f
+                val e = 1f - (1f - u) * (1f - u)
+                val target = pose.first
+                Vec3(-out + (target.x + out) * e, target.y, target.z + 0.012f * (1f - u)) to pose.second
+            }
+        }
+        val e = move.t * move.t * (3f - 2f * move.t)
+        // Along the shelf it slides, lifted a hair.
+        return (Vec3.lerp(move.from, pose.first, e) + Vec3(0f, 0.004f, 0.015f) * sin(PI.toFloat() * e)) to pose.second
+    }
+
     private fun easedHold(): Float {
         val t = hold.x.coerceIn(0f, 1f)
         return t * t * (3f - 2f * t)
     }
 
     private fun poseOf(index: Int, item: ShelfItem, size: Vec3): Pair<Vec3, Quat> {
-        val shelf = shelfPose(index, size)
+        val shelf = restingPose(index, item, size)
         if (item.id != heldId) return shelf
         val hand = handPose(size)
         val t = easedHold()
@@ -368,7 +510,8 @@ class ShelfController(private val density: Float) {
             val model = Mat4.compose(position, rotation, size)
             val ribbon = if (item.inProgress) ribbons.getOrPut(item.id) { Ribbon() }.mesh(position, rotation, size) else null
             val faded = found != null && item.id !in found
-            val draw = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld, faded)
+            val shine = appearing[item.id]?.let { (it / APPEAR_SHINE).coerceAtMost(1f) } ?: -1f
+            val draw = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld, faded, shine)
             if (isHeld) held = draw else comics += draw
             labels += LabelDraw(
                 item.label,
@@ -388,6 +531,7 @@ class ShelfController(private val density: Float) {
         val lightView = Mat4.lookAt(center + light * 2.5f, center, Vec3(0f, 0f, -1f))
         val extent = max(halfW, halfH) * 1.35f
         val lightProj = Mat4.orthographic(-extent, extent, -extent, extent, 0.5f, 5f)
+        val unbox = unboxing.draw()
 
         return ShelfFrame(
             viewProj = viewProj,
@@ -401,11 +545,12 @@ class ShelfController(private val density: Float) {
             comics = comics,
             labels = labels,
             signs = signs,
-            dim = if (heldId != null) 0.5f * easedHold() else 0f,
+            dim = max(if (heldId != null && heldId != quietHeld) 0.5f * easedHold() else 0f, unbox?.dim ?: 0f),
             searchDim = searchDim * searchDim * (3f - 2f * searchDim) * 0.72f,
             count = items.size,
             lightsTime = lightsTime,
             rowHeight = rowHeight,
+            unbox = unbox,
         )
     }
 
@@ -490,11 +635,35 @@ class ShelfController(private val density: Float) {
         scrollVelocity = velocityY * 2f * visibleHalfHeight / viewHeight
     }
 
+    // The box up in front of the reader takes the finger: to cut its tape, to tear the paper.
+
+    fun boxDown(x: Float, y: Float) = unboxing.down(x, y)
+
+    fun boxMove(x: Float, y: Float) = unboxing.move(x, y)
+
+    fun boxUp() = unboxing.up()
+
+    fun boxTap(x: Float, y: Float) = unboxing.tap(x, y)
+
+    /** Brings the box of new comics up in front of the reader. */
+    fun openBox() {
+        if (heldId != null && holding) putBack()
+        unboxing.bringUp()
+        boxTakesTouches = unboxing.active
+    }
+
+    /** Puts the box back down (the comic in hand goes back into it). */
+    fun putAwayBox() = unboxing.putAway()
+
     /** The comic in hand (not one on its way back to the shelf). */
-    val inHandId get() = if (holding) heldId else null
+    val inHandId get() = if (holding && placing == null) heldId else null
 
     /** A tap at (x, y) pixels. Picks a comic off the shelf, or puts the one in hand back. */
     fun tap(x: Float, y: Float): String? {
+        if (heldId == null && unboxing.tapPeek(x, y)) {
+            boxTakesTouches = unboxing.active
+            return null
+        }
         val hit = pick(x, y)
         val held = heldId
         if (held != null) {
@@ -512,6 +681,7 @@ class ShelfController(private val density: Float) {
 
     fun take(id: String) {
         if (items.none { it.id == id }) return
+        quietHeld = null
         if (heldId != id) {
             // Arrives turned a little, showing its spine, and turns to face the reader.
             yaw = -0.6f
@@ -606,6 +776,44 @@ class ShelfController(private val density: Float) {
     fun step(dt: Float): Boolean {
         var animating = false
 
+        if (unboxing.step(dt)) animating = true
+        boxTakesTouches = unboxing.active
+
+        if (moves.isNotEmpty()) {
+            val iterator = moves.values.iterator()
+            while (iterator.hasNext()) {
+                val move = iterator.next()
+                move.t += dt / if (move.acrossRows) 0.7f else 0.5f
+                if (move.t >= 1f) iterator.remove()
+            }
+            animating = true
+        }
+        if (appearing.isNotEmpty()) {
+            for (key in appearing.keys.toList()) {
+                val t = appearing.getValue(key) + dt
+                if (t >= APPEAR_SHINE) appearing.remove(key) else appearing[key] = t
+            }
+            animating = true
+        }
+
+        placing?.let { id ->
+            val index = items.indexOfFirst { it.id == id }
+            if (index < 0 || heldId != id) {
+                placing = null
+                return@let
+            }
+            animating = true
+            placingTime += dt
+            val target = focusY(index)
+            cameraY += (target - cameraY) * (1f - exp(-5f * dt))
+            // Near enough: it leaves the hands for its place while the shelves settle.
+            if (holding && (abs(target - cameraY) < 0.08f || placingTime > 1.4f)) holding = false
+            if (!holding && abs(target - cameraY) < 0.002f) {
+                cameraY = target
+                placing = null
+            }
+        }
+
         val dimTarget = if (highlightWanted) 1f else 0f
         if (searchDim != dimTarget) {
             searchDim = if (dimTarget > searchDim) min(1f, searchDim + dt / SEARCH_FADE) else max(0f, searchDim - dt / SEARCH_FADE)
@@ -646,6 +854,7 @@ class ShelfController(private val density: Float) {
                 holding -> if (!hold.isAt(1f, 0f, 0.0005f, 0.005f)) animating = true else hold.snapTo(1f, 0f)
                 hold.x < 0.002f && abs(hold.vx) < 0.01f -> {
                     heldId = null
+                    quietHeld = null
                     hold.snapTo(0f, 0f)
                 }
                 else -> animating = true
@@ -724,5 +933,6 @@ class ShelfController(private val density: Float) {
         private const val ROTATE_FRICTION = 2.2f
         private const val SCROLL_FRICTION = 3.2f
         private const val PICK_SLACK = 0.004f
+        private const val APPEAR_SHINE = 0.8f
     }
 }

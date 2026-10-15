@@ -27,6 +27,11 @@ data class ComicEntry(
     val year: Int? = null,
     /** The series it was put into (when adding with series on, or by hand); null stands on its own. */
     val series: String? = null,
+    /**
+     * Just arrived and still in its paper wrapping, in the box of new comics: it goes on the
+     * shelf once the reader has torn the paper off.
+     */
+    val wrapped: Boolean = false,
 ) {
     val progress: Float get() = if (pageCount <= 1) 0f else lastVisiblePage.toFloat() / (pageCount - 1)
     val isFinished: Boolean get() = lastReadAt > 0 && lastVisiblePage >= pageCount - 1
@@ -60,6 +65,7 @@ class LibraryStore(context: Context) {
                     writer = o.optString("writer").ifEmpty { null },
                     year = o.optInt("year", 0).takeIf { it > 0 },
                     series = o.optString("series").ifEmpty { null },
+                    wrapped = o.optBoolean("wrapped", false),
                 )
             }
         } catch (_: Exception) {
@@ -86,7 +92,8 @@ class LibraryStore(context: Context) {
                     .put("fileSize", e.fileSize)
                     .putOpt("writer", e.writer)
                     .putOpt("year", e.year)
-                    .putOpt("series", e.series),
+                    .putOpt("series", e.series)
+                    .put("wrapped", e.wrapped),
             )
         }
         val tmp = File(file.parentFile, file.name + ".tmp")
