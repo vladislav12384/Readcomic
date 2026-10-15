@@ -310,8 +310,6 @@ private fun ShelfLibrary(
             currentOnHandHintShown()
         }
     }
-    // The size of the card of the comic in hand, kept for the next one (cards are much alike).
-    var cardSize by remember { mutableStateOf(IntSize.Zero) }
 
     LaunchedEffect(view, placed, aspects) {
         val shelf = view ?: return@LaunchedEffect
@@ -547,6 +545,9 @@ private fun ShelfLibrary(
 
         // The comic in hand keeps clear of its card and of the status bar: what they take from
         // each edge of the screen, in pixels.
+        // The size of the card is kept for the next one (cards are much alike); until the first
+        // is measured, about what it will be, so the comic goes straight to its place.
+        var cardSize by remember(landscape) { mutableStateOf(IntSize.Zero) }
         val insets = SafeInsets
         val layoutDirection = LocalLayoutDirection.current
         val handRoom = with(LocalDensity.current) {
@@ -554,10 +555,13 @@ private fun ShelfLibrary(
             val top = insets.getTop(this).toFloat()
             val right = insets.getRight(this, layoutDirection).toFloat()
             val bottom = insets.getBottom(this).toFloat()
-            when {
-                cardSize == IntSize.Zero -> Rect(left, top, right, bottom)
-                landscape -> Rect(left, top, right + 16.dp.toPx() + cardSize.width, bottom)
-                else -> Rect(left, top, right, bottom + 12.dp.toPx() + cardSize.height)
+            val known = cardSize != IntSize.Zero
+            if (landscape) {
+                val width = if (known) cardSize.width.toFloat() else (maxWidth * 0.4f).coerceAtMost(380.dp).toPx()
+                Rect(left, top, right + 16.dp.toPx() + width, bottom)
+            } else {
+                val height = if (known) cardSize.height.toFloat() else 156.dp.toPx()
+                Rect(left, top, right, bottom + 12.dp.toPx() + height)
             }
         }
         LaunchedEffect(view, handRoom) {

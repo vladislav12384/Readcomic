@@ -98,37 +98,65 @@ class ShelfControllerTest {
     }
 
     @Test
-    fun theComicInHandKeepsClearOfItsCard() {
-        // A short phone, and a card taking the lower third of it.
+    fun theComicInHandIsInTheMiddleOfTheRoomItsCardLeaves() {
+        // A short phone: the status bar at the top, the bar of gestures at the bottom.
         val c = controller(1080, 1920)
+        c.setHandRoom(0f, 70f, 0f, 60f)
         val (x, y) = c.screenOf("c1", 1080, 1920)
         c.tap(x, y)
         c.settle()
         val (freeTop, freeBottom) = c.heldSpan(1080, 1920)
-        c.setHandRoom(0f, 70f, 0f, 760f)
-        // It makes way smoothly, not with a jump.
-        var last = freeBottom
+        // The card comes, taking the lower part of the screen.
+        val cardTop = 1920f - 820f
+        c.setHandRoom(0f, 70f, 0f, 820f)
+        // The comic makes way smoothly, not with a jump.
+        val path = arrayListOf(freeBottom)
         repeat(90) {
             c.step(1f / 60f)
-            val (_, now) = c.heldSpan(1080, 1920)
-            assertTrue("moving up: $last -> $now", now <= last + 0.5f && last - now < 40f)
-            last = now
+            path += c.heldSpan(1080, 1920).second
         }
+        val total = freeBottom - path.last()
+        assertTrue("moved: $total", total > 100f)
+        path.zipWithNext().forEach { (a, b) -> assertTrue("smoothly: $a -> $b", b <= a + 0.5f && a - b < total * 0.2f) }
         c.settle()
         val (top, bottom) = c.heldSpan(1080, 1920)
-        assertTrue("above the card: $bottom", bottom < 1920f - 760f)
+        assertTrue("above the card: $bottom", bottom < cardTop)
         assertTrue("below the status bar: $top", top > 70f)
-        // Before, with nothing in the way, it was as large as ever.
+        // Right in the middle between them, not high above the card.
+        assertEquals("gap above ${top - 70f}, below ${cardTop - bottom}", top - 70f, cardTop - bottom, 20f)
+        // With all that room it was a little larger.
         assertTrue(freeBottom - freeTop > bottom - top)
 
-        // In landscape the card is on the right.
+        // In landscape the card is on the right: in the middle of what is left of the screen.
         val wide = controller(2280, 1080)
         wide.setHandRoom(0f, 0f, 1000f, 0f)
         wide.take("c2")
         wide.settle()
         val (_, _, across) = wide.heldSpan(2280, 1080)
         assertTrue("left of the card: ${across.second}", across.second < 2280f - 1000f)
-        assertTrue(across.first > 0f)
+        assertEquals(across.first, 2280f - 1000f - across.second, 30f)
+    }
+
+    @Test
+    fun theBookmarkOfAComicBeingReadStaysOnScreenToo() {
+        val c = controller(1080, 1920)
+        val cardTop = 1920f - 640f
+        c.setHandRoom(0f, 70f, 0f, 640f)
+        // c0 is being read: its bookmark rises out of its top.
+        c.take("c0")
+        c.settle()
+        val (top, bottom) = c.heldSpan(1080, 1920)
+        val frame = c.frame()
+        val ribbon = frame.comics.last().ribbon!!
+        val ribbonTop = (0 until ribbon.size / 9).minOf {
+            val ndc = Mat4.transformPoint(frame.viewProj, Vec3(ribbon[it * 9], ribbon[it * 9 + 1], ribbon[it * 9 + 2]))
+            (1f - ndc.y) / 2f * 1920f
+        }
+        assertTrue("the bookmark sticks out: $ribbonTop above $top", ribbonTop < top - 40f)
+        assertTrue("and stays below the status bar: $ribbonTop", ribbonTop > 70f)
+        assertTrue(bottom < cardTop)
+        // The comic and its bookmark together are in the middle.
+        assertEquals("gap above ${ribbonTop - 70f}, below ${cardTop - bottom}", ribbonTop - 70f, cardTop - bottom, 30f)
     }
 
     @Test

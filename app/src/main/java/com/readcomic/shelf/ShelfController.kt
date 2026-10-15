@@ -113,7 +113,7 @@ class ShelfController(private val density: Float) {
         override val aspect get() = viewWidth / viewHeight
         override fun pointInFront(sx: Float, sy: Float, depth: Float) = this@ShelfController.pointInFront(sx, sy, depth)
         override fun eyeRay(x: Float, y: Float) = this@ShelfController.eyeRay(x, y)
-        override fun handPose(size: Vec3) = this@ShelfController.handPose(size, 0f, 0f)
+        override fun handPose(size: Vec3) = this@ShelfController.handPose(size, ribbon = false, yaw = 0f, pitch = 0f)
         override fun sizeOf(item: ShelfItem) = this@ShelfController.sizeOf(item)
         override val shelving get() = placing != null || (heldId != null && heldId == quietHeld)
     })
@@ -147,9 +147,7 @@ class ShelfController(private val density: Float) {
     private var yawVelocity = 0f
     private var rotating = false
 
-    /** Where on screen (0..1) the comic in hand is shown, so the UI card does not cover it. */
-    private var handAnchorX = 0.5f
-    private var handAnchorY = 0.42f
+    /** How much of the screen's height the comic in hand fills, when there is room for it. */
     private var handFill = 0.6f
 
     /**
@@ -338,15 +336,7 @@ class ShelfController(private val density: Float) {
         columns = floor((visibleWidth - 0.06f) / slotWidth).toInt().coerceIn(2, 8)
         val shelfWidth = columns * slotWidth + 0.04f
         distance = max(minDistance, shelfWidth / 2f / (tanHalf * aspect)) + PLANK_DEPTH
-        if (aspect > 1f) {
-            handAnchorX = 0.36f
-            handAnchorY = 0.5f
-            handFill = 0.66f
-        } else {
-            handAnchorX = 0.5f
-            handAnchorY = 0.38f
-            handFill = 0.52f
-        }
+        handFill = if (aspect > 1f) 0.66f else 0.52f
         // Turned round: everything is laid out anew, no need to slide.
         room.copyInto(shownRoom)
         clampScroll(hard = true)
@@ -412,8 +402,8 @@ class ShelfController(private val density: Float) {
         return eye + direction * (depth / direction.dot(forward))
     }
 
-    private fun handPose(size: Vec3, yaw: Float = this.yaw, pitch: Float = this.pitch): Pair<Vec3, Quat> {
-        val place = handPlace(size)
+    private fun handPose(size: Vec3, ribbon: Boolean, yaw: Float = this.yaw, pitch: Float = this.pitch): Pair<Vec3, Quat> {
+        val place = handPlace(size, ribbon)
         val depth = size.y / (2f * tan(FOV / 2f) * place.z)
         val position = pointInFront(place.x, place.y, depth)
         // Face the eye (the camera looks slightly down), then the reader's own turning.
@@ -424,10 +414,11 @@ class ShelfController(private val density: Float) {
 
     /**
      * Where the centre of the comic in hand is on screen (x, y in 0..1) and what part of the
-     * screen's height it fills (z): as set for the shape of the screen, but moved, and if need be
-     * made smaller, so that all of it stays clear of the room the UI takes.
+     * screen's height it fills (z): in the middle of the room the UI leaves it (between the status
+     * bar and its card), the bookmark of a comic being read and all, as large as set for the
+     * shape of the screen or, if there is not room enough, a little smaller.
      */
-    internal fun handPlace(size: Vec3): Vec3 {
+    internal fun handPlace(size: Vec3, ribbon: Boolean): Vec3 {
         val left = shownRoom[0] / viewWidth
         val top = shownRoom[1] / viewHeight
         val right = 1f - shownRoom[2] / viewWidth
@@ -436,12 +427,12 @@ class ShelfController(private val density: Float) {
         val marginX = HAND_MARGIN * viewHeight / viewWidth
         // Its width on screen for each part of the height it fills.
         val across = size.x / size.y * viewHeight / viewWidth
-        val fill = min(handFill, min(bottom - top - 2f * marginY, (right - left - 2f * marginX) / across))
+        // The bookmark rising out of its top, in parts of its height.
+        val above = if (ribbon) RIBBON_RISE / size.y else 0f
+        val fill = min(handFill, min((bottom - top - 2f * marginY) / (1f + above), (right - left - 2f * marginX) / across))
             .coerceAtLeast(MIN_HAND_FILL)
-        fun within(value: Float, low: Float, high: Float) = if (low <= high) value.coerceIn(low, high) else (low + high) / 2f
-        val x = within(handAnchorX, left + marginX + fill * across / 2f, right - marginX - fill * across / 2f)
-        val y = within(handAnchorY, top + marginY + fill / 2f, bottom - marginY - fill / 2f)
-        return Vec3(x, y, fill)
+        // The comic and its bookmark together are in the middle.
+        return Vec3((left + right) / 2f, (top + bottom) / 2f + above * fill / 2f, fill)
     }
 
     /** The line of sight through the screen point (x, y) in pixels: its near and far ends. */
@@ -484,7 +475,7 @@ class ShelfController(private val density: Float) {
     private fun poseOf(index: Int, item: ShelfItem, size: Vec3): Pair<Vec3, Quat> {
         val shelf = restingPose(index, item, size)
         if (item.id != heldId) return shelf
-        val hand = handPose(size)
+        val hand = handPose(size, item.inProgress)
         val t = easedHold()
         // Out towards the reader first, so it does not slide through the shelf.
         val lift = Vec3(0f, 0.02f, 0.12f) * sin(PI.toFloat() * t)
@@ -982,6 +973,12 @@ class ShelfController(private val density: Float) {
 
         /** Air between the comic in hand and the edges of the room it has, in parts of the screen's height. */
         private const val HAND_MARGIN = 0.025f
+
+        /**
+         * How far the bookmark of a comic being read seems to rise out of its top in the hands,
+         * lying at rest (meters; it curls a little towards the eye, so it looks a bit taller).
+         */
+        private const val RIBBON_RISE = 0.058f
 
         /** However little room there is, the comic in hand is not made smaller than that. */
         private const val MIN_HAND_FILL = 0.3f
