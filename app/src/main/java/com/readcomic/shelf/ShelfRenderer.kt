@@ -155,7 +155,7 @@ class ShelfRenderer(
             box.frontId?.let { art.request("front:$it") }
         }
         frame.signs.forEach { art.request(signKey(it)) }
-        if (frame.plaque != null) art.request("plaque:${frame.count}")
+        if (frame.header != null) art.request("header:${frame.count}")
 
         renderShadows(frame)
         renderScene(frame)
@@ -193,6 +193,7 @@ class ShelfRenderer(
             GLES30.glDrawElements(GLES30.GL_TRIANGLES, box.count, GLES30.GL_UNSIGNED_SHORT, 0)
         }
         frame.planks.forEach(::cast)
+        frame.rails.forEach(::cast)
         frame.cornice?.let(::cast)
         castComics(frame)
         GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
@@ -228,14 +229,15 @@ class ShelfRenderer(
         val p = program
         draw(quad, frame.wall, MATERIAL_WALL, frame.dim)
         frame.planks.forEach { draw(box, it, MATERIAL_WOOD, frame.dim) }
+        frame.rails.forEach { draw(box, it, MATERIAL_WOOD, frame.dim) }
         frame.cornice?.let { draw(box, it, MATERIAL_WOOD, frame.dim) }
-        frame.plaque?.let { draw(quad, it, MATERIAL_PLAQUE, frame.dim, label = art["plaque:${frame.count}"]) }
+        frame.header?.let { draw(quad, it, MATERIAL_LETTERING, frame.dim, label = art["header:${frame.count}"]) }
         for (label in frame.labels) {
             val texture = art["label:${label.text}"]
             draw(quad, label.model, MATERIAL_LABEL, frame.dim, label = texture)
         }
         for (sign in frame.signs) {
-            draw(quad, sign.model, MATERIAL_PLAQUE, frame.dim, label = art[signKey(sign)])
+            draw(quad, sign.model, MATERIAL_LETTERING, frame.dim, label = art[signKey(sign)])
         }
         for (comic in frame.comics) {
             val dim = when {
@@ -298,7 +300,7 @@ class ShelfRenderer(
             p["uPlank"],
             ShelfController.PLANK_THICKNESS,
             ShelfController.PLANK_DEPTH,
-            ShelfController.BOTTOM_Z,
+            ShelfController.RAIL_HEIGHT,
             ShelfController.CORNICE_HEIGHT,
         )
         GLES30.glUniform1f(p["uLightsTime"], frame.lightsTime)
@@ -734,7 +736,7 @@ class ShelfRenderer(
         const val MATERIAL_WALL = 2
         const val MATERIAL_LABEL = 3
         const val MATERIAL_RIBBON = 4
-        const val MATERIAL_PLAQUE = 5
+        const val MATERIAL_LETTERING = 5
         const val MATERIAL_CARDBOARD = 6
         const val MATERIAL_TAPE = 7
         const val MATERIAL_PAPER = 8

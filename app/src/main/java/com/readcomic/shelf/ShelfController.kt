@@ -3,6 +3,8 @@ package com.readcomic.shelf
 import com.readcomic.curl.Spring2D
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.exp
@@ -11,6 +13,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.math.tan
 
 /**
@@ -57,10 +60,10 @@ class ComicDraw(
     val shine: Float = -1f,
 )
 
-/** The paper label saying [text], under a comic. */
+/** The name [text] engraved in the front of the shelf under a comic. */
 class LabelDraw(val text: String, val model: FloatArray)
 
-/** A brass sign with the name of a series, on the wall above [span] comics of it. */
+/** The name of a series in letters on the wall above [span] comics of it. */
 class SignDraw(val text: String, val span: Int, val model: FloatArray)
 
 /** Everything the renderer needs for one frame (all in meters, Y up, the wall is the plane z = 0). */
@@ -70,11 +73,14 @@ class ShelfFrame(
     val lightViewProj: FloatArray,
     val light: Vec3,
     val wall: FloatArray,
+    /** The boards of the shelves, the comics standing on them. */
     val planks: List<FloatArray>,
-    /** The top board of the bookcase, when it is on screen. */
+    /** The rails along the front of the shelves, rising a little above the boards. */
+    val rails: List<FloatArray>,
+    /** The board over the top shelf, with the light for it, when it is on screen. */
     val cornice: FloatArray?,
-    /** The brass name plate on the cornice (a quad). */
-    val plaque: FloatArray?,
+    /** "Collection" in letters on the wall above it (a quad). */
+    val header: FloatArray?,
     val comics: List<ComicDraw>,
     val labels: List<LabelDraw>,
     val signs: List<SignDraw>,
@@ -82,7 +88,7 @@ class ShelfFrame(
     val dim: Float,
     /** How much the comics that do not match a search are darkened, 0..1. */
     val searchDim: Float,
-    /** Comics in the collection, for the name plate. */
+    /** Comics in the collection, for the header. */
     val count: Int,
     /** Seconds since the shelf lights were switched on. */
     val lightsTime: Float,
@@ -93,7 +99,8 @@ class ShelfFrame(
 )
 
 /**
- * A wall of wooden shelves with the comics standing on them face out, leaning against the wall.
+ * A wall of slim oak shelves with the comics standing on them face out, each resting against the
+ * rail along the front of its shelf and leaning against the wall.
  * Scrolls vertically; a tapped comic comes off the shelf into the reader's hands, where it can be
  * turned around with a finger. Not thread-safe: lives on the render thread.
  */
@@ -315,11 +322,11 @@ class ShelfController(private val density: Float) {
         }
 
     /**
-     * From one shelf to the next: the comics standing on it and above them just the room the
-     * bookmark curling out of a comic and a series sign need.
+     * From one shelf to the next: the comics standing on it (however upright) and above them
+     * just the room the bookmark curling out of a comic and a series sign need.
      */
     val rowHeight: Float
-        get() = COMIC_HEIGHT * size.scale * cos(LEAN) + HEADROOM + PLANK_THICKNESS
+        get() = COMIC_HEIGHT * size.scale + HEADROOM + PLANK_THICKNESS
 
     private val slotWidth get() = SLOT_WIDTH
 
@@ -353,7 +360,8 @@ class ShelfController(private val density: Float) {
     private fun rowBase(row: Int) = -row * rowHeight
 
     private val corniceBottom get() = rowHeight - PLANK_THICKNESS
-    private val scrollTop get() = corniceBottom + CORNICE_HEIGHT + 0.10f - visibleHalfHeight
+    private val headerY get() = corniceBottom + CORNICE_HEIGHT + HEADER_GAP + HEADER_HEIGHT / 2f
+    private val scrollTop get() = headerY + HEADER_HEIGHT / 2f + 0.05f - visibleHalfHeight
     private val scrollBottom get() = min(scrollTop, rowBase(rows - 1) - 0.08f + visibleHalfHeight)
 
     private fun sizeOf(item: ShelfItem): Vec3 {
@@ -371,16 +379,29 @@ class ShelfController(private val density: Float) {
 
     private fun slotX(column: Int) = (column - (columns - 1) / 2f) * slotWidth
 
-    /** A comic standing on its shelf, bottom edge on the plank, top leaning against the wall. */
+    /**
+     * A comic standing on its shelf as it would: its bottom on the board, pushed against the rail
+     * at the front, its top leaning against the wall. A thin issue leans back further than a
+     * thick volume, which stands almost upright.
+     */
     private fun shelfPose(index: Int, size: Vec3): Pair<Vec3, Quat> {
         val row = index / columns
         val column = index % columns
-        val angle = -LEAN
-        val rotation = Quat.axisAngle(Vec3(1f, 0f, 0f), angle)
-        // Bottom back edge of the comic, in its own coordinates and then rotated.
-        val corner = rotation.rotate(Vec3(0f, -size.y / 2f, -size.z / 2f))
-        val rest = Vec3(slotX(column), rowBase(row), BOTTOM_Z)
-        return (rest - corner) to rotation
+        val rotation = Quat.axisAngle(Vec3(1f, 0f, 0f), -lean(size))
+        // Its bottom back edge on the board, its top back edge at the wall.
+        val bottom = rotation.rotate(Vec3(0f, -size.y / 2f, -size.z / 2f))
+        val top = rotation.rotate(Vec3(0f, size.y / 2f, -size.z / 2f))
+        return Vec3(slotX(column), rowBase(row) - bottom.y, WALL_GAP - top.z) to rotation
+    }
+
+    /**
+     * How far back a comic of [size] leans when it rests against the rail and the wall: seen
+     * from the side it then spans the depth of the shelf inside the rail.
+     */
+    internal fun lean(size: Vec3): Float {
+        val reach = PLANK_DEPTH - RAIL_DEPTH - WALL_GAP - RAIL_GAP
+        val diagonal = sqrt(size.y * size.y + size.z * size.z)
+        return (asin((reach / diagonal).coerceAtMost(1f)) - atan2(size.z, size.y)).coerceIn(MIN_LEAN, MAX_LEAN)
     }
 
     private fun eye() = Vec3(0f, cameraY + 0.06f, distance)
@@ -454,17 +475,17 @@ class ShelfController(private val density: Float) {
             return if (move.t < 0.5f) {
                 val u = move.t * 2f
                 val e = u * u
-                Vec3(move.from.x + (out - move.from.x) * e, move.from.y, move.from.z + 0.012f * u) to pose.second
+                Vec3(move.from.x + (out - move.from.x) * e, move.from.y + 0.006f * u, move.from.z) to pose.second
             } else {
                 val u = (move.t - 0.5f) * 2f
                 val e = 1f - (1f - u) * (1f - u)
                 val target = pose.first
-                Vec3(-out + (target.x + out) * e, target.y, target.z + 0.012f * (1f - u)) to pose.second
+                Vec3(-out + (target.x + out) * e, target.y + 0.006f * (1f - u), target.z) to pose.second
             }
         }
         val e = move.t * move.t * (3f - 2f * move.t)
-        // Along the shelf it slides, lifted a hair.
-        return (Vec3.lerp(move.from, pose.first, e) + Vec3(0f, 0.004f, 0.015f) * sin(PI.toFloat() * e)) to pose.second
+        // Along the shelf it slides behind the rail, lifted a hair.
+        return (Vec3.lerp(move.from, pose.first, e) + Vec3(0f, 0.006f, 0f) * sin(PI.toFloat() * e)) to pose.second
     }
 
     private fun easedHold(): Float {
@@ -477,9 +498,13 @@ class ShelfController(private val density: Float) {
         if (item.id != heldId) return shelf
         val hand = handPose(size, item.inProgress)
         val t = easedHold()
-        // Out towards the reader first, so it does not slide through the shelf.
-        val lift = Vec3(0f, 0.02f, 0.12f) * sin(PI.toFloat() * t)
-        return (Vec3.lerp(shelf.first, hand.first, t) + lift) to Quat.slerp(shelf.second, hand.second, t)
+        // First straight up, clear of the rail in front of it; then out towards the reader, so it
+        // does not slide through the shelf. Back onto the shelf the same way: over the rail, down.
+        val rise = (t / RISE_PART).coerceAtMost(1f)
+        val out = ((t - RISE_PART) / (1f - RISE_PART)).coerceAtLeast(0f)
+        val raised = shelf.first + Vec3(0f, RAIL_CLEARANCE * rise * rise * (3f - 2f * rise), 0f)
+        val lift = Vec3(0f, 0.02f, 0.12f) * sin(PI.toFloat() * out)
+        return (Vec3.lerp(raised, hand.first, out) + lift) to Quat.slerp(shelf.second, hand.second, out)
     }
 
     // endregion
@@ -496,30 +521,38 @@ class ShelfController(private val density: Float) {
         // Every shelf on screen, including empty ones below the collection.
         val topRow = max(0, floor(-(cameraY + halfH * 1.3f) / rowHeight).toInt())
         val bottomRow = ceil(-(cameraY - halfH * 1.3f) / rowHeight).toInt() + 1
+        val across = halfW * 2.6f
+        val boardDepth = PLANK_DEPTH - RAIL_DEPTH
         val planks = (topRow..bottomRow).map { row ->
             Mat4.compose(
-                Vec3(0f, rowBase(row) - PLANK_THICKNESS / 2f, PLANK_DEPTH / 2f),
+                Vec3(0f, rowBase(row) - PLANK_THICKNESS / 2f, boardDepth / 2f),
                 Quat.IDENTITY,
-                Vec3(halfW * 2.6f, PLANK_THICKNESS, PLANK_DEPTH),
+                Vec3(across, PLANK_THICKNESS, boardDepth),
+            )
+        }
+        // The rail: the front of the shelf, a little higher than the board, so nothing slides off.
+        val rails = (topRow..bottomRow).map { row ->
+            val height = PLANK_THICKNESS + RAIL_HEIGHT
+            Mat4.compose(
+                Vec3(0f, rowBase(row) + RAIL_HEIGHT - height / 2f, PLANK_DEPTH - RAIL_DEPTH / 2f),
+                Quat.IDENTITY,
+                Vec3(across, height, RAIL_DEPTH),
             )
         }
 
-        // The top board with the name plate, above the first shelf.
+        // Over the top shelf a board like the others, its light shining down on it; above it,
+        // "Collection" on the wall.
         val cornice = if (topRow == 0) {
             Mat4.compose(
-                Vec3(0f, corniceBottom + CORNICE_HEIGHT / 2f, (PLANK_DEPTH + CORNICE_OVERHANG) / 2f),
+                Vec3(0f, corniceBottom + CORNICE_HEIGHT / 2f, PLANK_DEPTH / 2f),
                 Quat.IDENTITY,
-                Vec3(halfW * 2.6f, CORNICE_HEIGHT, PLANK_DEPTH + CORNICE_OVERHANG),
+                Vec3(across, CORNICE_HEIGHT, PLANK_DEPTH),
             )
         } else {
             null
         }
-        val plaque = cornice?.let {
-            Mat4.compose(
-                Vec3(0f, corniceBottom + CORNICE_HEIGHT / 2f, PLANK_DEPTH + CORNICE_OVERHANG + 0.0008f),
-                Quat.IDENTITY,
-                Vec3(PLAQUE_WIDTH, PLAQUE_HEIGHT, 1f),
-            )
+        val header = cornice?.let {
+            Mat4.compose(Vec3(0f, headerY, LETTERING_Z), Quat.IDENTITY, Vec3(HEADER_WIDTH, HEADER_HEIGHT, 1f))
         }
 
         val comics = ArrayList<ComicDraw>()
@@ -550,10 +583,10 @@ class ShelfController(private val density: Float) {
             labels += LabelDraw(
                 item.label,
                 Mat4.compose(
-                    Vec3(slotX(index % columns), rowBase(row) - PLANK_THICKNESS / 2f, PLANK_DEPTH + 0.0006f),
+                    // In the middle of the front of the rail.
+                    Vec3(slotX(index % columns), rowBase(row) + (RAIL_HEIGHT - PLANK_THICKNESS) / 2f, PLANK_DEPTH + 0.0004f),
                     Quat.IDENTITY,
-                    // With its brass holder around it.
-                    Vec3(LABEL_WIDTH + 0.008f, LABEL_HEIGHT + 0.006f, 1f),
+                    Vec3(LABEL_WIDTH, LABEL_HEIGHT, 1f),
                 ),
             )
         }
@@ -574,8 +607,9 @@ class ShelfController(private val density: Float) {
             light = light,
             wall = wall,
             planks = planks,
+            rails = rails,
             cornice = cornice,
-            plaque = plaque,
+            header = header,
             comics = comics,
             labels = labels,
             signs = signs,
@@ -588,20 +622,20 @@ class ShelfController(private val density: Float) {
         )
     }
 
-    /** A brass sign on the wall above [span] comics of a row, starting at [column]. */
+    /** The name of a series on the wall above [span] comics of a row, starting at [column]. */
     private fun signModel(row: Int, column: Int, span: Int): FloatArray {
         val width = min(span * slotWidth - 0.05f, SIGN_MAX_WIDTH)
         val x = (slotX(column) + slotX(column + span - 1)) / 2f
         return Mat4.compose(
-            Vec3(x, rowBase(row) + signY, 0.0012f),
+            Vec3(x, rowBase(row) + signY, LETTERING_Z),
             Quat.IDENTITY,
             Vec3(width, SIGN_HEIGHT, 1f),
         )
     }
 
-    /** Height of the series signs above a shelf: just over the tops of the comics, under the next shelf. */
+    /** Height of the series names above a shelf: just over the tops of the comics, under the next shelf. */
     private val signY: Float
-        get() = min(COMIC_HEIGHT * size.scale * cos(LEAN) + SIGN_ABOVE, rowHeight - PLANK_THICKNESS - SIGN_HEIGHT / 2f - 0.008f)
+        get() = min(COMIC_HEIGHT * size.scale * cos(MIN_LEAN) + SIGN_ABOVE, rowHeight - PLANK_THICKNESS - SIGN_HEIGHT / 2f - 0.008f)
 
     /** Width / height of the sign above [span] comics, for its engraving. */
     fun signAspect(span: Int) = min(span * slotWidth - 0.05f, SIGN_MAX_WIDTH) / SIGN_HEIGHT
@@ -953,23 +987,41 @@ class ShelfController(private val density: Float) {
 
         /** The least height of the bookcase on screen, which in landscape sets how far the camera is. */
         private const val MIN_VISIBLE_HEIGHT = 0.64f
-        const val PLANK_THICKNESS = 0.034f
-        const val PLANK_DEPTH = 0.15f
-        const val BOTTOM_Z = 0.065f
-        const val LEAN = 0.19f
-        const val CORNICE_HEIGHT = 0.075f
-        const val CORNICE_OVERHANG = 0.012f
-        const val PLAQUE_WIDTH = 0.26f
-        const val PLAQUE_HEIGHT = 0.042f
+        /** The boards of the shelves: how thick, and how deep from the wall to the front of the rail. */
+        const val PLANK_THICKNESS = 0.026f
+        const val PLANK_DEPTH = 0.08f
+
+        /** The rail along the front of a shelf: how far it rises above the board, how thick it is. */
+        const val RAIL_HEIGHT = 0.014f
+        const val RAIL_DEPTH = 0.012f
+
+        /** Between the top of a leaning comic and the wall, between its bottom and the rail. */
+        private const val WALL_GAP = 0.002f
+        private const val RAIL_GAP = 0.0015f
+
+        /** However thin or thick a comic is, it leans back no less and no more than that (radians). */
+        private const val MIN_LEAN = 0.05f
+        private const val MAX_LEAN = 0.36f
+        const val CORNICE_HEIGHT = PLANK_THICKNESS
+        const val HEADER_WIDTH = 0.34f
+        const val HEADER_HEIGHT = 0.07f
+        private const val HEADER_GAP = 0.05f
+
+        /** Letters on the wall stand a few millimetres off it. */
+        private const val LETTERING_Z = 0.0015f
         const val LIGHTS_DONE = 3f
-        const val LABEL_WIDTH = 0.16f
-        const val LABEL_HEIGHT = 0.025f
+        const val LABEL_WIDTH = 0.17f
+        const val LABEL_HEIGHT = 0.022f
         const val SIGN_HEIGHT = 0.03f
         private const val SIGN_ABOVE = 0.03f
         const val SIGN_MAX_WIDTH = 0.42f
         private const val SEARCH_FADE = 0.25f
         private const val FOCUS_RATE = 7f
         private const val HOLD_OMEGA = 9f
+
+        /** Taken off the shelf, a comic first rises that high, over the rail, in that part of the way. */
+        private const val RAIL_CLEARANCE = RAIL_HEIGHT + 0.012f
+        private const val RISE_PART = 0.2f
 
         /** Air between the comic in hand and the edges of the room it has, in parts of the screen's height. */
         private const val HAND_MARGIN = 0.025f

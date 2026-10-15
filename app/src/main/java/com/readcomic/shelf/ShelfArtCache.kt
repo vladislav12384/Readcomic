@@ -17,7 +17,7 @@ interface ShelfArt {
     /** The small cover saved in the library. */
     fun cover(id: String): Bitmap?
 
-    /** The paper label saying [text] ("Saga", "№ 12"), shown on the shelf under a comic. */
+    /** [text] ("Saga", "№ 12") to engrave in the shelf under a comic: white letters on black. */
     fun label(text: String): Bitmap?
 
     /** A sharp front ([back] = false) or back cover for the comic in hand; may be slow. */
@@ -26,10 +26,10 @@ interface ShelfArt {
     /** What is printed on the spine: its colour and, on thicker comics, the title. */
     fun spine(id: String): Bitmap?
 
-    /** The engraving of the name plate (white letters on black) for a collection of [count] comics. */
-    fun plaque(count: Int): Bitmap?
+    /** The letters on the wall over the shelves (white on black) for a collection of [count] comics. */
+    fun header(count: Int): Bitmap?
 
-    /** The engraving of the sign of the series [name], [aspect] times as wide as high. */
+    /** The letters of the series [name] on the wall (white on black), [aspect] times as wide as high. */
     fun sign(name: String, aspect: Float): Bitmap?
 
     /**
@@ -138,7 +138,7 @@ class ShelfArtCache(
                     "spine" -> art.spine(id)
                     "sign" -> art.sign(id.substringAfter(':'), id.substringBefore(':').toFloat())
                     "box" -> art.box(id.toInt())
-                    else -> art.plaque(id.toInt())
+                    else -> art.header(id.toInt())
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "No picture for $key", e)

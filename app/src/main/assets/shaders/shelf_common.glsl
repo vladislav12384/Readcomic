@@ -2,10 +2,10 @@ precision highp float;
 precision highp sampler2DShadow;
 
 // Shared by the shelves (shelf.frag) and the box of new comics (unbox.frag). The shelves, lit
-// like a display cabinet: a strip of warm LEDs under every shelf washes the
-// comics and the wall below it, a soft room light casts the shadows (shadow map), and glossy
-// covers, varnished oak and brass mirror the bright room in front of the shelves with its big
-// window. Lighting is computed in linear colour and tone mapped at the end.
+// like a gallery wall: a strip of warm LEDs under every shelf washes the comics and the wall
+// below it, a soft room light casts the shadows (shadow map), and glossy covers mirror the
+// bright room in front of the shelves with its big window. Lighting is computed in linear
+// colour and tone mapped at the end.
 
 in vec3 vWorld;
 in vec3 vNormal;
@@ -15,13 +15,13 @@ in vec4 vLight;
 flat in int vFace;   // boxes: 0 front, 1 back, 2 left, 3 right, 4 top, 5 bottom; comics: their part (ComicShape)
 in float vPart;      // the same unrounded (torn strips keep their fade in it)
 
-uniform int uMaterial;        // 0 comic, 1 wood, 2 wall, 3 label, 4 ribbon, 5 name plate,
+uniform int uMaterial;        // 0 comic, 1 wood, 2 wall, 3 engraved name, 4 ribbon, 5 lettering on the wall,
                               // 6 cardboard, 7 tape, 8 wrapping paper, 9 torn strips, 10 glint
 uniform mat4 uModel;
 uniform mat3 uNormalMatrix;
 uniform sampler2D uCover;
 uniform sampler2D uBack;
-uniform sampler2D uLabel;     // the label's paper, or the engraving of the name plate
+uniform sampler2D uLabel;     // letters to engrave or to put on the wall (white on black); the print on the box
 uniform float uHasCover;
 uniform float uHasBack;
 uniform float uHasLabel;
@@ -37,7 +37,7 @@ uniform sampler2DShadow uShadow;
 uniform sampler2DShadow uComicShadow;   // the same with the comics alone, for the comics
 uniform float uShadowTexel;
 uniform float uRowHeight;
-uniform vec4 uPlank;          // shelf thickness, shelf depth, z of the comics' bottom edge, cornice height
+uniform vec4 uPlank;          // shelf thickness, depth to the front of the rail, rail height above the shelf, top board thickness
 uniform vec3 uWall;           // paint of the back wall, linear
 uniform float uShine;         // a glint running over a cover, 0..1; negative for none
 uniform vec4 uWrap;           // wrapping: comic width, height, how far the paper reaches past the edges, 1 if torn
@@ -135,6 +135,7 @@ float stripOn(float bay) {
 vec3 stripLight(vec3 p, vec3 n) {
     float bay = bayOf(p.y);
     float ys = (1.0 - bay) * uRowHeight - uPlank.x - 0.004;
+    // The strip runs 8 mm behind the rail, which is 12 mm thick (see wood() in shelf.frag).
     vec2 d = vec2(ys - p.y, uPlank.y - 0.02 - p.z);
     float dist = max(length(d), 1e-4);
     vec3 l = vec3(0.0, d / dist);
@@ -292,7 +293,9 @@ vec3 comic(vec3 v) {
             a = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.8 : PAPER * 0.5;
         }
         vec3 color = a * irradiance(n, occlusion) + sparkle(n, v, 300.0, 1.2);
-        color = coat(color, n, v, binding > 1.5 ? 0.8 : 1.0, binding > 1.5 ? 0.02 : 0.0);
+        // On the shelf the room is mirrored more faintly than in the hands: the print stays rich.
+        float gloss = uHeld > 0.5 ? 1.0 : 0.5;
+        color = coat(color, n, v, (binding > 1.5 ? 0.8 : 1.0) * gloss, binding > 1.5 ? 0.02 : 0.0);
 #ifdef UNBOX
         if (part == 0 && uWrap.w > 0.5) {
             // Where the paper is torn open, its edges throw a soft shadow on the cover.

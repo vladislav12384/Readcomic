@@ -1,36 +1,64 @@
 #version 300 es
 
-// The wall of shelves: wood, wall, labels, signs, bookmarks and the comics on them.
+// The wall of shelves: oak shelves, the wall, names engraved and lettered, bookmarks and the
+// comics standing on the shelves.
 
 #include shelf_common
 
 // region Shelves
 
+// The rail along the front of a shelf: as deep as ShelfController.RAIL_DEPTH.
+const float RAIL_DEPTH = 0.012;
+
 vec3 woodAlbedo(vec3 p) {
-    // Oak: long streaks along the board, a little wavy, with fine pores.
-    float across = p.y * 0.6 + p.z;
-    float warp = fbm(vec2(p.x * 1.4, across * 11.0));
-    float streak = fract(across * 46.0 + warp * 2.4 + p.x * 0.15);
-    float rings = smoothstep(0.0, 0.35, streak) * (1.0 - smoothstep(0.55, 1.0, streak));
-    float pores = noise(vec2(p.x * 40.0, across * 900.0));
-    vec3 light = vec3(0.45, 0.26, 0.12);
-    vec3 dark = vec3(0.22, 0.11, 0.05);
-    return mix(light, dark, rings * 0.55 + pores * 0.2 + warp * 0.15);
+    // Pale oak, the grain running along the shelf: long streaks, gently wavy, with fine lines
+    // and pores between them.
+    float across = p.y * 0.5 + p.z;
+    float warp = fbm(vec2(p.x * 1.2, across * 9.0));
+    float streak = fract(across * 70.0 + warp * 2.2 + p.x * 0.06);
+    float rings = smoothstep(0.0, 0.25, streak) * (1.0 - smoothstep(0.45, 1.0, streak));
+    float lines = smoothstep(0.55, 0.9, noise(vec2(p.x * 5.0, across * 2600.0 + warp * 40.0)));
+    float pores = noise(vec2(p.x * 90.0, across * 1800.0));
+    float fleck = smoothstep(0.7, 0.92, noise(vec2(p.x * 9.0, across * 160.0)));
+    vec3 light = vec3(0.60, 0.43, 0.26);
+    vec3 dark = vec3(0.37, 0.24, 0.13);
+    return mix(light, dark, rings * 0.5 + lines * 0.22 + pores * 0.12 + warp * 0.12 + fleck * 0.12);
+}
+
+// Oiled oak: soft, satin, only a faint sheen of the room on it.
+vec3 woodShade(vec3 p, vec3 n, vec3 v, float occlusion) {
+    vec3 color = woodAlbedo(p) * irradiance(n, occlusion) + sparkle(n, v, 24.0, 0.06);
+    return coat(color, n, v, 0.22, 0.3);
 }
 
 vec3 wood(vec3 v) {
-    vec3 n = bevelNormal(0.004);
+    vec3 n = bevelNormal(0.0035);
     vec3 p = vWorld;
+    float inner = uPlank.y - RAIL_DEPTH;
+    float floorY = -bayOf(p.y + 0.001) * uRowHeight;
     float occlusion = 1.0;
-    if (vFace == 4) occlusion = 1.0 - 0.55 * exp(-p.z / 0.03);    // top, where it meets the wall
-    if (vFace == 5) occlusion = 0.6;                               // underside
-    vec3 color = woodAlbedo(p) * irradiance(n, occlusion) + sparkle(n, v, 60.0, 0.25);
-    color = coat(color, n, v, 0.55, 0.12);
+    if (vFace == 4 && p.z < inner - 0.0005) {
+        // The top of a board: in shade where it meets the wall and at the foot of the rail.
+        occlusion = (1.0 - 0.5 * exp(-p.z / 0.018)) * (1.0 - 0.45 * exp(-(inner - p.z) / 0.007));
+    }
+    // The inside of the rail, facing the comics: darker down by the board.
+    if (vFace == 1 && p.z > inner - 0.0005) occlusion = 1.0 - 0.45 * exp(-(p.y - floorY) / 0.006);
+    if (vFace == 5) occlusion = 0.9;                               // underside
+    vec3 color = woodShade(p, n, v, occlusion);
+    // Underneath, the light thrown back by the wall and the comics below.
+    if (vFace == 5) color += woodAlbedo(p) * STRIP * 0.12 * stripOn(bayOf(p.y - 0.001));
     if (vFace == 5) {
-        // The light strip itself: a frosted line near the front edge of the underside.
+        // The light: a slim aluminium channel let into the underside just behind the rail, its
+        // opal cover glowing evenly, the wood around it lit by it.
         float bay = bayOf(p.y - 0.001);
-        float strip = band(p.z, uPlank.y - 0.02, 0.006, 0.0015);
-        color = mix(color, STRIP * 9.0, strip * stripOn(bay));
+        float z = inner - 0.008;
+        float on = stripOn(bay);
+        float channel = band(p.z, z, 0.0055, 0.0004);
+        float opal = band(p.z, z, 0.004, 0.0012);
+        vec3 metal = vec3(0.30, 0.30, 0.31) * irradiance(n, 0.8);
+        color = mix(color, metal, channel);
+        color = mix(color, STRIP * 1.15, opal * on);
+        color += STRIP * exp(-abs(p.z - z) / 0.01) * 0.12 * on * (1.0 - channel);
     }
     return color;
 }
@@ -41,60 +69,44 @@ vec3 wall(vec3 v) {
     float floorY = bay < 0.0 ? uRowHeight - uPlank.x + uPlank.w : -bay * uRowHeight;
     float ceilingY = (1.0 - bay) * uRowHeight - uPlank.x;
     // Darker in the corners where the shelves meet the wall.
-    float occlusion = (1.0 - 0.5 * exp(-(p.y - floorY) / 0.035));
-    if (bay >= 0.0) occlusion *= 1.0 - 0.35 * exp(-(ceilingY - p.y) / 0.025);
-    // Painted boards with narrow grooves between them, like the back of a built-in bookcase.
-    float board = vWorld.x / 0.085 + 0.5;
-    float groove = (0.5 - abs(fract(board) - 0.5)) * 0.085;
-    float edge = fwidth(board) * 0.085;
-    float dark = 1.0 - smoothstep(0.0008, 0.0016 + edge, groove);
-    float lit = (1.0 - smoothstep(0.0016, 0.0032 + edge, groove)) * (1.0 - dark) * (1.0 - step(0.5, fract(board)));
-    float grain = fbm(p.xy * vec2(30.0, 2.0)) * 0.06 + noise(p.xy * 300.0) * 0.03;
-    vec3 a = uWall * (0.94 + grain) * (1.0 - 0.45 * dark) * (1.0 + 0.25 * lit);
-    vec3 n = vec3(0.0, 0.0, 1.0);
-    return a * irradiance(n, occlusion);
-}
-
-vec3 brass(vec3 n, vec3 v) {
-    vec3 r = reflect(-v, n);
-    vec3 f = BRASS + (1.0 - BRASS) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
-    return f * (environment(r, 0.06) * 0.8 + irradiance(n, 1.0) * 0.25) + sparkle(n, v, 120.0, 2.0) * BRASS;
+    float occlusion = (1.0 - 0.5 * exp(-(p.y - floorY) / 0.03));
+    if (bay >= 0.0) occlusion *= 1.0 - 0.3 * exp(-(ceilingY - p.y) / 0.02);
+    // Smooth limewash: soft clouds of slightly lighter and darker paint, a faint grain.
+    float clouds = fbm(p.xy * 3.2) - 0.5;
+    float strokes = fbm(vec2(p.x * 7.0 + p.y * 3.0, p.y * 9.0 - p.x * 2.0)) - 0.5;
+    float grain = noise(p.xy * 420.0) - 0.5;
+    vec3 a = uWall * (1.0 + clouds * 0.12 + strokes * 0.06 + grain * 0.035);
+    return a * irradiance(vec3(0.0, 0.0, 1.0), occlusion);
 }
 
 vec3 label(vec3 v) {
-    // A paper label in a brass holder.
-    vec3 size = boxSize();
-    vec2 edge = vec2(0.004, 0.003) / size.xy;
-    vec2 inner = (vUV - edge) / (1.0 - 2.0 * edge);
-    vec2 border = min(vUV, 1.0 - vUV) * size.xy;
-    if (inner.x > 0.0 && inner.x < 1.0 && inner.y > 0.0 && inner.y < 1.0) {
-        vec3 a = uHasLabel > 0.5 ? toLinear(texture(uLabel, inner).rgb) : PAPER;
-        // The holder's lip throws a little shadow on the paper.
-        float lip = min(inner.y, min(inner.x * size.x / size.y, 1.0 - inner.y));
-        a *= 0.75 + 0.25 * smoothstep(0.0, 0.12, lip);
-        return a * irradiance(vec3(0.0, 0.0, 1.0), 1.0);
-    }
-    // The brass frame, rounded towards its edges.
-    float m = min(border.x, border.y);
-    vec2 side = vUV.x < edge.x || vUV.x > 1.0 - edge.x ? vec2(sign(vUV.x - 0.5), 0.0) : vec2(0.0, sign(vUV.y - 0.5));
-    float tilt = (0.5 - clamp(m / 0.004, 0.0, 1.0)) * 1.4;
-    vec3 n = normalize(uNormalMatrix * normalize(vec3(side * tilt, 1.0)));
-    return brass(n, v);
+    // The name engraved in the front of the rail: the oak around it as everywhere on the rail,
+    // the letters cut in and darkened, their upper edges in the shade of the cut.
+    vec3 n = normalize(uNormalMatrix * vec3(0.0, 0.0, 1.0));
+    // The grain exactly as on the rail, which this lies a hair in front of.
+    vec3 color = woodShade(vec3(vWorld.xy, uPlank.y), n, v, 1.0);
+    if (uHasLabel < 0.5) return color;
+    float ink = texture(uLabel, vUV).r;
+    float above = texture(uLabel, vUV - vec2(0.0, 0.08)).r;
+    // Burnt in: dark brown in the cut, darker still under its upper edge.
+    vec3 burnt = vec3(0.22, 0.15, 0.10) * (1.0 - 0.3 * (1.0 - above));
+    return mix(color, color * burnt, ink);
 }
 
-vec3 namePlate(vec3 v) {
-    // Brushed brass with engraved letters filled with black enamel.
+// Letters on the wall (the name of a series, "Collection"): matte, standing a few millimetres
+// off it, so they throw a soft shadow down and away from the light; light ones on a dark wall,
+// dark ones on a light wall.
+vec3 lettering(vec3 v) {
+    vec3 color = wall(v);
+    if (uHasLabel < 0.5) return color;
     vec3 size = boxSize();
-    vec2 border = min(vUV, 1.0 - vUV) * size.xy;
-    float m = min(border.x, border.y);
-    vec2 side = border.x < border.y ? vec2(sign(vUV.x - 0.5), 0.0) : vec2(0.0, sign(0.5 - vUV.y));
-    float tilt = (1.0 - clamp(m / 0.003, 0.0, 1.0)) * 1.2;
-    vec3 n = normalize(uNormalMatrix * normalize(vec3(side * tilt, 1.0)));
-    float brushed = noise(vec2(vUV.x * 3.0, vUV.y * 400.0)) * 0.12;
-    vec3 color = brass(n, v) * (0.94 + brushed);
-    float ink = uHasLabel > 0.5 ? texture(uLabel, vUV).r : 0.0;
-    vec3 enamel = vec3(0.012, 0.010, 0.009) + environment(reflect(-v, n), 0.02) * fresnel(n, v, 0.04);
-    return mix(color, enamel, ink);
+    float ink = texture(uLabel, vUV).r;
+    vec2 away = vec2(-0.0016 / size.x, -0.0026 / size.y);
+    float shadow = textureLod(uLabel, vUV + away, 2.5).r;
+    color *= 1.0 - 0.5 * shadow * (1.0 - ink);
+    vec3 paint = luminance(uWall) < 0.25 ? vec3(0.78, 0.75, 0.70) : vec3(0.045, 0.04, 0.036);
+    vec3 n = normalize(uNormalMatrix * vec3(0.0, 0.0, 1.0));
+    return mix(color, paint * irradiance(n, 1.0) + sparkle(n, v, 16.0, 0.03), ink);
 }
 
 // A satin bookmark: woven along its length, so its sheen runs across it in a band that slides
@@ -138,7 +150,7 @@ void main() {
     } else if (uMaterial == 4) {
         color = ribbon(v);
     } else {
-        color = namePlate(v);
+        color = lettering(v);
     }
 
     // The comic in hand stands out: the rest of the room dims and loses some colour.
