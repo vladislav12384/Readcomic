@@ -83,6 +83,54 @@ class ShelfControllerTest {
         assertTrue(c.frame().comics.last().held)
     }
 
+    /** Top and bottom (pixels) of the comic in hand on a screen [width] by [height]. */
+    private fun ShelfController.heldSpan(width: Int, height: Int): Triple<Float, Float, Pair<Float, Float>> {
+        val frame = frame()
+        val held = frame.comics.last()
+        assertTrue(held.held)
+        // The model is scaled to the comic: its corners are at ±0.5.
+        val corners = listOf(-0.5f, 0.5f).flatMap { x -> listOf(-0.5f, 0.5f).flatMap { y -> listOf(-0.5f, 0.5f).map { z -> Vec3(x, y, z) } } }
+        val screen = corners.map {
+            val ndc = Mat4.transformPoint(frame.viewProj, Mat4.transformPoint(held.model, it))
+            (ndc.x + 1f) / 2f * width to (1f - ndc.y) / 2f * height
+        }
+        return Triple(screen.minOf { it.second }, screen.maxOf { it.second }, screen.minOf { it.first } to screen.maxOf { it.first })
+    }
+
+    @Test
+    fun theComicInHandKeepsClearOfItsCard() {
+        // A short phone, and a card taking the lower third of it.
+        val c = controller(1080, 1920)
+        val (x, y) = c.screenOf("c1", 1080, 1920)
+        c.tap(x, y)
+        c.settle()
+        val (freeTop, freeBottom) = c.heldSpan(1080, 1920)
+        c.setHandRoom(0f, 70f, 0f, 760f)
+        // It makes way smoothly, not with a jump.
+        var last = freeBottom
+        repeat(90) {
+            c.step(1f / 60f)
+            val (_, now) = c.heldSpan(1080, 1920)
+            assertTrue("moving up: $last -> $now", now <= last + 0.5f && last - now < 40f)
+            last = now
+        }
+        c.settle()
+        val (top, bottom) = c.heldSpan(1080, 1920)
+        assertTrue("above the card: $bottom", bottom < 1920f - 760f)
+        assertTrue("below the status bar: $top", top > 70f)
+        // Before, with nothing in the way, it was as large as ever.
+        assertTrue(freeBottom - freeTop > bottom - top)
+
+        // In landscape the card is on the right.
+        val wide = controller(2280, 1080)
+        wide.setHandRoom(0f, 0f, 1000f, 0f)
+        wide.take("c2")
+        wide.settle()
+        val (_, _, across) = wide.heldSpan(2280, 1080)
+        assertTrue("left of the card: ${across.second}", across.second < 2280f - 1000f)
+        assertTrue(across.first > 0f)
+    }
+
     @Test
     fun turningInHandSettlesFacingFrontOrBack() {
         val c = controller()

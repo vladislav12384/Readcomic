@@ -152,6 +152,24 @@ class ShelfController(private val density: Float) {
     private var handAnchorY = 0.42f
     private var handFill = 0.6f
 
+    /**
+     * Room the UI takes from the edges of the view (left, top, right, bottom, pixels) while a
+     * comic is in hand: its card, the status bar. The comic in hand keeps out of it; [shownRoom]
+     * follows [room] smoothly, so it moves aside instead of jumping.
+     */
+    private val room = FloatArray(4)
+    private val shownRoom = FloatArray(4)
+
+    /** The UI takes [left], [top], [right] and [bottom] pixels from the edges of the view. */
+    fun setHandRoom(left: Float, top: Float, right: Float, bottom: Float) {
+        room[0] = max(left, 0f)
+        room[1] = max(top, 0f)
+        room[2] = max(right, 0f)
+        room[3] = max(bottom, 0f)
+        // Nothing in hand: nothing to see moving.
+        if (heldId == null) room.copyInto(shownRoom)
+    }
+
     val isHolding get() = heldId != null
 
     // Shelf lights: they switch on one after another when the library opens.
@@ -329,6 +347,8 @@ class ShelfController(private val density: Float) {
             handAnchorY = 0.38f
             handFill = 0.52f
         }
+        // Turned round: everything is laid out anew, no need to slide.
+        room.copyInto(shownRoom)
         clampScroll(hard = true)
         applyPendingScroll()
     }
@@ -393,12 +413,35 @@ class ShelfController(private val density: Float) {
     }
 
     private fun handPose(size: Vec3, yaw: Float = this.yaw, pitch: Float = this.pitch): Pair<Vec3, Quat> {
-        val depth = size.y / (2f * tan(FOV / 2f) * handFill)
-        val position = pointInFront(handAnchorX, handAnchorY, depth)
+        val place = handPlace(size)
+        val depth = size.y / (2f * tan(FOV / 2f) * place.z)
+        val position = pointInFront(place.x, place.y, depth)
         // Face the eye (the camera looks slightly down), then the reader's own turning.
         val face = Quat.axisAngle(Vec3(1f, 0f, 0f), 0.05f)
         val rotation = Quat.axisAngle(Vec3(0f, 1f, 0f), yaw) * Quat.axisAngle(Vec3(1f, 0f, 0f), pitch) * face
         return position to rotation
+    }
+
+    /**
+     * Where the centre of the comic in hand is on screen (x, y in 0..1) and what part of the
+     * screen's height it fills (z): as set for the shape of the screen, but moved, and if need be
+     * made smaller, so that all of it stays clear of the room the UI takes.
+     */
+    internal fun handPlace(size: Vec3): Vec3 {
+        val left = shownRoom[0] / viewWidth
+        val top = shownRoom[1] / viewHeight
+        val right = 1f - shownRoom[2] / viewWidth
+        val bottom = 1f - shownRoom[3] / viewHeight
+        val marginY = HAND_MARGIN
+        val marginX = HAND_MARGIN * viewHeight / viewWidth
+        // Its width on screen for each part of the height it fills.
+        val across = size.x / size.y * viewHeight / viewWidth
+        val fill = min(handFill, min(bottom - top - 2f * marginY, (right - left - 2f * marginX) / across))
+            .coerceAtLeast(MIN_HAND_FILL)
+        fun within(value: Float, low: Float, high: Float) = if (low <= high) value.coerceIn(low, high) else (low + high) / 2f
+        val x = within(handAnchorX, left + marginX + fill * across / 2f, right - marginX - fill * across / 2f)
+        val y = within(handAnchorY, top + marginY + fill / 2f, bottom - marginY - fill / 2f)
+        return Vec3(x, y, fill)
     }
 
     /** The line of sight through the screen point (x, y) in pixels: its near and far ends. */
@@ -847,6 +890,14 @@ class ShelfController(private val density: Float) {
             animating = true
         }
 
+        // The card of the comic in hand came or changed: the comic makes way for it.
+        for (k in room.indices) {
+            if (shownRoom[k] == room[k]) continue
+            shownRoom[k] += (room[k] - shownRoom[k]) * (1f - exp(-ROOM_RATE * dt))
+            if (abs(room[k] - shownRoom[k]) < 0.5f) shownRoom[k] = room[k]
+            animating = true
+        }
+
         val target = if (holding) 1f else 0f
         hold.step(target, 0f, HOLD_OMEGA, dt)
         if (heldId != null) {
@@ -928,6 +979,13 @@ class ShelfController(private val density: Float) {
         private const val SEARCH_FADE = 0.25f
         private const val FOCUS_RATE = 7f
         private const val HOLD_OMEGA = 9f
+
+        /** Air between the comic in hand and the edges of the room it has, in parts of the screen's height. */
+        private const val HAND_MARGIN = 0.025f
+
+        /** However little room there is, the comic in hand is not made smaller than that. */
+        private const val MIN_HAND_FILL = 0.3f
+        private const val ROOM_RATE = 9f
         private const val ROTATE_PER_PIXEL = 0.0075f
         private const val MAX_PITCH = 0.8f
         private const val ROTATE_FRICTION = 2.2f

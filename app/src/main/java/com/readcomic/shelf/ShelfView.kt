@@ -109,6 +109,9 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
 
     fun putBack() = onGl { controller.putBack() }
 
+    /** Pixels the UI takes from each edge of the view while a comic is in hand; the comic keeps clear of them. */
+    fun setHandRoom(left: Float, top: Float, right: Float, bottom: Float) = onGl { controller.setHandRoom(left, top, right, bottom) }
+
     /** How large the comics look on the shelves. */
     fun setShelfSize(size: ShelfSize) = onGl { controller.size = size }
 

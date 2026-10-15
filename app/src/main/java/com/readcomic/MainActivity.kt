@@ -164,6 +164,7 @@ private fun App(viewModel: LibraryViewModel) {
     val shelfMode by viewModel.shelfMode.collectAsStateWithLifecycle()
     val shelfTheme by viewModel.shelfTheme.collectAsStateWithLifecycle()
     val shelfHintDone by viewModel.shelfHintDone.collectAsStateWithLifecycle()
+    val handHint by viewModel.handHint.collectAsStateWithLifecycle()
     val shelfOrder by viewModel.shelfOrder.collectAsStateWithLifecycle()
     val shelfSize by viewModel.shelfSize.collectAsStateWithLifecycle()
     val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
@@ -301,6 +302,8 @@ private fun App(viewModel: LibraryViewModel) {
                 onShelfScroll = { viewModel.shelfScroll = it },
                 onShelfThemeChange = viewModel::setShelfTheme,
                 onShelfHintSeen = viewModel::shelfHintSeen,
+                handHint = handHint,
+                onHandHintShown = viewModel::handHintShown,
                 folders = FolderState(
                     folders = folders,
                     comicsIn = { folder -> comics.count { it.folder == folder.uri } },

@@ -109,6 +109,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _shelfHintDone = MutableStateFlow(prefs.getBoolean(KEY_SHELF_HINT, false))
     val shelfHintDone: StateFlow<Boolean> = _shelfHintDone.asStateFlow()
 
+    /** Whether the card of a comic in hand still says how to turn it and open it (the first few times). */
+    private val _handHint = MutableStateFlow(prefs.getInt(KEY_HAND_HINTS, 0) < HAND_HINTS)
+    val handHint: StateFlow<Boolean> = _handHint.asStateFlow()
+
     init {
         // New comics may have appeared in the watched folders while the app was closed.
         viewModelScope.launch {
@@ -247,6 +251,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putBoolean(KEY_SHELF_HINT, true) }
     }
 
+    fun handHintShown() {
+        val shown = prefs.getInt(KEY_HAND_HINTS, 0) + 1
+        prefs.edit { putInt(KEY_HAND_HINTS, shown) }
+        _handHint.value = shown < HAND_HINTS
+    }
+
     fun setShelfMode(enabled: Boolean) {
         _shelfMode.value = enabled
         prefs.edit { putBoolean(KEY_SHELF_MODE, enabled) }
@@ -289,5 +299,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_GROUP_SERIES = "group_series"
         private const val KEY_UNBOX_SOUND = "unbox_sound"
         private const val KEY_BOX_HINT = "box_hint"
+        private const val KEY_HAND_HINTS = "hand_hints"
+        private const val HAND_HINTS = 3
     }
 }

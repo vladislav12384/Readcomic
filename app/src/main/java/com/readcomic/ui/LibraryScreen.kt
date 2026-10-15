@@ -89,6 +89,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -101,7 +102,10 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -109,6 +113,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -151,6 +156,9 @@ fun LibraryScreen(
     onStartOver: (ComicEntry) -> Unit = {},
     /** The box of new comics: what it does, and what the reader does with it. */
     unboxing: UnboxSettings = UnboxSettings(),
+    /** The card of a comic in hand still says how to turn it and open it. */
+    handHint: Boolean = false,
+    onHandHintShown: () -> Unit = {},
 ) {
     var toRemove by remember { mutableStateOf<ComicEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -180,6 +188,8 @@ fun LibraryScreen(
             onShelfSizeChange = onShelfSizeChange,
             onStartOver = onStartOver,
             unboxing = unboxing,
+            handHint = handHint,
+            onHandHintShown = onHandHintShown,
         )
     } else {
         GridLibrary(
@@ -258,6 +268,8 @@ private fun ShelfLibrary(
     onShelfSizeChange: (ShelfSize) -> Unit,
     onStartOver: (ComicEntry) -> Unit,
     unboxing: UnboxSettings,
+    handHint: Boolean,
+    onHandHintShown: () -> Unit,
 ) {
     val context = LocalContext.current
     // New comics wait in their box until unwrapped; only the others stand on the shelves.
@@ -287,6 +299,19 @@ private fun ShelfLibrary(
     val currentComics by rememberUpdatedState(comics)
     val currentOnOpen by rememberUpdatedState(onOpen)
     val currentOnHintSeen by rememberUpdatedState(onHintSeen)
+    // The first few times a comic is taken its card says how to turn it and open it.
+    var handHintFor by remember { mutableStateOf<String?>(null) }
+    val currentHandHint by rememberUpdatedState(handHint)
+    val currentOnHandHintShown by rememberUpdatedState(onHandHintShown)
+    LaunchedEffect(heldId) {
+        val id = heldId ?: return@LaunchedEffect
+        if (currentHandHint && handHintFor != id) {
+            handHintFor = id
+            currentOnHandHintShown()
+        }
+    }
+    // The size of the card of the comic in hand, kept for the next one (cards are much alike).
+    var cardSize by remember { mutableStateOf(IntSize.Zero) }
 
     LaunchedEffect(view, placed, aspects) {
         val shelf = view ?: return@LaunchedEffect
@@ -520,6 +545,25 @@ private fun ShelfLibrary(
             )
         }
 
+        // The comic in hand keeps clear of its card and of the status bar: what they take from
+        // each edge of the screen, in pixels.
+        val insets = SafeInsets
+        val layoutDirection = LocalLayoutDirection.current
+        val handRoom = with(LocalDensity.current) {
+            val left = insets.getLeft(this, layoutDirection).toFloat()
+            val top = insets.getTop(this).toFloat()
+            val right = insets.getRight(this, layoutDirection).toFloat()
+            val bottom = insets.getBottom(this).toFloat()
+            when {
+                cardSize == IntSize.Zero -> Rect(left, top, right, bottom)
+                landscape -> Rect(left, top, right + 16.dp.toPx() + cardSize.width, bottom)
+                else -> Rect(left, top, right, bottom + 12.dp.toPx() + cardSize.height)
+            }
+        }
+        LaunchedEffect(view, handRoom) {
+            view?.setHandRoom(handRoom.left, handRoom.top, handRoom.right, handRoom.bottom)
+        }
+
         // The card of the comic in hand: at the bottom in portrait, on the right in landscape.
         AnimatedContent(
             targetState = held,
@@ -551,11 +595,13 @@ private fun ShelfLibrary(
                 HeldComicCard(
                     entry = entry,
                     coverFile = coverFile(entry),
+                    hint = entry.id == handHintFor,
                     onRead = { if (entry.isFinished) onStartOver(entry) else onOpen(entry) },
                     onRemove = { onRemove(entry) },
                     onPutBack = { view?.putBack() },
                     onSeries = { onNameSeries(entry) },
                     onStartOver = { onStartOver(entry) },
+                    modifier = Modifier.onSizeChanged { cardSize = it },
                 )
             } else {
                 Spacer(Modifier.fillMaxWidth())
@@ -870,16 +916,22 @@ private fun EmptyShelves(modifier: Modifier) {
     }
 }
 
-/** The comic in hand: title, progress and buttons, tinted with the colour of its cover. */
+/**
+ * The comic in hand: title, progress and buttons, tinted with the colour of its cover. Kept
+ * small, so that the comic itself has most of the screen.
+ */
 @Composable
 private fun HeldComicCard(
     entry: ComicEntry,
     coverFile: File,
+    /** Says how to turn the comic and open it (the first few times). */
+    hint: Boolean,
     onRead: () -> Unit,
     onRemove: () -> Unit,
     onPutBack: () -> Unit,
     onSeries: () -> Unit,
     onStartOver: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val accent by produceState(Color(0xFFB0703A), coverFile) {
         withContext(Dispatchers.IO) { LibraryShelfArt.coverAccent(coverFile) }?.let { value = Color(it) }
@@ -891,10 +943,11 @@ private fun HeldComicCard(
     val reading = entry.currentPage > 0 && !entry.isFinished
 
     Surface(
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(24.dp),
         color = Color.Transparent,
         contentColor = ShelfInk,
-        shadowElevation = 16.dp,
+        shadowElevation = 12.dp,
+        modifier = modifier,
     ) {
         Column(
             Modifier
@@ -904,7 +957,7 @@ private fun HeldComicCard(
                         1f to lerp(tint, Color.Black, 0.86f).copy(alpha = 0.96f),
                     ),
                 )
-                .padding(start = 22.dp, end = 10.dp, top = 10.dp, bottom = 18.dp),
+                .padding(start = 18.dp, end = 4.dp, top = 4.dp, bottom = 14.dp),
         ) {
             Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f).padding(top = 10.dp)) {
@@ -912,14 +965,13 @@ private fun HeldComicCard(
                         entry.title,
                         fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 22.sp,
-                        lineHeight = 27.sp,
+                        fontSize = 18.sp,
+                        lineHeight = 22.sp,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     val credits = listOfNotNull(entry.series?.let { "Серия «$it»" }, entry.writer, entry.year?.toString()).joinToString(" · ")
                     if (credits.isNotEmpty()) {
-                        Spacer(Modifier.height(2.dp))
                         Text(
                             credits,
                             style = MaterialTheme.typography.bodySmall,
@@ -929,103 +981,89 @@ private fun HeldComicCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Spacer(Modifier.height(4.dp))
                     Text(
                         when {
                             entry.isFinished -> "Прочитан · ${pagesCount(entry.pageCount)}"
-                            reading -> "Стр. ${entry.currentPage + 1} из ${entry.pageCount}"
+                            reading -> "Стр. ${entry.currentPage + 1} из ${entry.pageCount} · ${(entry.progress * 100).roundToInt()}%"
                             else -> "${pagesCount(entry.pageCount)} · ещё не начат"
                         },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = ShelfInk.copy(alpha = 0.72f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ShelfInk.copy(alpha = 0.75f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp),
                     )
                 }
                 IconButton(onClick = onPutBack) {
                     Icon(Icons.Filled.Close, contentDescription = "Поставить на полку", tint = ShelfInk.copy(alpha = 0.7f))
                 }
             }
-            Column(Modifier.padding(end = 12.dp)) {
+            Column(Modifier.padding(end = 14.dp)) {
                 if (reading) {
-                    Spacer(Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LinearProgressIndicator(
-                            progress = { entry.progress },
-                            modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(50)),
-                            color = button,
-                            trackColor = Color.White.copy(alpha = 0.14f),
-                            drawStopIndicator = {},
-                            gapSize = 0.dp,
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            "${(entry.progress * 100).roundToInt()}%",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = ShelfInk.copy(alpha = 0.8f),
-                        )
-                    }
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { entry.progress },
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50)),
+                        color = button,
+                        trackColor = Color.White.copy(alpha = 0.14f),
+                        drawStopIndicator = {},
+                        gapSize = 0.dp,
+                    )
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = onRead,
                         colors = ButtonDefaults.buttonColors(containerColor = button, contentColor = onButton),
-                        modifier = Modifier.weight(1f).height(52.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        modifier = Modifier.weight(1f).height(46.dp),
                     ) {
-                        Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
+                        Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text(
                             when {
                                 entry.isFinished -> "Перечитать"
                                 reading -> "Продолжить"
                                 else -> "Читать"
                             },
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Spacer(Modifier.width(10.dp))
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.1f))
-                            .clickable(onClickLabel = "Серия", onClick = onSeries),
-                    ) {
-                        Icon(SeriesIcon, contentDescription = "Серия", tint = ShelfInk.copy(alpha = 0.75f), modifier = Modifier.size(24.dp))
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.1f))
-                            .clickable(onClickLabel = "Убрать из коллекции", onClick = onRemove),
-                    ) {
-                        Icon(Icons.Filled.Delete, contentDescription = "Убрать из коллекции", tint = ShelfInk.copy(alpha = 0.75f))
-                    }
-                }
-                if (reading) {
                     // Started already: it can also be read again from the first page.
-                    TextButton(
-                        onClick = onStartOver,
-                        colors = ButtonDefaults.textButtonColors(contentColor = ShelfInk.copy(alpha = 0.85f)),
-                        modifier = Modifier.padding(top = 4.dp),
-                    ) {
-                        Icon(RestartIcon, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Начать заново", style = MaterialTheme.typography.labelLarge)
-                    }
-                } else {
-                    Spacer(Modifier.height(12.dp))
+                    if (reading) CardAction(RestartIcon, "Начать заново", onStartOver)
+                    CardAction(SeriesIcon, "Серия", onSeries)
+                    CardAction(Icons.Filled.Delete, "Убрать из коллекции", onRemove)
                 }
-                Text(
-                    "Покрути пальцем · коснись комикса, чтобы открыть",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ShelfInk.copy(alpha = 0.5f),
-                )
+                if (hint) {
+                    Text(
+                        "Покрути пальцем · коснись комикса, чтобы открыть",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShelfInk.copy(alpha = 0.5f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                }
             }
         }
+    }
+}
+
+/** A round button with an icon on the card of the comic in hand. */
+@Composable
+private fun CardAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Spacer(Modifier.width(8.dp))
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(46.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.1f))
+            .clickable(onClickLabel = label, onClick = onClick),
+    ) {
+        Icon(icon, contentDescription = label, tint = ShelfInk.copy(alpha = 0.75f), modifier = Modifier.size(22.dp))
     }
 }
 
