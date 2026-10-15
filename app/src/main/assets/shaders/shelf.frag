@@ -42,6 +42,8 @@ uniform vec3 uWall;           // paint of the back wall, linear
 uniform float uShine;         // a glint running over a cover, 0..1; negative for none
 uniform vec4 uWrap;           // wrapping: comic width, height, how far the paper reaches past the edges, 1 if torn
 uniform sampler2D uMask;      // what is torn of the wrapping (red: 1 torn)
+uniform sampler2D uOwner;     // which piece of paper took each cell of it (red * 255: its id, 1 gone)
+uniform float uReleased;      // the front of the wrapping has come off in pieces
 uniform float uPaperLift;     // how far the paper lies in front of the comic's centre
 uniform int uPrintFace;       // cardboard: the face with the print (uLabel), -1 none
 uniform int uInnerFace;       // cardboard: the face inside the box; tape: the side of the cut seam
@@ -400,11 +402,115 @@ vec3 bump(vec3 n, float h) {
     return normalize(abs(det) * n - grad);
 }
 
-// Fine creases of thin paper: ridges along crossing directions.
+// Straight creases meeting at angles, like paper that has been crumpled a little and smoothed
+// out again: the edges between the cells of a scattered pattern (distance to the second
+// nearest seed minus the nearest), at [scale] cells per meter.
+float folds(vec2 p, float scale) {
+    vec2 q = p * scale;
+    vec2 cell = floor(q);
+    float d1 = 8.0;
+    float d2 = 8.0;
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 c = cell + vec2(float(i), float(j));
+            vec2 seed = c + vec2(hash(c), hash(c + 17.31));
+            float d = distance(q, seed);
+            if (d < d1) {
+                d2 = d1;
+                d1 = d;
+            } else if (d < d2) {
+                d2 = d;
+            }
+        }
+    }
+    return d2 - d1;
+}
+
+// Fine creases of thin paper, and a little tooth.
 float creases(vec2 p) {
-    float a = 1.0 - abs(noise(p * 46.0) * 2.0 - 1.0);
-    float b = 1.0 - abs(noise(vec2(p.x * 0.7 - p.y * 0.5, p.x * 0.5 + p.y * 0.7) * 90.0 + 13.0) * 2.0 - 1.0);
-    return a * a * 0.00028 + b * b * 0.00012 + noise(p * 400.0) * 0.00002;
+    // Broad soft folds a few centimetres apart, a hint of finer ones, and the tooth of the paper.
+    float big = 1.0 - smoothstep(0.0, 0.28, folds(p, 17.0));
+    float small = 1.0 - smoothstep(0.0, 0.2, folds(p + 0.37, 46.0));
+    return big * big * 0.00045 + small * small * 0.00005 + noise(p * 520.0) * 0.00001;
+}
+
+// Where a tear runs through a cell: the mask crosses this level. The same everywhere, so the
+// edge of a hole and the edge of the piece torn out of it match fibre for fibre.
+float tornEdge(vec2 u) {
+    float fibre = noise(u * 2600.0) * 0.55 + noise(u * 760.0) * 0.45;
+    return 0.5 + (fibre - 0.5) * 0.5;
+}
+
+// The colour of the paper: milky glassine, with what lies under it showing through where it
+// touches ([contact] 1) and white where it stands off; torn fibres ([rim]) whiter still.
+vec3 paperColour(vec2 u, float contact, float rim, bool back) {
+    vec3 milk = vec3(0.86, 0.85, 0.81);
+    vec3 under = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.75 : PAPER * 0.5;
+    bool onCover = !back && abs(u.x) < uWrap.x * 0.5 && abs(u.y) < uWrap.y * 0.5;
+    if (onCover && uHasCover > 0.5) under = toLinear(textureLod(uCover, vec2(u.x / uWrap.x + 0.5, 0.5 - u.y / uWrap.y), 1.4).rgb);
+    vec3 a = mix(milk, mix(under * 0.96, milk, 0.2), contact);
+    return mix(a, vec3(0.97, 0.96, 0.93), rim);
+}
+
+// Thin paper is lit from both sides: light coming through from behind brightens it too.
+vec3 paperLight(vec3 a, vec3 n, vec3 v) {
+    vec3 color = a * (irradiance(n, 1.0) * 0.85 + irradiance(-n, 1.0) * 0.45 + 0.04);
+    color += sparkle(n, v, 70.0, 0.25) + sparkle(n, v, 320.0, 0.5);
+    return coat(color, n, v, 0.5, 0.12);
+}
+
+// Glassine wrapping: thin, milky, finely creased paper through which the cover shows softly;
+// torn away where the mask says, with a thin white edge of fibres where it tore.
+vec3 paper(vec3 v, out float alpha) {
+    alpha = uAlpha;
+    vec2 u = vUV;
+    bool back = vFace == 1;
+    bool front = !back && abs(u.x) <= uWrap.x * 0.5 && abs(u.y) <= uWrap.y * 0.5;
+    // Once the front has come off in its pieces, only the paper round the edges is left here.
+    if (uReleased > 0.5 && front) discard;
+    float rim = 0.0;
+    if (!back && uWrap.w > 0.5) {
+        float m = texture(uMask, maskCoord(u)).r;
+        float edge = tornEdge(u);
+        if (m > edge) discard;
+        rim = smoothstep(edge - 0.09, edge, m) * (0.55 + 0.45 * noise(u * 1800.0));
+    }
+    vec3 n = normalize(vNormal);
+    if (!gl_FrontFacing) n = -n;
+    // Creases are fine: seen edge on, or from inside, they should not turn into hills.
+    n = bump(n, creases(u) * (gl_FrontFacing ? 1.0 : 0.4) * smoothstep(0.1, 0.5, abs(dot(n, v))));
+    // The further the paper stands off the cover, the less of it shows through.
+    float off = back ? 1.0 : smoothstep(0.0012, 0.009, max(vLocal.z - uPaperLift, 0.0)) * 0.6;
+    return paperLight(paperColour(u, 1.0 - off, rim, back), n, v);
+}
+
+// A piece of the paper off the comic: a strip being torn, a strip in the air, or a piece of the
+// rest coming off. Drawn only where its own cells were (see WrapTear.pieceMesh for the code).
+vec3 strip(vec3 v, out float alpha) {
+    float kind = floor(vPart / 256.0 + 0.0001);
+    float rest = vPart - kind * 256.0;
+    float id = floor(rest + 0.0005);
+    float f = clamp((rest - id) / 0.98, 0.0, 1.0);
+    vec2 u = vUV;
+    vec2 mc = maskCoord(u);
+    ivec2 cells = textureSize(uOwner, 0);
+    ivec2 cell = clamp(ivec2(floor(mc * vec2(cells))), ivec2(0), cells - 1);
+    float owner = floor(texelFetch(uOwner, cell, 0).r * 255.0 + 0.5);
+    if (abs(owner - id) > 0.5) discard;
+    float m = texture(uMask, mc).r;
+    float edge = tornEdge(u);
+    // A strip is what was torn out; a piece of the rest is what was left.
+    bool leftover = kind > 1.5;
+    if (leftover ? m > edge : m <= edge) discard;
+    float rim = (leftover ? smoothstep(edge - 0.09, edge, m) : smoothstep(edge + 0.09, edge, m)) * (0.55 + 0.45 * noise(u * 1800.0));
+    float contact = kind < 0.5 ? f : (leftover ? 1.0 - smoothstep(0.0, 0.12, f) : 0.0);
+    float age = kind < 0.5 ? 0.0 : f;
+    // Off the cover the thin paper lets a little of what is behind it through.
+    alpha = (1.0 - smoothstep(0.72, 1.0, age)) * mix(0.86, 1.0, contact);
+    vec3 n = normalize(vNormal);
+    if (!gl_FrontFacing) n = -n;
+    n = bump(n, creases(u) * smoothstep(0.1, 0.5, abs(dot(n, v))));
+    return paperLight(paperColour(u, contact, rim, false), n, v);
 }
 
 // Corrugated cardboard: kraft liners, the wavy flutes between them showing on the cut edges,
@@ -465,57 +571,6 @@ vec3 tape(vec3 v) {
     }
     color += sparkle(n, v, 260.0, 1.8) + sparkle(n, v, 40.0, 0.12);
     return coat(color, n, v, 1.4, 0.01);
-}
-
-// Glassine wrapping: thin, milky, crinkled paper through which the cover shows softly; torn
-// away where the mask says, with white fibrous edges where it tore.
-vec3 paper(vec3 v, out float alpha) {
-    alpha = uAlpha;
-    vec2 u = vUV;
-    bool back = vFace == 1;
-    float rim = 0.0;
-    if (!back && uWrap.w > 0.5) {
-        float m = texture(uMask, maskCoord(u)).r;
-        float fibre = noise(u * 2600.0) * 0.6 + noise(u * 700.0) * 0.4;
-        float edge = 0.5 + (fibre - 0.5) * 0.55;
-        if (m > edge) discard;
-        rim = smoothstep(edge - 0.2, edge, m);
-    }
-    vec3 n = normalize(vNormal);
-    if (!gl_FrontFacing) n = -n;
-    // Creases are fine: seen edge on, or from inside, they should not turn into hills.
-    n = bump(n, creases(u) * (gl_FrontFacing ? 0.75 : 0.35) * smoothstep(0.1, 0.5, abs(dot(n, v))));
-    // What lies under the paper: the cover in front, a dull colour behind and round the edges.
-    vec2 coverUV = vec2(u.x / uWrap.x + 0.5, 0.5 - u.y / uWrap.y);
-    bool onCover = !back && abs(u.x) < uWrap.x * 0.5 && abs(u.y) < uWrap.y * 0.5;
-    vec3 under = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.75 : PAPER * 0.5;
-    if (onCover && uHasCover > 0.5) under = toLinear(textureLod(uCover, coverUV, 2.4).rgb);
-    // The further the paper stands off the cover, the less of it shows through.
-    float off = back ? 0.0 : smoothstep(0.0004, 0.0035, max(vLocal.z - uPaperLift, 0.0));
-    vec3 milk = vec3(0.84, 0.82, 0.77);
-    vec3 a = mix(under * 0.95, milk, 0.17 + 0.5 * off);
-    a = mix(a, vec3(0.95, 0.94, 0.91), rim * 0.9);
-    // Thin paper: light coming through from behind brightens it too.
-    vec3 color = a * (irradiance(n, 1.0) + irradiance(-n, 1.0) * 0.25);
-    color += sparkle(n, v, 70.0, 0.30) + sparkle(n, v, 300.0, 0.55);
-    return coat(color, n, v, 0.55, 0.12);
-}
-
-// A strip of torn paper in the air: ragged along both edges, whiter where it tore.
-vec3 strip(vec3 v, out float alpha) {
-    float across = abs(vUV.x - 0.5) * 2.0;
-    float side = vUV.x > 0.5 ? 3.0 : 9.0;
-    float ragged = noise(vec2(vUV.y * 240.0, side)) * 0.55 + noise(vec2(vUV.y * 900.0, side + 5.0)) * 0.3;
-    float edge = 1.0 - 0.42 * ragged;
-    if (across > edge) discard;
-    float rim = smoothstep(edge - 0.14, edge, across);
-    vec3 n = normalize(vNormal);
-    if (!gl_FrontFacing) n = -n;
-    n = bump(n, creases(vec2(vUV.x * 0.02, vUV.y)));
-    vec3 a = mix(vec3(0.82, 0.81, 0.78), vec3(0.95, 0.94, 0.92), rim * 0.8);
-    alpha = 0.9 * clamp(vPart, 0.0, 1.0);
-    vec3 color = a * (irradiance(n, 1.0) + irradiance(-n, 1.0) * 0.45) + sparkle(n, v, 70.0, 0.3);
-    return coat(color, n, v, 0.5, 0.15);
 }
 
 // A four-pointed star of light on a gleaming cover.

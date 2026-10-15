@@ -78,13 +78,13 @@ class WrapTearTest {
         repeat(30) { t.stepScraps(at, Quat.IDENTITY, 0.003f, 1f / 60f, it / 60f) }
         val later = t.scraps.single().position
         assertTrue("falls: ${start.y} -> ${later.y}", later.y < start.y)
-        val mesh = t.scrapMesh(at, Quat.IDENTITY, 0.003f, 1f)
+        val mesh = t.pieceMesh(at, Quat.IDENTITY, 0.003f, 1f)
         assertNotNull(mesh)
         assertTrue(mesh!!.first.all { it.isFinite() })
         var time = 0.5f
         while (t.stepScraps(at, Quat.IDENTITY, 0.003f, 1f / 30f, time) && time < 10f) time += 1f / 30f
         assertTrue("gone after a while: $time", time < WrapTear.SCRAP_LIFE + 1f)
-        assertNull(t.scrapMesh(at, Quat.IDENTITY, 0.003f, time))
+        assertNull(t.pieceMesh(at, Quat.IDENTITY, 0.003f, time))
     }
 
     @Test
@@ -99,14 +99,61 @@ class WrapTearTest {
     }
 
     @Test
-    fun splittingDownTheMiddleTearsTopToBottom() {
+    fun everyStripIsDrawnFromTheCellsItTook() {
         val t = tear()
-        t.splitDown()
-        for (k in -140..140) {
-            val y = k * 0.001f
-            assertTrue("split at $y", (-12..12).any { t.isTorn(it * 0.0005f, y) })
+        t.touch(-0.06f, 0f)
+        t.drag(0.06f, 0f, 0.3f)
+        val strip = t.scraps.single()
+        val taken = t.owner.indices.filter { t.owner[it].toInt() and 0xFF == strip.id }
+        assertTrue(taken.size > 100)
+        // Exactly the torn cells are the strip's, no more.
+        assertTrue(taken.all { t.mask[it] != 0.toByte() })
+        assertEquals(t.mask.count { it != 0.toByte() }, taken.size)
+        val (vertices, _) = t.pieceMesh(Vec3.ZERO, Quat.IDENTITY, 0.003f, 0f)!!
+        // Its shape knows where on the sheet every point of it was, and whose it is.
+        val codes = (0 until vertices.size / 9).map { vertices[it * 9 + 8] }
+        assertTrue(codes.all { it.toInt() == strip.id })
+        // Where it still lies at the finger it lies on the cover.
+        assertTrue(codes.max() - strip.id > 0.9f)
+        t.lift()
+        var time = 0f
+        while (t.stepScraps(Vec3.ZERO, Quat.IDENTITY, 0.003f, 1f / 30f, time) && time < 10f) time += 1f / 30f
+        // Gone: its cells are no one's to draw any more.
+        assertTrue(taken.all { t.owner[it].toInt() and 0xFF == WrapTear.GONE })
+    }
+
+    @Test
+    fun whatIsLeftComesOffInItsOwnPieces() {
+        val t = tear()
+        for (k in 0..5) {
+            val y = 0.12f - k * 0.05f
+            t.touch(-0.09f, y)
+            t.drag(0.09f, y + 0.01f, 0.4f)
+            t.lift()
         }
-        assertFalse(t.isTorn(0.03f, 0f))
+        val before = t.mask.copyOf()
+        t.release(Vec3(0f, 0f, 0.6f), Quat.IDENTITY, 0f) { x, y -> Vec3(x, y, 0.003f) }
+        assertTrue(t.released)
+        // The front is all accounted for: torn, or a piece of what was left (each its own).
+        val front = t.mask.indices.filter { i ->
+            val x = -0.095f - t.margin + (i % t.columns + 0.5f) * (0.19f + 2 * t.margin) / t.columns
+            val y = -0.145f - t.margin + (i / t.columns + 0.5f) * (0.29f + 2 * t.margin) / t.columns * t.columns / t.rows
+            kotlin.math.abs(x) < 0.09f && kotlin.math.abs(y) < 0.14f
+        }
+        val pieces = front.filter { t.mask[it] == 0.toByte() }.map { t.owner[it].toInt() and 0xFF }.toSet()
+        assertTrue("several pieces: $pieces", pieces.size >= 3)
+        assertTrue(pieces.none { it == 0 || it == WrapTear.GONE })
+        // What was paper stays paper: only thin tears were added to break it up.
+        val added = t.mask.indices.count { before[it] == 0.toByte() && t.mask[it] != 0.toByte() }
+        assertTrue("few cells torn to break it: $added", added < front.size / 5)
+        // They come off, and are gone after a while.
+        val (vertices, _) = t.pieceMesh(Vec3.ZERO, Quat.IDENTITY, 0.003f, 0.5f)!!
+        assertTrue((0 until vertices.size / 9).any { vertices[it * 9 + 8] >= 512f })
+        var time = 0f
+        while (t.stepScraps(Vec3.ZERO, Quat.IDENTITY, 0.003f, 1f / 30f, time) && time < 10f) time += 1f / 30f
+        assertTrue("all gone: $time", time < 4f)
+        // The finger tears nothing more.
+        assertFalse(t.touch(0f, 0f))
     }
 
     @Test

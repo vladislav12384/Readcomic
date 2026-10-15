@@ -32,6 +32,10 @@ object WrapperShape {
 
     class Halves(val left: FloatArray, val right: FloatArray, val leftIndices: ShortArray, val rightIndices: ShortArray)
 
+    /** Where the paper at (x, y) on the sheet is, over the front of a comic of [size]. */
+    fun frontPoint(x: Float, y: Float, size: Vec3, tear: WrapTear?, seed: Int): Vec3 =
+        place(x, y, size.x, size.y, radius(size.z), margin(size.z), tear, seed)
+
     /** The wrapping of a comic [size] (width, height, thickness); torn edges lifted by [tear]. */
     fun build(size: Vec3, tear: WrapTear?, seed: Int): Halves {
         val (lv, li) = half(size, tear, seed, left = true)

@@ -182,6 +182,8 @@ class Unboxing(private val host: Host) {
     // The wrapping of the comic just handed over: its last strips are still in the air.
     private var leftover: WrapTear? = null
     private var leftoverPose = Vec3.ZERO to Quat.IDENTITY
+    private var leftoverSize = Vec3.ZERO
+    private var leftoverId = ""
     private var lastTouchTime = 0f
     private var lastX = 0f
     private var lastY = 0f
@@ -436,10 +438,16 @@ class Unboxing(private val host: Host) {
 
     private fun release() {
         if (stage != Stage.TEARING) return
+        val item = inHand ?: return
+        val t = tear ?: return
         stage = Stage.RELEASING
         stageTime = 0f
         releaseT = 0f
-        tear?.splitDown()
+        // What is left of the paper comes apart into its own pieces, which come off one by one.
+        val size = host.sizeOf(item)
+        val seed = seedOf(item.id)
+        val (position, rotation) = comicPose(item, size)
+        t.release(position, rotation, time) { x, y -> WrapperShape.frontPoint(x, y, size, t, seed) }
         listener?.onCue(UnboxCue.RELEASE, 1f)
         notifyState()
     }
@@ -545,7 +553,9 @@ class Unboxing(private val host: Host) {
         val item = inHand
         if (item != null && tear != null) {
             leftover = tear
-            leftoverPose = comicPose(item, host.sizeOf(item))
+            leftoverSize = host.sizeOf(item)
+            leftoverId = item.id
+            leftoverPose = comicPose(item, leftoverSize)
         }
         inHand = null
         tear = null
@@ -625,7 +635,7 @@ class Unboxing(private val host: Host) {
             Stage.TEARING -> Unit
             Stage.RELEASING -> {
                 releaseT = min(1f, releaseT + dt / RELEASE_TIME)
-                if (releaseT > 0.5f && shineT < 0f) {
+                if (releaseT > 0.42f && shineT < 0f) {
                     shineT = 0f
                     listener?.onCue(UnboxCue.SHINE, 1f)
                 }
@@ -734,7 +744,7 @@ class Unboxing(private val host: Host) {
         if (stage == Stage.PEEK && boxPosition.settled(target, 0.0003f) && flapsSettled() && leftover == null && dim == 0f) animating = false
         if (stage == Stage.SEALED && boxPosition.settled(target, 0.0003f) && !tearingVisible() && dim == dimTarget) animating = false
         if (stage == Stage.TEARING && !tearing && boxPosition.settled(target, 0.0003f) && jiggle.settled(Vec3.ZERO, 0.0001f) &&
-            tearRate < 0.01f && (t == null || t.scraps.isEmpty()) && leftover == null && abs(dimTarget - dim) < 0.002f
+            tearRate < 0.01f && (t == null || !t.busy) && leftover == null && abs(dimTarget - dim) < 0.002f
         ) {
             animating = false
         }
@@ -834,7 +844,7 @@ class Unboxing(private val host: Host) {
                 shine = -1f,
             )
         }
-        var scraps: Pair<FloatArray, ShortArray>? = null
+        val pieces = ArrayList<PiecesDraw>(2)
         var star: StarDraw? = null
         inHand?.let { item ->
             val size = host.sizeOf(item)
@@ -845,7 +855,7 @@ class Unboxing(private val host: Host) {
                 null
             } else {
                 val (left, right, alpha) = halves(position, rotation, size)
-                WrapperDraw(item.id, left, right, alpha, t, size, seedOf(item.id))
+                WrapperDraw(item.id, left, right, alpha, t, size, seedOf(item.id), released = t?.released == true)
             }
             comics += WrappedDraw(
                 comic = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), null, held = true),
@@ -853,28 +863,31 @@ class Unboxing(private val host: Host) {
                 wrapper = wrapper,
                 shine = shineT,
             )
-            scraps = t?.scrapMesh(position, rotation, WrapperShape.radius(size.z), time)
+            if (t != null) t.pieceMesh(position, rotation, WrapperShape.radius(size.z), time)?.let { (v, i) -> pieces += PiecesDraw(v, i, t, size, item.id) }
             if (shineT in 0f..1f) {
                 val corner = position + rotation.rotate(Vec3(size.x * 0.3f, size.y * 0.36f, size.z / 2f + 0.004f))
                 star = StarDraw(corner, size.y * 0.42f, shineT)
             }
         }
-        if (scraps == null) scraps = leftover?.scrapMesh(leftoverPose.first, leftoverPose.second, 0f, time)
+        leftover?.let { rest ->
+            rest.pieceMesh(leftoverPose.first, leftoverPose.second, 0f, time)?.let { (v, i) -> pieces += PiecesDraw(v, i, rest, leftoverSize, leftoverId) }
+        }
         return UnboxDraw(
             dim = dim,
             parts = parts,
             count = contents.size,
             tapeCut = if (cutHigh > cutLow) floatArrayOf(cutLow / CardboardBox.DEPTH + 0.5f, cutHigh / CardboardBox.DEPTH + 0.5f) else floatArrayOf(0f, 0f),
             comics = comics,
-            scraps = scraps,
+            pieces = pieces,
             star = star,
             frontId = inHand?.id,
         )
     }
 
     /**
-     * The two halves of the wrapping: on the comic, or, once released, swinging open from the
-     * outer edges like a pair of doors and dropping away. Returns their models and opacity.
+     * The wrapping round the comic: on it, or, once the front has come off in pieces, what is
+     * left round the edges and behind it slipping back and down out of sight. Returns its model
+     * (for both halves) and opacity.
      */
     private fun halves(position: Vec3, rotation: Quat, size: Vec3): Triple<FloatArray, FloatArray, Float> {
         if (releaseT <= 0f) {
@@ -882,20 +895,11 @@ class Unboxing(private val host: Host) {
             return Triple(model, model, 1f)
         }
         val e = releaseT
-        // Opening like a pair of doors, then dropping away.
-        val swing = 1.2f * (1f - (1f - e) * (1f - e))
-        val drop = 0.5f * e * e
-        val r = WrapperShape.radius(size.z)
-        fun half(sign: Float): FloatArray {
-            // Turning about the outer edge of the comic, towards the reader.
-            val hinge = Vec3(sign * size.x / 2f, 0f, r)
-            val turn = Quat.axisAngle(Y, sign * swing)
-            val local = hinge - turn.rotate(hinge) + Vec3(sign * 0.06f * e, -drop * 0.3f, 0.02f * e)
-            val world = position + rotation.rotate(local) + Vec3(0f, -drop, 0f)
-            return Mat4.compose(world, rotation * turn, ONE)
-        }
-        val alpha = (1f - (e - 0.6f) / 0.4f).coerceIn(0f, 1f)
-        return Triple(half(-1f), half(1f), alpha)
+        val tip = Quat.axisAngle(X, -0.3f * e)
+        val local = Vec3(0f, -0.08f * e * e, -0.04f * e)
+        val model = Mat4.compose(position + rotation.rotate(local), rotation * tip, ONE)
+        val alpha = 1f - (e / 0.35f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+        return Triple(model, model, alpha)
     }
 
     /** How dark the shelves are behind the box (eased in [step]). */
@@ -933,7 +937,7 @@ class Unboxing(private val host: Host) {
         private const val AUTO_CUT_TIME = 0.45f
         private const val LIFT_TIME = 1.05f
         private const val RETURN_TIME = 0.6f
-        private const val RELEASE_TIME = 0.95f
+        private const val RELEASE_TIME = 1.1f
         private const val SHINE_TIME = 0.8f
         private const val PLACE_TIME = 0.5f
         private const val HAND_OVER_TIMEOUT = 2.5f
@@ -960,12 +964,18 @@ class UnboxDraw(
     /** The cut along the tape, from..to along it in 0..1. */
     val tapeCut: FloatArray,
     val comics: List<WrappedDraw>,
-    /** Torn strips: vertices in the world and triangles. */
-    val scraps: Pair<FloatArray, ShortArray>?,
+    /** Torn strips and pieces of paper coming off, see [WrapTear.pieceMesh]. */
+    val pieces: List<PiecesDraw>,
     val star: StarDraw?,
     /** The comic in hand, whose sharp cover is wanted. */
     val frontId: String?,
 )
+
+/**
+ * Pieces of the paper of the comic [comicId] (of [size]) torn off: [vertices] in the world and
+ * [indices], drawn from the cells of [tear] they took.
+ */
+class PiecesDraw(val vertices: FloatArray, val indices: ShortArray, val tear: WrapTear, val size: Vec3, val comicId: String)
 
 /** A piece of the box: a unit box scaled into place; see [CardboardBox.Part]. */
 class BoxPartDraw(val model: FloatArray, val kind: Int, val printFace: Int, val innerFace: Int)
@@ -977,7 +987,17 @@ class WrappedDraw(val comic: ComicDraw, val drawComic: Boolean, val wrapper: Wra
  * The paper round a comic of [size]: its two halves placed by [left] and [right] (meters, no
  * scale), [alpha] fading them away; [tear] holds what is torn, null for intact paper.
  */
-class WrapperDraw(val id: String, val left: FloatArray, val right: FloatArray, val alpha: Float, val tear: WrapTear?, val size: Vec3, val seed: Int)
+class WrapperDraw(
+    val id: String,
+    val left: FloatArray,
+    val right: FloatArray,
+    val alpha: Float,
+    val tear: WrapTear?,
+    val size: Vec3,
+    val seed: Int,
+    /** The front has come off in pieces: only the paper round the edges and behind is left. */
+    val released: Boolean = false,
+)
 
 /** The glint on a freshly unwrapped cover: at [position], [size] meters across, [t] 0..1 through. */
 class StarDraw(val position: Vec3, val size: Float, val t: Float)
