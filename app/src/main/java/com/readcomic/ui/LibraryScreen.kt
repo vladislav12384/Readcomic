@@ -112,6 +112,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.readcomic.data.ComicEntry
 import com.readcomic.shelf.ShelfItem
+import com.readcomic.shelf.ShelfSize
 import com.readcomic.shelf.ShelfView
 import java.io.File
 import kotlin.math.max
@@ -140,6 +141,10 @@ fun LibraryScreen(
     order: ShelfOrder = ShelfOrder.TITLE,
     onOrderChange: (ShelfOrder) -> Unit = {},
     onSetSeries: (ComicEntry, String?) -> Unit = { _, _ -> },
+    shelfSize: ShelfSize = ShelfSize.NORMAL,
+    onShelfSizeChange: (ShelfSize) -> Unit = {},
+    /** Reading [ComicEntry] again from its first page. */
+    onStartOver: (ComicEntry) -> Unit = {},
 ) {
     var toRemove by remember { mutableStateOf<ComicEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -165,6 +170,9 @@ fun LibraryScreen(
             order = order,
             onOrderChange = onOrderChange,
             onNameSeries = { naming = it },
+            shelfSize = shelfSize,
+            onShelfSizeChange = onShelfSizeChange,
+            onStartOver = onStartOver,
         )
     } else {
         GridLibrary(
@@ -239,6 +247,9 @@ private fun ShelfLibrary(
     order: ShelfOrder,
     onOrderChange: (ShelfOrder) -> Unit,
     onNameSeries: (ComicEntry) -> Unit,
+    shelfSize: ShelfSize,
+    onShelfSizeChange: (ShelfSize) -> Unit,
+    onStartOver: (ComicEntry) -> Unit,
 ) {
     val context = LocalContext.current
     var view by remember { mutableStateOf<ShelfView?>(null) }
@@ -282,6 +293,9 @@ private fun ShelfLibrary(
     LaunchedEffect(view, theme) {
         val paint = ShelfThemes[theme]
         view?.setWallColor(paint.red, paint.green, paint.blue)
+    }
+    LaunchedEffect(view, shelfSize) {
+        view?.setShelfSize(shelfSize)
     }
 
     // While searching, the shelves show what is found and leave the rest in the shade.
@@ -456,10 +470,11 @@ private fun ShelfLibrary(
                 HeldComicCard(
                     entry = entry,
                     coverFile = coverFile(entry),
-                    onRead = { onOpen(entry) },
+                    onRead = { if (entry.isFinished) onStartOver(entry) else onOpen(entry) },
                     onRemove = { onRemove(entry) },
                     onPutBack = { view?.putBack() },
                     onSeries = { onNameSeries(entry) },
+                    onStartOver = { onStartOver(entry) },
                 )
             } else {
                 Spacer(Modifier.fillMaxWidth())
@@ -525,7 +540,7 @@ private fun ShelfLibrary(
                 .windowInsetsPadding(SafeInsets)
                 .padding(top = 64.dp, end = 12.dp),
         ) {
-            ThemePicker(selected = theme, onSelect = onThemeChange)
+            ThemePicker(selected = theme, onSelect = onThemeChange, size = shelfSize, onSizeChange = onShelfSizeChange)
         }
 
         SnackbarHost(
@@ -597,7 +612,7 @@ private fun RoundButton(onClick: () -> Unit, description: String, content: @Comp
 }
 
 @Composable
-private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit) {
+private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit, size: ShelfSize, onSizeChange: (ShelfSize) -> Unit) {
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = Color(0xF21B1713),
@@ -627,6 +642,27 @@ private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit) {
                 fontStyle = FontStyle.Italic,
                 fontSize = 17.sp,
             )
+            Spacer(Modifier.height(16.dp))
+            Text("Комиксы на полках", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ShelfSize.entries.forEach { option ->
+                    val chosen = option == size
+                    Text(
+                        option.label,
+                        fontFamily = FontFamily.Serif,
+                        fontStyle = if (chosen) FontStyle.Italic else FontStyle.Normal,
+                        fontSize = 15.sp,
+                        color = if (chosen) Color(0xFF2A1F17) else ShelfInk,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(if (chosen) ShelfInk else Color.Transparent)
+                            .border(1.dp, ShelfInk.copy(alpha = if (chosen) 1f else 0.35f), CircleShape)
+                            .clickable(onClickLabel = option.label) { onSizeChange(option) }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -666,6 +702,7 @@ private fun HeldComicCard(
     onRemove: () -> Unit,
     onPutBack: () -> Unit,
     onSeries: () -> Unit,
+    onStartOver: () -> Unit,
 ) {
     val accent by produceState(Color(0xFFB0703A), coverFile) {
         withContext(Dispatchers.IO) { LibraryShelfArt.coverAccent(coverFile) }?.let { value = Color(it) }
@@ -791,7 +828,20 @@ private fun HeldComicCard(
                         Icon(Icons.Filled.Delete, contentDescription = "Убрать из коллекции", tint = ShelfInk.copy(alpha = 0.75f))
                     }
                 }
-                Spacer(Modifier.height(12.dp))
+                if (reading) {
+                    // Started already: it can also be read again from the first page.
+                    TextButton(
+                        onClick = onStartOver,
+                        colors = ButtonDefaults.textButtonColors(contentColor = ShelfInk.copy(alpha = 0.85f)),
+                        modifier = Modifier.padding(top = 4.dp),
+                    ) {
+                        Icon(RestartIcon, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Начать заново", style = MaterialTheme.typography.labelLarge)
+                    }
+                } else {
+                    Spacer(Modifier.height(12.dp))
+                }
                 Text(
                     "Покрути пальцем · коснись комикса, чтобы открыть",
                     style = MaterialTheme.typography.labelSmall,
@@ -1058,6 +1108,24 @@ private fun plural(n: Int, one: String, few: String, many: String): String {
 internal fun comicsCount(n: Int) = plural(n, "комикс", "комикса", "комиксов")
 
 private fun pagesCount(n: Int) = plural(n, "страница", "страницы", "страниц")
+
+/** A circular arrow back to the start. */
+private val RestartIcon: ImageVector by lazy {
+    ImageVector.Builder("Restart", 24.dp, 24.dp, 24f, 24f).apply {
+        path(stroke = SolidColor(Color.Black), strokeLineWidth = 2.2f) {
+            // Most of a circle...
+            moveTo(5.2f, 9f)
+            arcTo(7.5f, 7.5f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 6.5f, y1 = 18.2f)
+        }
+        path(fill = SolidColor(Color.Black)) {
+            // ...with the arrow head at its start.
+            moveTo(2.8f, 5.2f)
+            lineTo(8.6f, 6.4f)
+            lineTo(4.6f, 10.8f)
+            close()
+        }
+    }.build()
+}
 
 /** Four tiles: show the library as a grid. */
 private val GridIcon: ImageVector by lazy {

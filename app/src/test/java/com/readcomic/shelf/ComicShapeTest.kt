@@ -11,6 +11,8 @@ class ComicShapeTest {
     fun bindingFollowsThePageCount() {
         assertEquals(Binding.STAPLED, ComicShape.binding(24))
         assertEquals(Binding.PAPERBACK, ComicShape.binding(160))
+        assertEquals(Binding.PAPERBACK, ComicShape.binding(199))
+        assertEquals(Binding.HARDCOVER, ComicShape.binding(200))
         assertEquals(Binding.HARDCOVER, ComicShape.binding(420))
         assertTrue(ComicShape.thickness(420) > ComicShape.thickness(160))
         assertTrue(ComicShape.thickness(160) > ComicShape.thickness(24))

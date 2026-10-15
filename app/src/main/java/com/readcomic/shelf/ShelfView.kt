@@ -73,6 +73,9 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
 
     fun putBack() = onGl { controller.putBack() }
 
+    /** How large the comics look on the shelves. */
+    fun setShelfSize(size: ShelfSize) = onGl { controller.size = size }
+
     /** Comics matching a search stay lit, the rest go into the shade; null ends the search. */
     fun highlight(ids: Set<String>?) = onGl { controller.highlight(ids) }
 

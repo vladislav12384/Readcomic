@@ -12,6 +12,16 @@ import kotlin.math.round
 import kotlin.math.sin
 import kotlin.math.tan
 
+/**
+ * How large the comics look on the shelves: how close together they stand ([slot] wide places,
+ * metres) and how many shelves the camera takes in at least ([rows]).
+ */
+enum class ShelfSize(val label: String, val slot: Float, val rows: Float) {
+    SMALL("Мельче", 0.23f, 1.6f),
+    NORMAL("Обычно", 0.205f, 1.43f),
+    LARGE("Крупнее", 0.19f, 1.28f),
+}
+
 /** A comic on the shelf. */
 class ShelfItem(
     val id: String,
@@ -160,17 +170,27 @@ class ShelfController(private val density: Float) {
         clampScroll(hard = true)
     }
 
+    /** How large the comics look: how close together they stand and how near the camera is. */
+    var size = ShelfSize.NORMAL
+        set(value) {
+            if (field == value) return
+            field = value
+            if (sized) setViewSize(viewWidth.toInt(), viewHeight.toInt())
+        }
+
+    private val slotWidth get() = size.slot
+
     fun setViewSize(width: Int, height: Int) {
         sized = true
         viewWidth = max(width, 1).toFloat()
         viewHeight = max(height, 1).toFloat()
         val aspect = viewWidth / viewHeight
         val tanHalf = tan(FOV / 2f)
-        // At least ~1.6 shelves visible; as many columns as fit across, never fewer than two.
-        val minDistance = 1.6f * ROW_HEIGHT / (2f * tanHalf)
+        // At least so many shelves visible; as many columns as fit across, never fewer than two.
+        val minDistance = size.rows * ROW_HEIGHT / (2f * tanHalf)
         val visibleWidth = 2f * minDistance * tanHalf * aspect
-        columns = floor((visibleWidth - 0.06f) / SLOT_WIDTH).toInt().coerceIn(2, 8)
-        val shelfWidth = columns * SLOT_WIDTH + 0.04f
+        columns = floor((visibleWidth - 0.06f) / slotWidth).toInt().coerceIn(2, 8)
+        val shelfWidth = columns * slotWidth + 0.04f
         distance = max(minDistance, shelfWidth / 2f / (tanHalf * aspect)) + PLANK_DEPTH
         if (aspect > 1f) {
             handAnchorX = 0.36f
@@ -199,13 +219,19 @@ class ShelfController(private val density: Float) {
     private val scrollBottom get() = min(scrollTop, rowBase(rows - 1) - 0.08f + visibleHalfHeight)
 
     private fun sizeOf(item: ShelfItem): Vec3 {
-        val height = COMIC_HEIGHT
-        val width = height * item.aspect.coerceIn(0.5f, 1.0f)
+        var height = COMIC_HEIGHT
+        var width = height * item.aspect.coerceIn(0.5f, 1.0f)
+        // A wide comic is a smaller one, not one squeezed against its neighbours.
+        val room = slotWidth - MIN_GAP
+        if (width > room) {
+            height *= room / width
+            width = room
+        }
         return Vec3(width, height, ComicShape.thickness(item.pageCount))
     }
 
 
-    private fun slotX(column: Int) = (column - (columns - 1) / 2f) * SLOT_WIDTH
+    private fun slotX(column: Int) = (column - (columns - 1) / 2f) * slotWidth
 
     /** A comic standing on its shelf, bottom edge on the plank, top leaning against the wall. */
     private fun shelfPose(index: Int, size: Vec3): Pair<Vec3, Quat> {
@@ -366,7 +392,7 @@ class ShelfController(private val density: Float) {
 
     /** A brass sign on the wall above [span] comics of a row, starting at [column]. */
     private fun signModel(row: Int, column: Int, span: Int): FloatArray {
-        val width = min(span * SLOT_WIDTH - 0.05f, SIGN_MAX_WIDTH)
+        val width = min(span * slotWidth - 0.05f, SIGN_MAX_WIDTH)
         val x = (slotX(column) + slotX(column + span - 1)) / 2f
         return Mat4.compose(
             Vec3(x, rowBase(row) + SIGN_Y, 0.0012f),
@@ -376,7 +402,7 @@ class ShelfController(private val density: Float) {
     }
 
     /** Width / height of the sign above [span] comics, for its engraving. */
-    fun signAspect(span: Int) = min(span * SLOT_WIDTH - 0.05f, SIGN_MAX_WIDTH) / SIGN_HEIGHT
+    fun signAspect(span: Int) = min(span * slotWidth - 0.05f, SIGN_MAX_WIDTH) / SIGN_HEIGHT
 
     // endregion
 
@@ -643,7 +669,9 @@ class ShelfController(private val density: Float) {
     companion object {
         const val FOV = 0.63f
         const val COMIC_HEIGHT = 0.258f
-        const val SLOT_WIDTH = 0.23f
+
+        /** The least room between two comics standing side by side. */
+        private const val MIN_GAP = 0.018f
         const val ROW_HEIGHT = 0.40f
         const val PLANK_THICKNESS = 0.034f
         const val PLANK_DEPTH = 0.15f

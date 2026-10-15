@@ -157,6 +157,7 @@ private fun App(viewModel: LibraryViewModel) {
     val shelfTheme by viewModel.shelfTheme.collectAsStateWithLifecycle()
     val shelfHintDone by viewModel.shelfHintDone.collectAsStateWithLifecycle()
     val shelfOrder by viewModel.shelfOrder.collectAsStateWithLifecycle()
+    val shelfSize by viewModel.shelfSize.collectAsStateWithLifecycle()
     val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
@@ -307,6 +308,12 @@ private fun App(viewModel: LibraryViewModel) {
                 order = shelfOrder,
                 onOrderChange = viewModel::setShelfOrder,
                 onSetSeries = viewModel::setSeries,
+                shelfSize = shelfSize,
+                onShelfSizeChange = viewModel::setShelfSize,
+                onStartOver = { entry ->
+                    viewModel.startOver(entry)
+                    openId = entry.id
+                },
             )
         }
 

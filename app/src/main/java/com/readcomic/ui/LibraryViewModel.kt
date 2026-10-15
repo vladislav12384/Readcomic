@@ -12,6 +12,7 @@ import com.readcomic.data.LibraryRepository
 import com.readcomic.data.ScanInterval
 import com.readcomic.data.ScanReport
 import com.readcomic.data.WatchedFolder
+import com.readcomic.shelf.ShelfSize
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -82,6 +83,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     )
     val shelfOrder: StateFlow<ShelfOrder> = _shelfOrder.asStateFlow()
 
+    /** How large the comics look on the shelves. */
+    private val _shelfSize = MutableStateFlow(
+        runCatching { ShelfSize.valueOf(prefs.getString(KEY_SHELF_SIZE, null) ?: "") }.getOrDefault(ShelfSize.NORMAL),
+    )
+    val shelfSize: StateFlow<ShelfSize> = _shelfSize.asStateFlow()
+
     /** Whether comics being added go into their series; remembered for the next time. */
     private val _groupSeries = MutableStateFlow(prefs.getBoolean(KEY_GROUP_SERIES, false))
     val groupSeries: StateFlow<Boolean> = _groupSeries.asStateFlow()
@@ -140,6 +147,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         _shelfOrder.value = order
         prefs.edit { putString(KEY_SHELF_ORDER, order.name) }
     }
+
+    fun setShelfSize(size: ShelfSize) {
+        _shelfSize.value = size
+        prefs.edit { putString(KEY_SHELF_SIZE, size.name) }
+    }
+
+    /** Reading [entry] again from the first page. */
+    fun startOver(entry: ComicEntry) = library.updateProgress(entry.id, 0, 0)
 
     fun setGroupSeries(enabled: Boolean) {
         _groupSeries.value = enabled
@@ -234,6 +249,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_SHELF_THEME = "shelf_theme"
         private const val KEY_SHELF_HINT = "shelf_hint"
         private const val KEY_SHELF_ORDER = "shelf_order"
+        private const val KEY_SHELF_SIZE = "shelf_size"
         private const val KEY_GROUP_SERIES = "group_series"
     }
 }

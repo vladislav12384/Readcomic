@@ -168,4 +168,33 @@ class ShelfControllerTest {
         val ndc = Mat4.transformPoint(frame.viewProj, Mat4.transformPoint(model, Vec3.ZERO))
         return (ndc.x + 1f) / 2f * 1080f to (1f - ndc.y) / 2f * 2280f
     }
+
+    @Test
+    fun largerSizesShowLargerComicsWithoutCrowdingThem() {
+        fun widthOnScreen(size: ShelfSize, width: Int, height: Int): Pair<Float, Int> {
+            val c = ShelfController(density = 2.75f).apply {
+                setViewSize(width, height)
+                this.size = size
+                setItems(List(12) { ShelfItem("c$it", if (it == 1) 1.0f else 0.65f, 30, false) })
+            }
+            val comic = c.frame().comics.single { it.id == "c0" }
+            val left = Mat4.transformPoint(c.frame().viewProj, Mat4.transformPoint(comic.model, Vec3(-0.5f, 0f, 0.5f)))
+            val right = Mat4.transformPoint(c.frame().viewProj, Mat4.transformPoint(comic.model, Vec3(0.5f, 0f, 0.5f)))
+            // Neighbours never touch, even a square comic.
+            val a = c.frame().comics.single { it.id == "c1" }
+            val gap = Mat4.transformPoint(a.model, Vec3(-0.5f, 0f, 0f)).x - Mat4.transformPoint(comic.model, Vec3(0.5f, 0f, 0f)).x
+            assertTrue("gap $gap", gap > 0.01f)
+            return (right.x - left.x) / 2f * width to c.columns
+        }
+        val (small, _) = widthOnScreen(ShelfSize.SMALL, 1080, 2280)
+        val (normal, columns) = widthOnScreen(ShelfSize.NORMAL, 1080, 2280)
+        val (large, _) = widthOnScreen(ShelfSize.LARGE, 1080, 2280)
+        assertEquals(2, columns)
+        assertTrue("normal is about a tenth larger: ${normal / small}", normal / small in 1.08f..1.16f)
+        assertTrue("larger still: ${large / small}", large / small > 1.15f)
+        // In landscape too, the camera comes closer.
+        val (wideSmall, _) = widthOnScreen(ShelfSize.SMALL, 2280, 1080)
+        val (wideLarge, _) = widthOnScreen(ShelfSize.LARGE, 2280, 1080)
+        assertTrue("landscape: ${wideLarge / wideSmall}", wideLarge / wideSmall > 1.15f)
+    }
 }

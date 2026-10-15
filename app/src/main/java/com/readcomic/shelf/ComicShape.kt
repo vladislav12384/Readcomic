@@ -48,7 +48,7 @@ object ComicShape {
 
     fun binding(pageCount: Int) = when {
         pageCount <= 64 -> Binding.STAPLED
-        pageCount < 300 -> Binding.PAPERBACK
+        pageCount < 200 -> Binding.PAPERBACK
         else -> Binding.HARDCOVER
     }
 
