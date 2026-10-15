@@ -441,20 +441,22 @@ float tornEdge(vec2 u) {
     return 0.5 + (fibre - 0.5) * 0.5;
 }
 
-// The colour of the paper: milky glassine, with what lies under it showing through where it
-// touches ([contact] 1) and white where it stands off; torn fibres ([rim]) whiter still.
+// The colour of the paper: a dense white wrapping paper, cloudy with its fibres, through which
+// what lies under it only shows as a soft shadow where it touches ([contact] 1); torn fibres
+// ([rim]) whiter still.
 vec3 paperColour(vec2 u, float contact, float rim, bool back) {
-    vec3 milk = vec3(0.86, 0.85, 0.81);
+    float cloud = fbm(u * 150.0) * 0.6 + fbm(u * 420.0 + 3.0) * 0.4;
+    vec3 milk = vec3(0.91, 0.90, 0.87) * (0.95 + 0.08 * cloud);
     vec3 under = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.75 : PAPER * 0.5;
     bool onCover = !back && abs(u.x) < uWrap.x * 0.5 && abs(u.y) < uWrap.y * 0.5;
-    if (onCover && uHasCover > 0.5) under = toLinear(textureLod(uCover, vec2(u.x / uWrap.x + 0.5, 0.5 - u.y / uWrap.y), 1.4).rgb);
-    vec3 a = mix(milk, mix(under * 0.96, milk, 0.2), contact);
-    return mix(a, vec3(0.97, 0.96, 0.93), rim);
+    if (onCover && uHasCover > 0.5) under = toLinear(textureLod(uCover, vec2(u.x / uWrap.x + 0.5, 0.5 - u.y / uWrap.y), 2.6).rgb);
+    vec3 a = mix(milk, mix(under, milk, 0.6), contact);
+    return mix(a, vec3(0.98, 0.97, 0.95), rim);
 }
 
 // Thin paper is lit from both sides: light coming through from behind brightens it too.
 vec3 paperLight(vec3 a, vec3 n, vec3 v) {
-    vec3 color = a * (irradiance(n, 1.0) * 0.85 + irradiance(-n, 1.0) * 0.45 + 0.04);
+    vec3 color = a * (irradiance(n, 1.0) * 0.9 + irradiance(-n, 1.0) * 0.3 + 0.04);
     color += sparkle(n, v, 70.0, 0.25) + sparkle(n, v, 320.0, 0.5);
     return coat(color, n, v, 0.5, 0.12);
 }
@@ -506,7 +508,7 @@ vec3 strip(vec3 v, out float alpha) {
     float contact = kind < 0.5 ? f : (leftover ? 1.0 - smoothstep(0.0, 0.12, f) : 0.0);
     float age = kind < 0.5 ? 0.0 : f;
     // Off the cover the thin paper lets a little of what is behind it through.
-    alpha = (1.0 - smoothstep(0.72, 1.0, age)) * mix(0.86, 1.0, contact);
+    alpha = (1.0 - smoothstep(0.72, 1.0, age)) * mix(0.96, 1.0, contact);
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
     n = bump(n, creases(u) * smoothstep(0.1, 0.5, abs(dot(n, v))));

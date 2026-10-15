@@ -55,7 +55,9 @@ class WrapTear(val width: Float, val height: Float, val margin: Float, seed: Int
     private val rough = FloatArray(columns * rows) { i ->
         val x = left + (i % columns + 0.5f) * cellX
         val y = bottom + (i / columns + 0.5f) * cellY
-        (fbm(x / 0.012f, y / 0.012f, noiseSeed) - 0.5f) * 0.0048f + (valueNoise(x / 0.0035f, y / 0.0035f, noiseSeed + 7) - 0.5f) * 0.0016f
+        (fbm(x / 0.022f, y / 0.022f, noiseSeed) - 0.5f) * 0.009f +
+            (valueNoise(x / 0.006f, y / 0.006f, noiseSeed + 7) - 0.5f) * 0.0026f +
+            (valueNoise(x / 0.0024f, y / 0.0024f, noiseSeed + 9) - 0.5f) * 0.0012f
     }
 
     private val frontCells: Int
@@ -116,6 +118,14 @@ class WrapTear(val width: Float, val height: Float, val margin: Float, seed: Int
 
     /** A strip of paper being torn off or flying away. */
     class Scrap(val id: Int, val seed: Int) {
+        // Every strip tears its own way: its two edges run off from where it began at their own
+        // angles, so one comes away as a narrow tongue, another as a broad wedge or a flap.
+        private val way = Random(seed)
+        val start = floatArrayOf(0.005f + 0.007f * way.nextFloat(), 0.005f + 0.007f * way.nextFloat())
+        val spread = floatArrayOf(0.1f + 0.5f * way.nextFloat() * way.nextFloat(), 0.1f + 0.5f * way.nextFloat())
+        val widest = 0.032f + 0.03f * way.nextFloat()
+        val phase = way.nextFloat() * 100f
+
         /** The finger's path while it tore this strip: x, y; the newest point last. */
         val points = ArrayList<Float>()
 
@@ -189,22 +199,22 @@ class WrapTear(val width: Float, val height: Float, val margin: Float, seed: Int
         var area = 0f
         var px = lastX
         var py = lastY
-        // Faster pulls rip wider strips.
-        val base = BASE_HALF_WIDTH + SPEED_HALF_WIDTH * (speed / 0.5f).coerceIn(0f, 1f)
+        // Faster pulls rip wider.
+        val pull = 1f + 0.35f * (speed / 0.5f).coerceIn(0f, 1f)
         for (k in 1..steps) {
             val nx = lastX + (x - lastX) * k / steps
             val ny = lastY + (y - lastY) * k / steps
-            val s0 = travelled
-            travelled += hypot(nx - px, ny - py)
-            // A tear opens narrow where it starts and widens as it runs.
-            val along = current?.length() ?: 0f
-            val opening = (0.45f + 0.55f * (along / 0.015f)).coerceIn(0.45f, 1f)
-            val l0 = halfWidth(s0, 0) * base * opening
-            val r0 = halfWidth(s0, 1) * base * opening
-            val l1 = halfWidth(travelled, 0) * base * opening
-            val r1 = halfWidth(travelled, 1) * base * opening
+            val step = hypot(nx - px, ny - py)
+            travelled += step
             val existing = current
             val strip = existing ?: Scrap(allocate(), random.nextInt())
+            // The tear opens narrow where it starts and widens as it runs.
+            val a0 = existing?.length() ?: 0f
+            val a1 = a0 + step
+            val l0 = halfWidth(strip, a0, 0) * pull
+            val r0 = halfWidth(strip, a0, 1) * pull
+            val l1 = halfWidth(strip, a1, 0) * pull
+            val r1 = halfWidth(strip, a1, 1) * pull
             val torn = stampSegment(px, py, nx, ny, l0, r0, l1, r1, strip.id)
             area += torn * cellX * cellY
             if (torn >= MIN_TORN_CELLS) {
@@ -246,8 +256,12 @@ class WrapTear(val width: Float, val height: Float, val margin: Float, seed: Int
         current = null
     }
 
-    /** 0.5..1.5: how wide the tear runs at [s] meters along the finger's path, on [side] 0 left, 1 right. */
-    private fun halfWidth(s: Float, side: Int): Float = 0.55f + 0.95f * valueNoise(s / 0.035f, side * 17.3f, noiseSeed + 11)
+    /** How far the edge of [strip] on [side] (0 left, 1 right) runs from the finger's path, [s] meters along it. */
+    private fun halfWidth(strip: Scrap, s: Float, side: Int): Float {
+        val open = min(strip.start[side] + strip.spread[side] * s, strip.widest)
+        val wander = 0.78f + 0.44f * valueNoise(s / 0.028f + strip.phase, side * 17.3f, noiseSeed + 11)
+        return open * wander
+    }
 
     /**
      * Tears the paper within the strip along a to b: [l0] / [r0] wide to the left / right at a,
@@ -874,17 +888,15 @@ class WrapTear(val width: Float, val height: Float, val margin: Float, seed: Int
         private const val MAX_ID = 250
         const val GONE = 255
         private val TORN = 255.toByte()
-        private const val POKE = 0.0035f
+        private const val POKE = 0.005f
         private const val STEP = 0.0025f
-        private const val BASE_HALF_WIDTH = 0.0085f
-        private const val SPEED_HALF_WIDTH = 0.004f
-        private const val ROUGH_REACH = 0.004f
-        private const val ROUGH_FULL = 0.009f
+        private const val ROUGH_REACH = 0.0068f
+        private const val ROUGH_FULL = 0.012f
 
         /** How much wider than the strip its shape is drawn, so that all of its cells are covered. */
         private const val COVER = ROUGH_REACH + CELL
         private const val MIN_TORN_CELLS = 3
-        private const val MAX_STRIP = 0.15f
+        private const val MAX_STRIP = 0.2f
         private const val EDGE_LIFT = 0.0022f
         private const val EDGE_LIFT_REACH = 0.003f
         private const val CURL_RADIUS = 0.028f

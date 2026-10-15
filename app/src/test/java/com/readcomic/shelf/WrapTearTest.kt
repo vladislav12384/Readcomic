@@ -33,8 +33,8 @@ class WrapTearTest {
         }
         // Torn along the path, not far from it.
         for (k in 1..12) assertTrue("torn at ${-0.08f + k * 0.01f}", t.isTorn(-0.08f + k * 0.01f, y))
-        assertFalse(t.isTorn(0f, y + 0.04f))
-        assertFalse(t.isTorn(0f, y - 0.04f))
+        assertFalse(t.isTorn(0f, y + 0.08f))
+        assertFalse(t.isTorn(0f, y - 0.08f))
         // The edges wander: the strip is not equally wide everywhere.
         val widths = (2..11).map { k ->
             val px = -0.08f + k * 0.01f
@@ -93,8 +93,10 @@ class WrapTearTest {
         assertEquals(0f, t.lift(0f, 0f), 0f)
         t.touch(-0.05f, 0f)
         t.drag(0.05f, 0f, 0.3f)
-        val near = t.lift(0f, 0.016f)
-        val far = t.lift(0f, 0.06f)
+        var edge = 0f
+        while (t.isTorn(0f, edge)) edge += 0.001f
+        val near = t.lift(0f, edge + 0.002f)
+        val far = t.lift(0f, edge + 0.04f)
         assertTrue("near the tear: $near, far: $far", near > far * 3f && near > 0.0005f)
     }
 
@@ -125,8 +127,8 @@ class WrapTearTest {
     @Test
     fun whatIsLeftComesOffInItsOwnPieces() {
         val t = tear()
-        for (k in 0..5) {
-            val y = 0.12f - k * 0.05f
+        for (k in 0..1) {
+            val y = 0.08f - k * 0.13f
             t.touch(-0.09f, y)
             t.drag(0.09f, y + 0.01f, 0.4f)
             t.lift()

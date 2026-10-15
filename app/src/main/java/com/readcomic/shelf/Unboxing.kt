@@ -943,10 +943,10 @@ class Unboxing(private val host: Host) {
         private const val HAND_OVER_TIMEOUT = 2.5f
 
         /** Torn this much, the rest of the wrapping falls away when the finger lifts... */
-        const val RELEASE_AT = 0.6f
+        const val RELEASE_AT = 0.45f
 
         /** ...or this much, at once. */
-        const val FORCE_RELEASE_AT = 0.86f
+        const val FORCE_RELEASE_AT = 0.72f
 
         /** Square meters a second of paper torn that make the loudest sound. */
         private const val TEAR_LOUD = 0.012f
