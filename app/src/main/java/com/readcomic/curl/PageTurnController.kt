@@ -118,6 +118,20 @@ class PageTurnController(private val density: Float) {
         fun hiddenX() = CurlMath.hiddenX(grabX(), rect(), 0f)
 
         fun endIsHidden() = !spread && forward == completing
+
+        /**
+         * Whether a finger at (x, y) is on the lifted part of the sheet, within [slack]: between
+         * its folded-over edge and the fold, on the page.
+         */
+        fun isUnder(x: Float, y: Float, slack: Float): Boolean {
+            val r = rect()
+            if (y < r.top - slack || y > r.bottom + slack) return false
+            val curl = CurlMath.compute(grabX(), grabY(), spring.x, spring.y, r, landFlat = spread) ?: return false
+            fun across(px: Float, py: Float) = (px - curl.axisX) * curl.nx + (py - curl.axisY) * curl.ny
+            val finger = across(toCurlX(x), y)
+            val edge = across(spring.x, spring.y)
+            return finger >= edge - slack && finger <= curl.radius + slack
+        }
     }
 
     /**
@@ -601,9 +615,14 @@ class PageTurnController(private val density: Float) {
             drag(x, y)
             return true
         }
-        // A sheet that is falling back can be caught mid-air and pulled again.
+        // A sheet that is falling back can be caught mid-air and pulled again, if the finger
+        // landed on it; a touch anywhere else lets it drop at once and starts its own turn.
         val falling = turn
-        if (falling != null && !falling.dragging && !falling.completing && falling.guide == null) {
+        val caught = catchOnDrag
+        catchOnDrag = false
+        if (falling != null && !falling.dragging && !falling.completing && falling.guide == null &&
+            (caught || falling.isUnder(downX, downY, CATCH_SLACK * density))
+        ) {
             falling.dragging = true
             drag(x, y)
             return true
@@ -625,6 +644,19 @@ class PageTurnController(private val density: Float) {
         this.turn = turn
         drag(x, y)
         return true
+    }
+
+    /** Whether the finger that just touched down landed on a sheet falling back (see [touchDown]). */
+    private var catchOnDrag = false
+
+    /**
+     * A finger touched the screen at (x, y). Whether it caught a sheet falling back is decided
+     * here, where the sheet was at that moment, not a few frames later when the drag starts.
+     */
+    fun touchDown(x: Float, y: Float) {
+        val falling = turn
+        catchOnDrag = falling != null && !falling.dragging && !falling.completing && falling.guide == null &&
+            falling.isUnder(x, y, CATCH_SLACK * density)
     }
 
     /** Which sheet a turn in this direction would move, or null if there is nothing to turn. */
@@ -1148,13 +1180,16 @@ class PageTurnController(private val density: Float) {
                     t.spring.step(gx, gy, GUIDE_OMEGA, dt)
                     if (guide.t >= 1f) t.guide = null
                 } else {
-                    t.spring.step(t.targetX, t.targetY, SETTLE_OMEGA, dt)
+                    // Let go half way, a sheet drops back briskly.
+                    t.spring.step(t.targetX, t.targetY, if (t.completing) SETTLE_OMEGA else FALL_BACK_OMEGA, dt)
                 }
                 val done = when {
                     t.guide != null -> false
                     // Once the sheet is completely off screen nobody can see the rest of the motion.
                     t.endIsHidden() -> t.spring.x <= t.targetX + t.rect().width * 0.12f
-                    else -> t.spring.isAt(t.targetX, t.targetY, 0.75f, 20f)
+                    t.completing -> t.spring.isAt(t.targetX, t.targetY, 0.75f, 20f)
+                    // Back in place: the last pixel of lift is not worth waiting for.
+                    else -> t.spring.isAt(t.targetX, t.targetY, 2f, 60f)
                 }
                 if (done) {
                     turn = null
@@ -1240,6 +1275,10 @@ class PageTurnController(private val density: Float) {
         private const val WIDE_ASPECT = 1.1f
         private const val DRAG_OMEGA = 30f
         private const val SETTLE_OMEGA = 13f
+        private const val FALL_BACK_OMEGA = 18f
+
+        /** How far from a falling sheet a finger still catches it, dp. */
+        private const val CATCH_SLACK = 28f
         private const val GUIDE_OMEGA = 24f
         private const val GUIDE_DURATION = 0.42f
         private const val SPREAD_GUIDE_DURATION = 0.55f

@@ -121,6 +121,48 @@ class PageTurnControllerTest {
     }
 
     @Test
+    fun aTouchBesideAFallingSheetTurnsItsOwnPage() {
+        val c = controller(ReadingMode.SPREAD)
+        c.jumpTo(5)
+        c.settle()
+        val start = c.position
+        val left = c.rightSlot().let { PageRect(it.left - it.width, it.top, it.width, it.height) }
+        val y = left.top + left.height * 0.8f
+        // The left page is lifted half way over and let go: it falls back.
+        c.beginDrag(left.left + 10f, y, left.left + 260f, y)
+        repeat(20) { c.step(1f / 60f) }
+        c.endDrag(velocityX = 0f)
+        repeat(2) { c.step(1f / 60f) }
+        assertNotNull("the left sheet is still in the air", c.currentCurl())
+
+        // A finger on the far right of the right-hand page: not on the falling sheet.
+        val right = c.rightSlot()
+        c.touchDown(right.right - 12f, y)
+        assertTrue(c.beginDrag(right.right - 12f, y, right.right - 80f, y))
+        repeat(40) { c.step(1f / 60f) }
+        c.endDrag(velocityX = -3000f)
+        c.settle()
+        assertEquals("the right-hand page was turned forward", start + 1, c.position)
+    }
+
+    @Test
+    fun aSheetLetGoDropsBackBriskly() {
+        val c = controller(ReadingMode.SINGLE)
+        val rect = c.singleRect(0)
+        val y = rect.top + rect.height / 2
+        c.beginDrag(rect.right - 10f, y, rect.right - 300f, y)
+        repeat(30) { c.step(1f / 60f) }
+        c.endDrag(velocityX = 0f)
+        var t = 0f
+        while (c.currentCurl() != null && t < 2f) {
+            c.step(1f / 60f)
+            t += 1f / 60f
+        }
+        assertTrue("back in place within half a second: $t", t < 0.5f)
+        assertEquals(0, c.position)
+    }
+
+    @Test
     fun cannotTurnBeforeTheFirstPage() {
         val c = controller(ReadingMode.SINGLE)
         val rect = c.singleRect(0)

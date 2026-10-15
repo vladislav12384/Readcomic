@@ -349,8 +349,14 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
                 record(event, pointerId)
                 touchStoppedFling = SystemClock.uptimeMillis() - flingStartedAt < FLING_STOP_WINDOW_MS
                 flingStartedAt = 0L
-                // A finger on the glass stops a thrown page (one stretched past an edge still settles).
-                onGl { controller.catchFling() }
+                // A finger on the glass stops a thrown page (one stretched past an edge still settles),
+                // and may catch a sheet that is falling back, if it lands on it.
+                val x = event.x
+                val y = event.y
+                onGl {
+                    controller.catchFling()
+                    controller.touchDown(x, y)
+                }
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
