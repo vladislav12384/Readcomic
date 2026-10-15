@@ -1,5 +1,6 @@
 package com.readcomic.shelf
 
+import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.opengl.GLES30
 import android.opengl.GLUtils
@@ -42,9 +43,16 @@ interface ShelfArt {
  * Pictures of the shelf kept while the app runs, so that coming back from reading the covers,
  * spines and labels are there at once instead of being decoded all over again. Not the sharp
  * covers of the comic in hand: they are big, and only one is needed at a time.
+ *
+ * It gives memory back as soon as the shelves are not on screen: leaving them (for reading, or
+ * with the app put aside) only what was seen last is kept, enough for a quick way back; with the
+ * app in the background, nothing. Pictures let go are left to the garbage collector, never
+ * recycled here, so one on its way to the screen can never be pulled from under it.
  */
 internal object ShelfArtMemory {
-    private val cache = object : LruCache<String, Bitmap>(budget()) {
+    private val budget = (Runtime.getRuntime().maxMemory() / 6).coerceAtMost(96L * 1024 * 1024).toInt()
+
+    private val cache = object : LruCache<String, Bitmap>(budget) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
 
@@ -56,7 +64,18 @@ internal object ShelfArtMemory {
         if (keeps(key)) cache.put(key, bitmap)
     }
 
-    private fun budget(): Int = (Runtime.getRuntime().maxMemory() / 6).coerceAtMost(96L * 1024 * 1024).toInt()
+    /** The shelves are left: keep only the pictures seen last (the ones that were on screen). */
+    fun keepWarm() = cache.trimToSize(minOf(WARM_BYTES, budget / 3))
+
+    /** The system wants memory back: [level] as in [android.content.ComponentCallbacks2.onTrimMemory]. */
+    fun onTrimMemory(level: Int) {
+        when {
+            level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> cache.evictAll()
+            level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> keepWarm()
+        }
+    }
+
+    private const val WARM_BYTES = 24 * 1024 * 1024
 }
 
 /** GL textures for the shelf, keyed like "cover:<id>". Everything but decoding runs on the render thread. */

@@ -163,6 +163,8 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
         pacer.stop()
         scope.cancel()
         sound.release()
+        // Off to read (or elsewhere): only the pictures that were on screen stay at hand.
+        ShelfArtMemory.keepWarm()
     }
 
     // region Touch handling

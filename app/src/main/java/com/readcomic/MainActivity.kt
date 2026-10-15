@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.readcomic.shelf.ShelfArtMemory
 import com.readcomic.ui.FolderState
 import com.readcomic.ui.LibraryScreen
 import com.readcomic.ui.LibraryViewModel
@@ -62,6 +63,12 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
     private val viewModel: LibraryViewModel by viewModels()
 
     override var volumeKeyListener: ((next: Boolean) -> Unit)? = null
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // Pictures of the shelves kept for a quick way back are the first to go.
+        ShelfArtMemory.onTrimMemory(level)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
