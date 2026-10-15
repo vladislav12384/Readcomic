@@ -6,6 +6,10 @@ plugins {
 // CI passes its run number so every published build is an update of the previous one.
 val buildNumber = (findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
 
+// A preview build (-Ppreview=true) to try new things in: an app of its own, "Readcomic β", installed
+// next to the main one instead of over it.
+val preview = (findProperty("preview") as String?) == "true"
+
 android {
     namespace = "com.readcomic"
     compileSdk = 37
@@ -16,6 +20,13 @@ android {
         targetSdk = 36
         versionCode = buildNumber
         versionName = "0.2.$buildNumber"
+        if (preview) {
+            applicationIdSuffix = ".preview"
+            versionNameSuffix = "-preview"
+            manifestPlaceholders["appLabel"] = "Readcomic β"
+        } else {
+            manifestPlaceholders["appLabel"] = "@string/app_name"
+        }
     }
 
     signingConfigs {

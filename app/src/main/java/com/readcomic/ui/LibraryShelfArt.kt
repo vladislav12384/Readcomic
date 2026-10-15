@@ -13,6 +13,7 @@ import androidx.core.graphics.createBitmap
 import androidx.core.graphics.withTranslation
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
+import com.readcomic.data.ComicSource
 import com.readcomic.shelf.Binding
 import com.readcomic.shelf.ComicShape
 import com.readcomic.shelf.ShelfArt
@@ -25,6 +26,8 @@ class LibraryShelfArt(
     private val context: Context,
     private val entries: Map<String, ComicEntry>,
     private val coverFile: (ComicEntry) -> File,
+    /** Where the back of the comic in hand comes from. */
+    private val backCovers: BackCovers = BackCovers.MISSING,
 ) : ShelfArt {
 
     override fun cover(id: String): Bitmap? {
@@ -181,16 +184,45 @@ class LibraryShelfArt(
             }
             if (!back) return frontHalf(first)
             first.recycle()
-            if (source.pageCount < 2) return null
-            val last = source.loadPage(source.pageCount - 1, SHARP_WIDTH * 2, SHARP_HEIGHT) ?: return null
-            // A back cover that is not cover-shaped (a spread, a tiny strip) would look stretched.
-            val coverAspect = coverAspect(entry) ?: return last
-            if (abs(last.width.toFloat() / last.height - coverAspect) > 0.15f) {
-                last.recycle()
-                return null
-            }
-            return last
+            if (backCovers == BackCovers.ALWAYS) return drawnBack(entry, source.metadata?.summary)
+            return lastPage(entry, source) ?: if (backCovers == BackCovers.MISSING) drawnBack(entry, source.metadata?.summary) else null
         }
+    }
+
+    /** The last page as the back cover, if there is one and it is cover-shaped. */
+    private fun lastPage(entry: ComicEntry, source: ComicSource): Bitmap? {
+        if (source.pageCount < 2) return null
+        val last = source.loadPage(source.pageCount - 1, SHARP_WIDTH * 2, SHARP_HEIGHT) ?: return null
+        // A back cover that is not cover-shaped (a spread, a tiny strip) would look stretched.
+        val coverAspect = coverAspect(entry) ?: return last
+        if (abs(last.width.toFloat() / last.height - coverAspect) > 0.15f) {
+            last.recycle()
+            return null
+        }
+        return last
+    }
+
+    /** A back cover drawn from the front, in the colours of the spine, for a comic without one. */
+    private fun drawnBack(entry: ComicEntry, summary: String?): Bitmap {
+        val aspect = coverAspect(entry) ?: DEFAULT_COVER_ASPECT
+        val width = SHARP_WIDTH
+        val height = (width / aspect).toInt().coerceIn(width, SHARP_HEIGHT * 2)
+        val front = coverFile(entry).takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) }?.let(::frontHalf)
+        val numbered = NUMBER.find(entry.title)
+        val title = entry.series
+            ?: numbered?.let { entry.title.substring(0, it.range.first).trim() }?.ifEmpty { null }
+            ?: entry.title
+        val about = summary?.replace(Regex("<[^>]+>"), " ")?.replace(Regex("\\s+"), " ")?.trim()?.take(900)?.ifEmpty { null }
+        val text = BackCoverArt.Text(
+            title = title,
+            number = numbered?.groupValues?.get(1),
+            credits = listOfNotNull(entry.writer, entry.year?.toString()),
+            summary = about,
+            pages = entry.pageCount,
+        )
+        val bitmap = BackCoverArt.draw(front, spineColors(entry), text, entry.id.hashCode(), width, height)
+        front?.recycle()
+        return bitmap
     }
 
     override fun spine(id: String): Bitmap? {
@@ -330,6 +362,7 @@ class LibraryShelfArt(
         private const val PLAQUE_WIDTH = 1024
         private const val PLAQUE_HEIGHT = 166
         private const val SHARP_WIDTH = 900
+        private const val DEFAULT_COVER_ASPECT = 0.66f
         private const val SHARP_HEIGHT = 1400
         private const val PAPER = 0xFFEFE8DA.toInt()
         private const val INK = 0xFF3A2A1C.toInt()

@@ -167,6 +167,7 @@ private fun App(viewModel: LibraryViewModel) {
     val handHint by viewModel.handHint.collectAsStateWithLifecycle()
     val shelfOrder by viewModel.shelfOrder.collectAsStateWithLifecycle()
     val shelfSize by viewModel.shelfSize.collectAsStateWithLifecycle()
+    val backCovers by viewModel.backCovers.collectAsStateWithLifecycle()
     val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
     val wrapNew by viewModel.wrapNew.collectAsStateWithLifecycle()
     val unboxSound by viewModel.unboxSound.collectAsStateWithLifecycle()
@@ -328,6 +329,8 @@ private fun App(viewModel: LibraryViewModel) {
                 onSetSeries = viewModel::setSeries,
                 shelfSize = shelfSize,
                 onShelfSizeChange = viewModel::setShelfSize,
+                backCovers = backCovers,
+                onBackCoversChange = viewModel::setBackCovers,
                 onStartOver = { entry ->
                     viewModel.startOver(entry)
                     openId = entry.id

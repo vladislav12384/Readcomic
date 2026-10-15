@@ -796,7 +796,12 @@ class Unboxing(private val host: Host) {
         val u = 1f - e
         val position = inBox * (u * u) + mid * (2f * u * e) + held.first * (e * e)
         val turn = ((e - 0.15f) / 0.85f).coerceIn(0f, 1f)
-        return position to Quat.slerp(boxRotationOfIt, held.second, turn * turn * (3f - 2f * turn))
+        // Not lifted out like on a rail: on the way it tips back a little and turns a little,
+        // one way or the other, as a hand would pull it out; in the hands it is straight again.
+        val swing = sin(PI.toFloat() * e)
+        val side = if (seedOf(item.id) and 1 == 0) 1f else -1f
+        val flourish = Quat.axisAngle(Z, 0.12f * side * swing) * Quat.axisAngle(Y, -0.1f * side * swing * swing)
+        return position to (flourish * Quat.slerp(boxRotationOfIt, held.second, turn * turn * (3f - 2f * turn)))
     }
 
     /** A comic lying in the box: on top of those after it in the box (the next one is on top). */
@@ -929,6 +934,7 @@ class Unboxing(private val host: Host) {
     companion object {
         private val X = Vec3(1f, 0f, 0f)
         private val Y = Vec3(0f, 1f, 0f)
+        private val Z = Vec3(0f, 0f, 1f)
         private val ONE = Vec3(1f, 1f, 1f)
         private const val MAX_STACK = 6
         private const val DIM = 0.55f

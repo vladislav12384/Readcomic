@@ -2,6 +2,9 @@ name: Build APK
 
 # Builds the app on every push and publishes it as a GitHub release, so the newest APK is always at
 # https://github.com/vladislav12384/Readcomic/releases/latest/download/Readcomic.apk
+#
+# A commit whose message has "[preview]" in it builds a preview instead: "Readcomic β", an app of
+# its own installed next to the main one, published as a pre-release that is not the latest.
 
 on:
   push:
@@ -27,9 +30,32 @@ jobs:
           java-version: 21
 
       - name: Test and build
+        if: ${{ !contains(github.event.head_commit.message, '[preview]') }}
         run: ./gradlew --no-daemon testDebugUnitTest assembleRelease assembleDebug -PversionCode=${{ github.run_number }}
 
+      - name: Test and build the preview
+        if: ${{ contains(github.event.head_commit.message, '[preview]') }}
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease -PversionCode=${{ github.run_number }} -Ppreview=true
+
+      - name: Publish the preview
+        if: ${{ contains(github.event.head_commit.message, '[preview]') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk Readcomic-preview.apk
+          gh release create "preview-${{ github.run_number }}" Readcomic-preview.apk \
+            --target "${{ github.sha }}" \
+            --title "Readcomic β ${{ github.run_number }} — пробная сборка" \
+            --prerelease \
+            --latest=false \
+            --notes "Пробная сборка из коммита ${{ github.sha }}, не основная.
+
+          **Readcomic-preview.apk** ставится отдельным приложением «Readcomic β» рядом с основным и ничего в нём не меняет (у пробной своя библиотека).
+
+          © vladislav12384, https://github.com/vladislav12384/Readcomic — лицензия CC BY-NC-SA 4.0: только некоммерческое использование, с указанием автора и ссылки (см. NOTICE.md)."
+
       - name: Publish release
+        if: ${{ !contains(github.event.head_commit.message, '[preview]') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
