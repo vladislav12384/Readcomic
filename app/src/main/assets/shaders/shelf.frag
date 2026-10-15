@@ -438,6 +438,30 @@ vec3 namePlate(vec3 v) {
     return mix(color, enamel, ink);
 }
 
+// A satin bookmark: woven along its length, so its sheen runs across it in a band that slides
+// along the ribbon as it bends (anisotropic, Kajiya-Kay), deep red where the light is low.
+vec3 ribbon(vec3 v) {
+    vec3 n = normalize(vNormal);
+    if (!gl_FrontFacing) n = -n;
+    // Along the ribbon: where u (across) stays the same.
+    vec3 dpx = dFdx(vWorld);
+    vec3 dpy = dFdy(vWorld);
+    vec3 t = dpx * dFdy(vUV.x) - dpy * dFdx(vUV.x);
+    t = length(t) > 1e-9 ? normalize(t) : vec3(0.0, 1.0, 0.0);
+    // Fine threads along it, and slightly darker selvedges.
+    float threads = 0.92 + 0.08 * sin(vUV.x * 150.0);
+    float edge = 1.0 - 0.25 * smoothstep(0.38, 0.5, abs(vUV.x - 0.5));
+    vec3 base = vec3(0.36, 0.012, 0.03) * threads * edge;
+    vec3 color = base * irradiance(n, 1.0);
+    vec3 light = uHeld > 0.5 ? normalize(vec3(-0.45, 0.50, 0.75)) : uLightDir;
+    vec3 h = normalize(light + v);
+    float th = dot(t, h);
+    float sheen = pow(sqrt(max(1.0 - th * th, 0.0)), 70.0) * max(dot(n, light), 0.0);
+    float soft = pow(sqrt(max(1.0 - th * th, 0.0)), 8.0) * 0.12;
+    float lit = uHeld > 0.5 ? 1.0 : shadowAt(n);
+    return color + (vec3(1.0, 0.55, 0.5) * sheen * 0.9 + vec3(0.6, 0.12, 0.12) * soft) * lit;
+}
+
 // endregion
 
 void main() {
@@ -452,9 +476,7 @@ void main() {
     } else if (uMaterial == 3) {
         color = label(v);
     } else if (uMaterial == 4) {
-        vec3 n = normalize(vNormal);
-        color = vec3(0.42, 0.015, 0.025) * irradiance(n, 1.0) + sparkle(n, v, 30.0, 0.3);
-        color = coat(color, n, v, 0.5, 0.1);
+        color = ribbon(v);
     } else {
         color = namePlate(v);
     }

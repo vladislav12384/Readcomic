@@ -54,7 +54,7 @@ class ArrivalTest {
         assertEquals("lands once", 1, landed)
         val rest = c.pose()!!
         assertEquals(0f, rest.lift, 1e-3f)
-        assertEquals(0f, rest.angle, 0.05f)
+        assertTrue("lies a little askew: ${rest.angle}", abs(rest.angle) in 1.3f..3.9f)
         assertTrue("lies closed in the middle of the table", rest.shiftX < 0f && rest.scale < 1f)
         assertTrue("nothing is reported while closed: the bookmark stays", changes.isEmpty())
     }
@@ -128,7 +128,7 @@ class ArrivalTest {
             alphas += pose.alpha
             assertEquals(1f, pose.lift, 0f)
         }
-        assertTrue("fades in over several frames: ${alphas.size}", alphas.size >= 15)
+        assertTrue("fades in over several frames: ${alphas.size}", alphas.size >= 10)
         assertEquals(alphas.sorted(), alphas)
         assertTrue(alphas.first() < 0.1f && alphas.last() > 0.95f)
         // The first frames of the fall move only a little, then faster and faster.
@@ -147,5 +147,54 @@ class ArrivalTest {
         assertTrue("tilts from rest", abs(tilts[1] - tilts[0]) < abs(tilts[5] - tilts[4]) * 0.5f)
         assertTrue("falls from rest", (lifts[0] - lifts[1]) < (lifts[4] - lifts[5]) * 0.5f)
         assertEquals(1f, c.pose()!!.alpha, 0f)
+    }
+
+    @Test
+    fun itFallsFromRightInFrontOfTheEyes() {
+        for ((mode, size) in listOf(ReadingMode.SPREAD to (1080 to 2280), ReadingMode.SPREAD to (2280 to 1080), ReadingMode.SINGLE to (1080 to 2280))) {
+            val (width, height) = size
+            val c = closedComic(mode, start = 4, width = width, height = height)
+            val rect = if (mode == ReadingMode.SPREAD) c.rightSlot() else c.singleRect(0)
+            c.step(1f / 60f)
+            val first = c.pose()!!
+            // Seen from the eye: larger by 1 / (1 - lift * height).
+            val seen = first.scale / (1f - first.lift * first.height)
+            // It overflows the screen; on a wide screen (where that would mean a giant cover) it
+            // fills the height and most of the width.
+            assertTrue("overflows the height at first ($mode ${width}x$height)", rect.height * seen > height)
+            val wanted = if (width > height) width * 0.6f else width.toFloat()
+            assertTrue("covers the width at first ($mode ${width}x$height)", rect.width * seen > wanted)
+            c.settle()
+            val rest = c.pose()!!
+            assertEquals(0f, rest.lift, 1e-3f)
+            // Lying closed it uses the screen well, whatever the layout.
+            val fill = maxOf(rect.width * rest.scale / width, rect.height * rest.scale / height)
+            assertTrue("lies large on the table: $fill", fill in 0.8f..0.95f)
+        }
+    }
+
+    @Test
+    fun eachComicLandsALittleDifferently() {
+        val angles = (1..6).map { seed ->
+            closedComic(ReadingMode.SINGLE, start = 2, width = 1080, height = 2280).apply {
+                random = kotlin.random.Random(seed)
+                setPages(FloatArray(12) { 0.65f }, startImage = 2, closed = true)
+                coverReady = true
+                settle()
+            }.pose()!!.angle
+        }
+        assertTrue("not always the same: $angles", angles.distinct().size > 3)
+        assertTrue(angles.any { it < 0f } && angles.any { it > 0f })
+    }
+
+    @Test
+    fun inPortraitTheClosedComicMovesBackToTheSpreadAsItOpens() {
+        val c = closedComic(ReadingMode.SPREAD, start = 6, width = 1080, height = 2280)
+        c.settle()
+        assertTrue("closed, larger than a page of the spread", c.pose()!!.scale > 1.5f)
+        c.open()
+        c.settle()
+        assertNull(c.pose())
+        assertFalse(c.isClosed)
     }
 }

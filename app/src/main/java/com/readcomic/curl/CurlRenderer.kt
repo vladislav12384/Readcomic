@@ -215,7 +215,8 @@ class CurlRenderer(
     private fun updateMatrices() {
         val w = width.toFloat()
         val h = height.toFloat()
-        val zRange = 4f * max(w, h)
+        // Deep enough for a comic held right in front of the eye.
+        val zRange = 12f * max(w, h)
         val eye = EYE_DISTANCE * max(w, h)
         // Orthographic mapping of the z = 0 plane to view pixels, with a mild perspective
         // (w = 1 - z / eye) so that lifted parts of a sheet come towards the reader.
@@ -261,7 +262,7 @@ class CurlRenderer(
         Matrix.translateM(poseMatrix, 0, pose.pivotX + pose.shiftX, pose.pivotY + pose.shiftY, 0f)
         Matrix.rotateM(poseMatrix, 0, pose.angle, 0f, 0f, 1f)
         Matrix.rotateM(poseMatrix, 0, pose.tilt, 1f, 0f, 0f)
-        Matrix.translateM(poseMatrix, 0, 0f, 0f, pose.lift * LIFT * eye)
+        Matrix.translateM(poseMatrix, 0, 0f, 0f, pose.lift * pose.height * eye)
         Matrix.scaleM(poseMatrix, 0, pose.scale, pose.scale, 1f)
         Matrix.translateM(poseMatrix, 0, -pose.pivotX, -pose.pivotY, 0f)
         Matrix.multiplyMM(posed, 0, view, 0, poseMatrix, 0)
@@ -270,14 +271,16 @@ class CurlRenderer(
         // On the table its shadow falls away from the light the higher it is, larger and softer.
         val a = Math.toRadians(pose.angle.toDouble()).toFloat()
         inverseAffine(bookInverse, s, ox, oy, a, pose.pivotX, pose.pivotY, pose.shiftX, pose.shiftY, pose.scale)
-        val reach = pose.lift * min(w, h)
+        val reach = min(pose.lift * pose.height / LIFT, 1f) * min(w, h)
         inverseAffine(
             shadowInverse, s, ox, oy, a, pose.pivotX, pose.pivotY,
             pose.shiftX + reach * 0.07f, pose.shiftY + reach * 0.11f,
             pose.scale * (1f + 0.06f * pose.lift),
         )
-        shadowSoft = 1f + 7f * pose.lift
-        shadowAlpha = if (pose.hidden) 0f else (1f - 0.5f * pose.lift) * pose.alpha
+        // High above the table the comic's shadow is wide, soft and faint.
+        val up = min(pose.lift * pose.height / LIFT, 1f)
+        shadowSoft = 1f + 7f * up
+        shadowAlpha = if (pose.hidden) 0f else (1f - 0.5f * up) * pose.alpha
         stackAlpha = if (pose.hidden) 0f else pose.stacks
         hidden = pose.hidden
         alpha = pose.alpha
@@ -547,7 +550,7 @@ class CurlRenderer(
         /** Distance from the eye to the screen, in screen sizes: sets the perspective and reflections. */
         const val EYE_DISTANCE = 2.2f
 
-        /** How high a comic in the hand is above the table, as a part of the distance to the eye. */
+        /** Above this height (a part of the distance to the eye) the comic's shadow is at its softest. */
         const val LIFT = 0.16f
 
         /** Direction towards the light: from the top left, mostly from the front. */

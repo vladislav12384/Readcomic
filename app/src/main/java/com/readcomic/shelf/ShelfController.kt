@@ -37,6 +37,7 @@ class ComicDraw(
     /** Pages, for the lines of the sheets on the page edges. */
     val pages: Int,
     val binding: Binding,
+    /** The bookmark of a comic being read: its triangles in the world, see [Ribbon.mesh]. */
     val ribbon: FloatArray?,
     val held: Boolean,
     /** Not among what is being searched for: it stays in the shade. */
@@ -139,6 +140,8 @@ class ShelfController(private val density: Float) {
 
     fun setItems(newItems: List<ShelfItem>) {
         items = newItems
+        val reading = newItems.filter { it.inProgress }.map { it.id }.toSet()
+        ribbons.keys.retainAll(reading)
         if (heldId != null && items.none { it.id == heldId }) {
             heldId = null
             holding = false
@@ -319,17 +322,7 @@ class ShelfController(private val density: Float) {
             val size = sizeOf(item)
             val (position, rotation) = poseOf(index, item, size)
             val model = Mat4.compose(position, rotation, size)
-            val ribbon = if (item.inProgress) {
-                // A satin bookmark sticking out of the top of the block.
-                val local = Mat4.compose(
-                    Vec3(0.28f, 0.5f + RIBBON_LENGTH / size.y / 2f - 0.02f, 0f),
-                    Quat.IDENTITY,
-                    Vec3(RIBBON_WIDTH / size.x, RIBBON_LENGTH / size.y, 0.25f),
-                )
-                Mat4.multiply(model, local)
-            } else {
-                null
-            }
+            val ribbon = if (item.inProgress) ribbons.getOrPut(item.id) { Ribbon() }.mesh(position, rotation, size) else null
             val faded = found != null && item.id !in found
             val draw = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld, faded)
             if (isHeld) held = draw else comics += draw
@@ -540,6 +533,26 @@ class ShelfController(private val density: Float) {
 
     // endregion
 
+    // The bookmarks of the comics being read, which swing when their comic moves.
+    private val ribbons = HashMap<String, Ribbon>()
+
+    /** Moves the bookmarks of the comics on screen (or in the hands) along with them. */
+    private fun stepRibbons(dt: Float): Boolean {
+        val halfH = visibleHalfHeight
+        val topRow = max(0, floor(-(cameraY + halfH * 1.3f) / ROW_HEIGHT).toInt())
+        val bottomRow = ceil(-(cameraY - halfH * 1.3f) / ROW_HEIGHT).toInt() + 1
+        var moving = false
+        items.forEachIndexed { index, item ->
+            if (!item.inProgress) return@forEachIndexed
+            val row = index / columns
+            if (item.id != heldId && (row < topRow - 1 || row > bottomRow)) return@forEachIndexed
+            val size = sizeOf(item)
+            val (position, rotation) = poseOf(index, item, size)
+            if (ribbons.getOrPut(item.id) { Ribbon() }.step(position, rotation, size, dt)) moving = true
+        }
+        return moving
+    }
+
     /** Advances animations. Returns true while another frame is needed. */
     fun step(dt: Float): Boolean {
         var animating = false
@@ -619,6 +632,7 @@ class ShelfController(private val density: Float) {
                 animating = true
             }
         }
+        if (stepRibbons(dt)) animating = true
         return animating
     }
 
@@ -647,8 +661,6 @@ class ShelfController(private val density: Float) {
         const val SIGN_MAX_WIDTH = 0.42f
         private const val SEARCH_FADE = 0.25f
         private const val FOCUS_RATE = 7f
-        const val RIBBON_WIDTH = 0.008f
-        const val RIBBON_LENGTH = 0.05f
         private const val HOLD_OMEGA = 9f
         private const val ROTATE_PER_PIXEL = 0.0075f
         private const val MAX_PITCH = 0.8f

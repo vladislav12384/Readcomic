@@ -29,6 +29,12 @@ class ShelfRenderer(
     private lateinit var depthProgram: GlProgram
     private lateinit var box: Mesh
     private lateinit var quad: Mesh
+
+    // Bookmarks change shape every frame: one buffer, filled anew for each.
+    private var ribbonVao = 0
+    private var ribbonBuffer = 0
+    private val ribbonData = ByteBuffer.allocateDirect((Ribbon.ROWS + 1) * 3 * 9 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+    private val identity = FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) }
     private val comicMeshes = HashMap<String, Mesh>()
     private var blank = 0
     private var shadowTexture = 0
@@ -67,6 +73,7 @@ class ShelfRenderer(
         comicMeshes.clear()
         box = createMesh(boxVertices(), boxIndices())
         quad = createMesh(quadVertices(), shortArrayOf(0, 1, 2, 0, 2, 3))
+        createRibbonMesh()
         blank = createBlankTexture()
         createShadowMap()
         art.onContextCreated()
@@ -125,7 +132,11 @@ class ShelfRenderer(
         for (comic in frame.comics) {
             // A comic lifted off the shelf would throw a hard shadow far behind it; real ones blur away.
             if (comic.held && frame.dim > 0.05f) continue
-            comic.ribbon?.let(::cast)
+            comic.ribbon?.let { vertices ->
+                fillRibbon(vertices)
+                GLES30.glUniformMatrix4fv(depthProgram["uModel"], 1, false, identity, 0)
+                GLES30.glDrawElements(GLES30.GL_TRIANGLES, Ribbon.INDICES.size, GLES30.GL_UNSIGNED_SHORT, 0)
+            }
             val mesh = meshFor(comic)
             GLES30.glBindVertexArray(mesh.vao)
             GLES30.glUniformMatrix4fv(depthProgram["uModel"], 1, false, comic.model, 0)
@@ -200,7 +211,10 @@ class ShelfRenderer(
             // Once out of the shelf's light, the comic in hand is lit like in a photo studio.
             GLES30.glUniform1f(p["uHeld"], if (comic.held && frame.dim > 0.25f) 1f else 0f)
             draw(meshFor(comic), comic.model, MATERIAL_COMIC, dim, cover = cover, back = back, spine = art["spine:${comic.id}"])
-            comic.ribbon?.let { draw(box, it, MATERIAL_RIBBON, dim) }
+            comic.ribbon?.let { vertices ->
+                fillRibbon(vertices)
+                draw(Mesh(ribbonVao, Ribbon.INDICES.size), identity, MATERIAL_RIBBON, dim)
+            }
         }
         GLES30.glBindVertexArray(0)
     }
@@ -245,6 +259,42 @@ class ShelfRenderer(
             val shape = ComicShape.build(size.x, size.y, size.z, comic.binding)
             createMesh(shape.vertices, shape.indices)
         }
+    }
+
+    private fun createRibbonMesh() {
+        val ids = IntArray(1)
+        GLES30.glGenVertexArrays(1, ids, 0)
+        ribbonVao = ids[0]
+        GLES30.glBindVertexArray(ribbonVao)
+        val buffers = IntArray(2)
+        GLES30.glGenBuffers(2, buffers, 0)
+        ribbonBuffer = buffers[0]
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, ribbonBuffer)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, ribbonData.capacity() * 4, null, GLES30.GL_DYNAMIC_DRAW)
+        val stride = 9 * 4
+        GLES30.glEnableVertexAttribArray(0)
+        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
+        GLES30.glEnableVertexAttribArray(1)
+        GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, stride, 12)
+        GLES30.glEnableVertexAttribArray(2)
+        GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, stride, 24)
+        GLES30.glEnableVertexAttribArray(3)
+        GLES30.glVertexAttribPointer(3, 1, GLES30.GL_FLOAT, false, stride, 32)
+        val indices = ByteBuffer.allocateDirect(Ribbon.INDICES.size * 2).order(ByteOrder.nativeOrder()).asShortBuffer()
+        indices.put(Ribbon.INDICES).position(0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, buffers[1])
+        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, Ribbon.INDICES.size * 2, indices, GLES30.GL_STATIC_DRAW)
+        GLES30.glBindVertexArray(0)
+    }
+
+    /** Puts the triangles of one bookmark into the ribbon buffer and binds it for drawing. */
+    private fun fillRibbon(vertices: FloatArray) {
+        ribbonData.position(0)
+        ribbonData.put(vertices).position(0)
+        GLES30.glBindVertexArray(ribbonVao)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, ribbonBuffer)
+        // A fresh store every time: no waiting for the GPU to finish with the previous bookmark.
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, vertices.size * 4, ribbonData, GLES30.GL_DYNAMIC_DRAW)
     }
 
     /** Inverse transpose of the upper 3x3 of [m], column-major. */

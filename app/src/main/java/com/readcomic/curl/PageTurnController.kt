@@ -1,11 +1,13 @@
 package com.readcomic.curl
 
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.random.Random
 
 /**
  * All the reading state that is not tied to OpenGL: the comic laid out as a book, the sheet
@@ -56,6 +58,8 @@ class PageTurnController(private val density: Float) {
         val hidden: Boolean,
         /** It fades in where it is held up before it falls. */
         val alpha: Float = 1f,
+        /** How close to the eye [lift] 1 is, as a part of the distance from the eye to the table. */
+        val height: Float = 0.16f,
     )
 
     enum class ReadingMode { AUTO, SPREAD, SINGLE }
@@ -138,15 +142,24 @@ class PageTurnController(private val density: Float) {
      * The comic arriving on the table closed: it falls from the hand, lands, and waits to be
      * opened at [image] (where reading continues).
      */
-    private class Arrival(val image: Int) {
+    private class Arrival(val image: Int, random: Random) {
         /** Seconds since it started to fall; negative while waiting for the cover and appearing. */
         var time = -1f
         var waited = 0f
 
-        /** How far it has faded in, held up above the table, before it falls: 0..1. */
+        /** How far it has faded in, right in front of the eyes, before it falls: 0..1. */
         var appear = 0f
         var landed = false
+
+        // A comic dropped on a table never lies quite straight: a little turned and off centre,
+        // a bit differently every time (degrees, and parts of its width and height).
+        val restAngle = (1.4f + 2.4f * random.nextFloat()) * (if (random.nextBoolean()) 1f else -1f)
+        val restShiftX = (random.nextFloat() * 2f - 1f) * 0.03f
+        val restShiftY = (random.nextFloat() * 2f - 1f) * 0.02f
     }
+
+    /** Where comics land on the table; fixed in tests. */
+    var random: Random = Random.Default
 
     private class ZoomAnimation(
         val fromScale: Float, val fromX: Float, val fromY: Float,
@@ -263,7 +276,7 @@ class PageTurnController(private val density: Float) {
         resetZoom()
         if (closed && pages.isNotEmpty()) {
             // The comic comes onto the table closed and opens where reading continues.
-            arrival = Arrival(startImage)
+            arrival = Arrival(startImage, random)
             position = 0
             setClosed(true)
         } else {
@@ -754,37 +767,52 @@ class PageTurnController(private val density: Float) {
         }
         val eased = opening * opening * (3f - 2f * opening)
         val shiftX = if (isSpread) -rect.width / 2f * (1f - eased) else 0f
-        // Lying closed it is seen whole with the table around it; opening it brings it close.
-        val rest = if (viewHeight > viewWidth) CLOSED_SCALE_PORTRAIT else CLOSED_SCALE_LANDSCAPE
+        // Lying closed it takes most of the screen, the table around it (in portrait a cover
+        // is much larger than the page of a spread); opening, it settles to the reading size.
+        val fit = min((viewWidth - 2f * margin) / rect.width, (viewHeight - 2f * margin) / rect.height)
+        val rest = CLOSED_FILL * fit
         val scale = rest + (1f - rest) * eased
+        // It falls from right in front of the eyes: so close that it overflows the screen.
+        val overflow = (START_OVERFLOW * max(viewWidth / (rect.width * rest), viewHeight / (rect.height * rest))).coerceIn(1.3f, MAX_START_SIZE)
+        val height = 1f - 1f / overflow
+        // As it lies, a little askew; it straightens out as it opens.
+        val restAngle = closed.restAngle * (1f - eased)
+        val restX = rect.width * rest * closed.restShiftX * (1f - eased)
+        val restY = rect.height * rest * closed.restShiftY * (1f - eased)
         if (closed.time < 0f) {
-            if (closed.appear <= 0f) return Pose(1f, DROP_ANGLE, DROP_TILT, pivotX, pivotY, scale, shiftX, 0f, 0f, hidden = true)
-            // Appearing in the hand: it fades in and comes a little closer, still.
+            if (closed.appear <= 0f) return Pose(1f, 0f, DROP_TILT, pivotX, pivotY, scale, shiftX, 0f, 0f, hidden = true, height = height)
+            // Coming into view: it fades in, filling the screen, still.
             val a = closed.appear * closed.appear * (3f - 2f * closed.appear)
-            return Pose(1f, DROP_ANGLE, DROP_TILT, pivotX, pivotY, scale * (0.965f + 0.035f * a), shiftX, 0f, 0f, hidden = false, alpha = a)
+            return Pose(1f, 0f, DROP_TILT, pivotX, pivotY, scale, shiftX, 0f, 0f, hidden = false, alpha = a, height = height)
         }
 
         val lift: Float
         val angle: Float
         val tilt: Float
+        val drift: Float
         if (closed.time < DROP_DURATION) {
-            // Falling: slow at first, faster and faster, straightening out on the way down. Every
-            // motion starts from rest, so nothing jerks as it lets go.
+            // Falling away from the eyes onto the table: slow at first, faster and faster,
+            // turning to the way it will lie. Every motion starts from rest, so nothing jerks.
             val u = closed.time / DROP_DURATION
             lift = 1f - u * u
-            val straighten = u * u * (3f - 2f * u)
-            angle = DROP_ANGLE * (1f - straighten)
-            tilt = DROP_TILT * (1f - straighten)
+            drift = u * u * (3f - 2f * u)
+            angle = restAngle * 1.6f * drift
+            tilt = DROP_TILT * (1f - drift)
         } else {
-            // A small hop where it hits the table, quickly settling.
+            // A small hop where it hits the table, a last little turn, and it settles.
             val since = closed.time - DROP_DURATION
             val decay = exp(-since * 10f)
-            lift = 0.035f * decay * abs(sin(since * 17f))
-            angle = DROP_ANGLE * -0.06f * decay * sin(since * 13f)
+            lift = 0.035f * decay * abs(sin(since * 17f)) / overflow
+            angle = restAngle * (1f + 0.6f * exp(-since * 7f) * cos(since * 11f))
             tilt = DROP_TILT * 0.08f * decay * sin(since * 17f)
+            drift = 1f
         }
-        val stacks = 1f - (lift / 0.12f).coerceIn(0f, 1f)
-        return Pose(lift, angle, tilt, pivotX, pivotY, scale, shiftX, 0f, stacks, hidden = false)
+        // The edges of the pages show once it is down on the table.
+        val stacks = 1f - (lift * height / 0.02f).coerceIn(0f, 1f)
+        return Pose(
+            lift, angle, tilt, pivotX, pivotY, scale,
+            shiftX + restX * drift, restY * drift, stacks, hidden = false, height = height,
+        )
     }
 
     /** Where opening lands: the place reading continues, at least past the cover. */
@@ -1287,14 +1315,18 @@ class PageTurnController(private val density: Float) {
         private const val BOUNCE_OMEGA = 14f
 
         // The closed comic falling onto the table: time to fall, to settle, its turn and tilt in the hand.
-        private const val APPEAR_DURATION = 0.35f
-        private const val DROP_DURATION = 0.68f
+        private const val APPEAR_DURATION = 0.22f
+        private const val DROP_DURATION = 0.82f
         private const val SETTLE_DURATION = 0.4f
-        private const val DROP_ANGLE = -8f
-        private const val DROP_TILT = 16f
+        private const val DROP_TILT = 2f
         private const val COVER_WAIT = 0.8f
-        private const val CLOSED_SCALE_PORTRAIT = 0.8f
-        private const val CLOSED_SCALE_LANDSCAPE = 0.88f
+
+        /** Lying closed, the comic is this much of the largest size that fits the screen. */
+        private const val CLOSED_FILL = 0.86f
+
+        /** It starts so close to the eyes that it is this much larger than the screen. */
+        private const val START_OVERFLOW = 1.12f
+        private const val MAX_START_SIZE = 2.6f
 
         /** Speed (dp per second) a thrown page keeps when it hits an edge. */
         private const val BOUNCE_MAX_SPEED = 1400f
