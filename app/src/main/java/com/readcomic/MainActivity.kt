@@ -5,8 +5,10 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Window
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -48,6 +51,7 @@ import com.readcomic.ui.MessagesEffect
 import com.readcomic.ui.OrientationLock
 import com.readcomic.ui.ReadcomicTheme
 import com.readcomic.ui.ReaderScreen
+import com.readcomic.ui.ScreenSaver
 import com.readcomic.ui.VolumeKeyHost
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -97,6 +101,47 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
 
     private fun isVolumeKey(keyCode: Int) =
         keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
+
+    /** When the screen was last touched (uptime millis): the screensaver comes after a while. */
+    @Volatile
+    var lastTouch = SystemClock.uptimeMillis()
+        private set
+
+    /** While the screensaver is up: puts it away, returning true, and the touch does nothing else. */
+    var onSaverTouch: (() -> Boolean)? = null
+    private var swallowing = false
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        lastTouch = SystemClock.uptimeMillis()
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) swallowing = onSaverTouch?.invoke() == true
+        if (swallowing) {
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) swallowing = false
+            return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Coming back is not being idle: no screensaver straight away.
+        lastTouch = SystemClock.uptimeMillis()
+        onSaverTouch?.invoke()
+    }
+
+    // Any key counts too, not only touches.
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        lastTouch = SystemClock.uptimeMillis()
+    }
+}
+
+/**
+ * How long the library waits untouched before the screensaver: a minute, or less if the screen
+ * would go dark sooner by itself.
+ */
+private fun saverDelay(activity: Activity?): Long {
+    val screenOff = activity?.let { Settings.System.getInt(it.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, 60_000) } ?: 60_000
+    return (screenOff - 8_000L).coerceIn(15_000L, 60_000L)
 }
 
 @Composable
@@ -177,6 +222,40 @@ private fun App(viewModel: LibraryViewModel) {
         }
     }
 
+    // The screensaver, after a while in the library without a touch; a touch puts it away.
+    val host = activity as? MainActivity
+    var saving by remember { mutableStateOf(false) }
+    var saverUp by remember { mutableStateOf(false) }
+    val hasComics = comics.isNotEmpty()
+    LaunchedEffect(shownId, hasComics) {
+        if (shownId != null || !hasComics) {
+            saving = false
+            return@LaunchedEffect
+        }
+        while (true) {
+            val wait = saverDelay(activity) - (SystemClock.uptimeMillis() - (host?.lastTouch ?: 0L))
+            if (wait > 0) {
+                delay(wait)
+                continue
+            }
+            saving = true
+            saverUp = true
+            snapshotFlow { saving }.first { !it }
+        }
+    }
+    DisposableEffect(host) {
+        host?.onSaverTouch = {
+            if (saving) {
+                saving = false
+                true
+            } else {
+                false
+            }
+        }
+        onDispose { host?.onSaverTouch = null }
+    }
+    BackHandler(enabled = saving) { saving = false }
+
     Box(Modifier.fillMaxSize()) {
         val entry = comics.firstOrNull { it.id == shownId }
         if (entry != null) {
@@ -244,6 +323,10 @@ private fun App(viewModel: LibraryViewModel) {
                         }
                     },
             )
+        }
+
+        if (saverUp && shownId == null) {
+            ScreenSaver(comics, visible = saving, onGone = { saverUp = false })
         }
     }
 }

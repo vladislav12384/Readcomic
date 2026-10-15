@@ -3,6 +3,7 @@ package com.readcomic.curl
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -164,8 +165,18 @@ class PageTurnController(private val density: Float) {
     private class ZoomAnimation(
         val fromScale: Float, val fromX: Float, val fromY: Float,
         val toScale: Float, val toX: Float, val toY: Float,
+        val duration: Float = ZOOM_DURATION,
+        /** Starts gently too (a glide across the page), rather than quick out of a gesture. */
+        val gentle: Boolean = false,
     ) {
         var t = 0f
+
+        fun eased(): Float = if (gentle) {
+            // Smootherstep: no jolt when it sets off or when it arrives.
+            t * t * t * (t * (t * 6f - 15f) + 10f)
+        } else {
+            1f - (1f - t) * (1f - t) * (1f - t)
+        }
     }
 
     var listener: Listener? = null
@@ -933,9 +944,9 @@ class PageTurnController(private val density: Float) {
             // of the next page, or the bottom right one when going back.
             val r = contentRect()
             if (t.forward) {
-                animateZoomTo(scale, -r.left * scale, -r.top * scale)
+                animateZoomTo(scale, -r.left * scale, -r.top * scale, gentle = true)
             } else {
-                animateZoomTo(scale, viewWidth - r.right * scale, viewHeight - r.bottom * scale)
+                animateZoomTo(scale, viewWidth - r.right * scale, viewHeight - r.bottom * scale, gentle = true)
             }
         }
         notifyPosition()
@@ -1139,9 +1150,12 @@ class PageTurnController(private val density: Float) {
         clampOffsets()
     }
 
-    private fun animateZoomTo(toScale: Float, toX: Float, toY: Float) {
+    private fun animateZoomTo(toScale: Float, toX: Float, toY: Float, gentle: Boolean = false) {
         val (cx, cy) = clamp(toScale, toX, toY)
-        zoomAnimation = ZoomAnimation(scale, offsetX, offsetY, toScale, cx, cy)
+        // A glide takes longer the further it goes, never so long that it drags.
+        val distance = hypot(cx - offsetX, cy - offsetY) / max(viewWidth, viewHeight)
+        val duration = if (gentle) GLIDE_DURATION + GLIDE_PER_SCREEN * min(distance, 1.5f) else ZOOM_DURATION
+        zoomAnimation = ZoomAnimation(scale, offsetX, offsetY, toScale, cx, cy, duration, gentle)
         flingVx = 0f
         flingVy = 0f
         bounceX = false
@@ -1228,8 +1242,8 @@ class PageTurnController(private val density: Float) {
         }
 
         zoomAnimation?.let { z ->
-            z.t = min(1f, z.t + dt / ZOOM_DURATION)
-            val k = 1f - (1f - z.t) * (1f - z.t) * (1f - z.t)
+            z.t = min(1f, z.t + dt / z.duration)
+            val k = z.eased()
             scale = z.fromScale + (z.toScale - z.fromScale) * k
             offsetX = z.fromX + (z.toX - z.fromX) * k
             offsetY = z.fromY + (z.toY - z.fromY) * k
@@ -1311,6 +1325,10 @@ class PageTurnController(private val density: Float) {
         private const val GUIDE_DURATION = 0.42f
         private const val SPREAD_GUIDE_DURATION = 0.55f
         private const val ZOOM_DURATION = 0.28f
+
+        // Gliding to where reading continues on the next page, while zoomed in.
+        private const val GLIDE_DURATION = 0.45f
+        private const val GLIDE_PER_SCREEN = 0.22f
         private const val FLING_FRICTION = 4.5f
         private const val BOUNCE_OMEGA = 14f
 
