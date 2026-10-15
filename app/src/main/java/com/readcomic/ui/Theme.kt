@@ -22,14 +22,6 @@ private val Colors = darkColorScheme(
     error = Color(0xFFFFB4AB),
 )
 
-/** Table colours behind the pages in the reader. */
-val ReaderBackgrounds = listOf(
-    Color(0xFF1F1D1B),
-    Color(0xFF000000),
-    Color(0xFF4A3B2E),
-    Color(0xFFD9D4CC),
-)
-
 @Composable
 fun ReadcomicTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = Colors, content = content)

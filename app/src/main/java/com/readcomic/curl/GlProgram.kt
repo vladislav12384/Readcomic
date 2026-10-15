@@ -44,11 +44,13 @@ class GlProgram(vertexSource: String, fragmentSource: String) {
     companion object {
         private const val TAG = "GlProgram"
 
+        /** Shaders from the assets; a line "#include name" brings in shaders/name.glsl. */
         fun fromAssets(assets: AssetManager, vertex: String, fragment: String): GlProgram {
-            val common = read(assets, "curl_common.glsl")
-            fun load(name: String) = read(assets, name).replace("#include curl_common", common)
+            fun load(name: String): String = read(assets, name).replace(INCLUDE) { read(assets, "${it.groupValues[1]}.glsl") }
             return GlProgram(load(vertex), load(fragment))
         }
+
+        private val INCLUDE = Regex("#include\\s+(\\w+)")
 
         private fun read(assets: AssetManager, name: String): String =
             assets.open("shaders/$name").bufferedReader().use { it.readText() }

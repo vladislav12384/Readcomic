@@ -96,7 +96,8 @@ class ShelfRenderer(
                 art.request("back:${comic.id}")
             }
         }
-        frame.labels.forEach { art.request("label:${it.id}") }
+        frame.labels.forEach { art.request("label:${it.text}") }
+        frame.signs.forEach { art.request(signKey(it)) }
         if (frame.plaque != null) art.request("plaque:${frame.count}")
 
         renderShadows(frame)
@@ -175,11 +176,18 @@ class ShelfRenderer(
         frame.cornice?.let { draw(box, it, MATERIAL_WOOD, frame.dim) }
         frame.plaque?.let { draw(quad, it, MATERIAL_PLAQUE, frame.dim, label = art["plaque:${frame.count}"]) }
         for (label in frame.labels) {
-            val texture = art["label:${label.id}"]
+            val texture = art["label:${label.text}"]
             draw(quad, label.model, MATERIAL_LABEL, frame.dim, label = texture)
         }
+        for (sign in frame.signs) {
+            draw(quad, sign.model, MATERIAL_PLAQUE, frame.dim, label = art[signKey(sign)])
+        }
         for (comic in frame.comics) {
-            val dim = if (comic.held) 0f else frame.dim
+            val dim = when {
+                comic.held -> 0f
+                comic.faded -> max(frame.dim, frame.searchDim)
+                else -> frame.dim
+            }
             val cover = (if (comic.held) art["front:${comic.id}"] else null) ?: art["cover:${comic.id}"]
             val back = if (comic.held) art["back:${comic.id}"] else null
             GLES30.glUniform4f(
@@ -219,6 +227,8 @@ class ShelfRenderer(
         GLES30.glBindVertexArray(mesh.vao)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, mesh.count, GLES30.GL_UNSIGNED_SHORT, 0)
     }
+
+    private fun signKey(sign: SignDraw) = "sign:${"%.1f".format(java.util.Locale.ROOT, controller.signAspect(sign.span))}:${sign.text}"
 
     /** Binds a texture (or a white pixel, so no sampler ever points at the shadow map) to [unit]. */
     private fun bind(unit: Int, texture: Int?, flag: Int) {

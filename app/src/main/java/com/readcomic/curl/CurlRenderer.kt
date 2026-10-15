@@ -29,6 +29,12 @@ class CurlRenderer(
     private lateinit var shadowProgram: GlProgram
     private lateinit var blurProgram: GlProgram
     private lateinit var backgroundProgram: GlProgram
+    private lateinit var tableProgram: GlProgram
+
+    // The table's surface, drawn once for its kind and the screen's size.
+    private var tableTexture = 0
+    private var tableFramebuffer = 0
+    private var tableDrawn: Triple<Int, Int, Int>? = null
 
     private var gridVao = 0
     private var emptyVao = 0
@@ -52,14 +58,22 @@ class CurlRenderer(
     /** View pixels back to layout coordinates: for the edges of the stacks, and for the comic's shadow. */
     private val bookInverse = FloatArray(9)
     private val shadowInverse = FloatArray(9)
+    private val tableInverse = FloatArray(9)
     private var shadowSoft = 1f
     private var shadowAlpha = 1f
     private var stackAlpha = 1f
     private var hidden = false
 
-    /** Background colour of the "table" (linear 0..1 RGB). */
+    /** The surface of the table, see table.frag; how dark its corners get. */
     @Volatile
-    var backgroundColor = floatArrayOf(0.12f, 0.115f, 0.11f)
+    var table = 0
+
+    @Volatile
+    var vignette = 0.55f
+
+    /** Reading at night: strength 0..1, warmth 0..1, brightness 0..1. */
+    @Volatile
+    var night = floatArrayOf(0f, 0.5f, 0.75f)
 
     /**
      * The display refresh this frame is drawn for (System.nanoTime clock); 0 when unknown.
@@ -86,7 +100,14 @@ class CurlRenderer(
         shadowProgram = GlProgram.fromAssets(assets, "shadow.vert", "shadow.frag")
         blurProgram = GlProgram.fromAssets(assets, "fullscreen.vert", "blur.frag")
         backgroundProgram = GlProgram.fromAssets(assets, "fullscreen.vert", "background.frag")
+        tableProgram = GlProgram.fromAssets(assets, "fullscreen.vert", "table.frag")
         createGrid()
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        tableTexture = ids[0]
+        GLES30.glGenFramebuffers(1, ids, 0)
+        tableFramebuffer = ids[0]
+        tableDrawn = null
         val vaos = IntArray(1)
         GLES30.glGenVertexArrays(1, vaos, 0)
         emptyVao = vaos[0]
@@ -141,6 +162,7 @@ class CurlRenderer(
         lastFrameNanos = if (animating || touching) now else 0L
         wantsFrames = animating
 
+        drawTableIfNeeded()
         updateMatrices()
         val scene = controller.scene()
         val turning = scene.turning
@@ -196,6 +218,9 @@ class CurlRenderer(
         view[12] = ox
         view[13] = oy
         view[15] = 1f
+
+        // The table stays where it is when a comic falls or turns on it; it zooms with the pages.
+        inverseAffine(tableInverse, s, ox, oy, 0f, 0f, 0f, 0f, 0f, 1f)
 
         val pose = controller.pose()
         if (pose == null) {
@@ -317,6 +342,29 @@ class CurlRenderer(
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
     }
 
+    /** Draws the table's surface into its texture when the table or the screen changed. */
+    private fun drawTableIfNeeded() {
+        val wanted = Triple(table, width, height)
+        if (tableDrawn == wanted) return
+        tableDrawn = wanted
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tableTexture)
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, width, height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        // Panned past its edge, the table goes on (mirrored).
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_MIRRORED_REPEAT)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_MIRRORED_REPEAT)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, tableFramebuffer)
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, tableTexture, 0)
+        GLES30.glViewport(0, 0, width, height)
+        tableProgram.use()
+        GLES30.glBindVertexArray(emptyVao)
+        GLES30.glUniform2f(tableProgram["uViewport"], width.toFloat(), height.toFloat())
+        GLES30.glUniform1i(tableProgram["uKind"], table)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
     private fun drawBackground(scene: Scene, shadowOn: Boolean) {
         val p = backgroundProgram
         p.use()
@@ -324,6 +372,13 @@ class CurlRenderer(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTextures[0])
         GLES30.glUniform1i(p["uShadowTex"], 1)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tableTexture)
+        GLES30.glUniform1i(p["uTable"], 2)
+        GLES30.glUniformMatrix3fv(p["uTableInverse"], 1, false, tableInverse, 0)
+        GLES30.glUniform1f(p["uVignette"], vignette)
+        val n = night
+        GLES30.glUniform3f(p["uNight"], n[0], n[1], n[2])
         GLES30.glUniform1f(p["uShadowOn"], if (shadowOn) 1f else 0f)
         GLES30.glUniform2f(p["uViewport"], width.toFloat(), height.toFloat())
         GLES30.glUniformMatrix3fv(p["uBookInverse"], 1, false, bookInverse, 0)
@@ -363,8 +418,6 @@ class CurlRenderer(
         GLES30.glUniform1fv(p["uStackLines[0]"], 2, lines, 0)
         GLES30.glUniform1i(p["uStackCount"], stacks.size)
 
-        val bg = backgroundColor
-        GLES30.glUniform3f(p["uBgColor"], bg[0], bg[1], bg[2])
         GLES30.glUniform3f(p["uPaper"], PAPER[0], PAPER[1], PAPER[2])
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
     }
@@ -380,6 +433,8 @@ class CurlRenderer(
         GLES30.glUniform3f(p["uPaper"], PAPER[0], PAPER[1], PAPER[2])
         GLES30.glUniform1f(p["uGloss"], 0.22f)
         GLES30.glUniform1f(p["uGutter"], scene.gutter)
+        val n = night
+        GLES30.glUniform3f(p["uNight"], n[0], n[1], n[2])
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTextures[0])
     }

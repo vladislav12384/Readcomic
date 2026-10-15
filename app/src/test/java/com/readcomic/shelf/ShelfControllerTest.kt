@@ -122,4 +122,50 @@ class ShelfControllerTest {
         assertTrue(frame.comics.single { it.id == "c0" }.ribbon != null)
         assertNull(frame.comics.single { it.id == "c1" }.ribbon)
     }
+
+    @Test
+    fun aSeriesGetsASignAboveItInEveryRow() {
+        val series = listOf(null, "Saga", "Saga", "Saga", null)
+        val c = ShelfController(density = 2.75f).apply {
+            setViewSize(1080, 2280)
+            setItems(series.mapIndexed { i, name -> ShelfItem("c$i", 0.65f, 30, false, label = "label $i", series = name) })
+        }
+        val frame = c.frame()
+        assertEquals(listOf("Saga" to 1, "Saga" to 2), frame.signs.map { it.text to it.span })
+        assertEquals("label 3", frame.labels[3].text)
+        // Above the comics, below the next shelf.
+        val (_, signY) = screenOfModel(frame, frame.signs[1].model)
+        val (_, comicY) = c.screenOf("c2")
+        assertTrue(signY < comicY)
+    }
+
+    @Test
+    fun aComicPickedInTheSearchIsBroughtIntoView() {
+        val many = List(30) { ShelfItem("c$it", 0.65f, 24, false) }
+        val c = ShelfController(density = 2.75f).apply {
+            setViewSize(1080, 2280)
+            setItems(many)
+        }
+        c.highlight(setOf("c29"))
+        c.step(0.5f)
+        val shaded = c.frame()
+        assertTrue(shaded.searchDim > 0.5f)
+        assertTrue(shaded.comics.filter { it.id != "c29" }.all { it.faded })
+
+        c.highlight(null)
+        c.focus("c29")
+        c.settle()
+        assertEquals("c29", c.heldId)
+        assertEquals(0f, c.frame().searchDim, 0f)
+        // The shelf it came from is on screen.
+        val shelf = c.frame().comics.filter { it.id == "c28" }
+        assertTrue(shelf.isNotEmpty())
+        val (_, y) = screenOfModel(c.frame(), shelf.single().model)
+        assertTrue("row of c29 is on screen: $y", y in 0f..2280f)
+    }
+
+    private fun screenOfModel(frame: ShelfFrame, model: FloatArray): Pair<Float, Float> {
+        val ndc = Mat4.transformPoint(frame.viewProj, Mat4.transformPoint(model, Vec3.ZERO))
+        return (ndc.x + 1f) / 2f * 1080f to (1f - ndc.y) / 2f * 2280f
+    }
 }

@@ -1,6 +1,7 @@
 package com.readcomic.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -32,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,6 +49,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.ImageVector.Builder
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +72,9 @@ class FolderState(
     val onRemoveFolder: (WatchedFolder) -> Unit,
     val onScanNow: () -> Unit,
     val onIntervalChange: (ScanInterval) -> Unit,
+    /** Whether comics being added go into their series. */
+    val groupSeries: Boolean = false,
+    val onGroupSeriesChange: (Boolean) -> Unit = {},
 )
 
 /** Adding to the collection: files, or a folder to watch, and the folders already watched. */
@@ -109,6 +116,8 @@ fun CollectionSheet(folders: FolderState, onAddFiles: () -> Unit, onDismiss: () 
                 fontSize = 24.sp,
             )
             Spacer(Modifier.height(16.dp))
+            SeriesSwitch(folders.groupSeries, folders.onGroupSeriesChange)
+            Spacer(Modifier.height(12.dp))
             Choice(
                 icon = Icons.Filled.Add,
                 title = "Файлы комиксов",
@@ -192,6 +201,37 @@ private fun Choice(icon: ImageVector, title: String, subtitle: String, onClick: 
     }
 }
 
+/** Whether what is added now goes into series; off, everything simply stands in alphabetical order. */
+@Composable
+private fun SeriesSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .border(1.dp, Color(0xFFF3E6D0).copy(alpha = if (checked) 0.5f else 0.15f), RoundedCornerShape(20.dp))
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Icon(SeriesIcon, contentDescription = null, tint = Color(0xFFF3E6D0).copy(alpha = 0.8f), modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Объединять в серии", style = MaterialTheme.typography.titleSmall)
+            Text(
+                if (checked) {
+                    "«Saga 01», «Saga 02»… встанут рядом по номерам, под табличкой «Saga»"
+                } else {
+                    "Выключено: всё встаёт на общую полку по алфавиту"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFF3E6D0).copy(alpha = 0.65f),
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
 @Composable
 private fun FolderRow(folder: WatchedFolder, comics: Int, onRemove: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -202,6 +242,7 @@ private fun FolderRow(folder: WatchedFolder, comics: Int, onRemove: () -> Unit) 
             Text(
                 buildString {
                     append(comicsCount(comics))
+                    if (folder.groupSeries) append(" · по сериям")
                     if (folder.lastScan > 0) {
                         append(" · проверена ")
                         append(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(folder.lastScan)))

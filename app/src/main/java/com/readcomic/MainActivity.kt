@@ -84,12 +84,15 @@ private fun App(viewModel: LibraryViewModel) {
     val comics by viewModel.comics.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val openRequest by viewModel.openRequest.collectAsStateWithLifecycle()
-    val backgroundTint by viewModel.backgroundTint.collectAsStateWithLifecycle()
+    val table by viewModel.table.collectAsStateWithLifecycle()
+    val night by viewModel.night.collectAsStateWithLifecycle()
     val readingMode by viewModel.readingMode.collectAsStateWithLifecycle()
     val orientation by viewModel.orientation.collectAsStateWithLifecycle()
     val shelfMode by viewModel.shelfMode.collectAsStateWithLifecycle()
     val shelfTheme by viewModel.shelfTheme.collectAsStateWithLifecycle()
     val shelfHintDone by viewModel.shelfHintDone.collectAsStateWithLifecycle()
+    val shelfOrder by viewModel.shelfOrder.collectAsStateWithLifecycle()
+    val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     MessagesEffect(viewModel.messages, snackbar)
@@ -124,11 +127,13 @@ private fun App(viewModel: LibraryViewModel) {
             key(entry.id) {
                 ReaderScreen(
                     entry = entry,
-                    backgroundTint = backgroundTint,
+                    table = table,
+                    night = night,
                     readingMode = readingMode,
                     orientation = orientation,
                     pageAspects = { source, onProgress -> viewModel.pageAspects(entry, source, onProgress) },
-                    onBackgroundTintChange = viewModel::setBackgroundTint,
+                    onTableChange = viewModel::setTable,
+                    onNightChange = viewModel::setNight,
                     onReadingModeChange = viewModel::setReadingMode,
                     onOrientationChange = viewModel::setOrientation,
                     onPageChanged = { first, last -> viewModel.updateProgress(entry.id, first, last) },
@@ -158,10 +163,15 @@ private fun App(viewModel: LibraryViewModel) {
                     onRemoveFolder = viewModel::removeFolder,
                     onScanNow = viewModel::scanNow,
                     onIntervalChange = viewModel::setScanInterval,
+                    groupSeries = groupSeries,
+                    onGroupSeriesChange = viewModel::setGroupSeries,
                 ),
                 onAdd = { picker.launch(arrayOf("*/*")) },
                 onOpen = { openId = it.id },
                 onRemove = viewModel::remove,
+                order = shelfOrder,
+                onOrderChange = viewModel::setShelfOrder,
+                onSetSeries = viewModel::setSeries,
             )
         }
     }

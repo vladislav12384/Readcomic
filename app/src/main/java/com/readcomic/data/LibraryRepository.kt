@@ -23,8 +23,11 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** A folder the reader picked; new comics in it are added to the library by themselves. */
-data class WatchedFolder(val uri: String, val name: String, val lastScan: Long = 0L)
+/**
+ * A folder the reader picked; new comics in it are added to the library by themselves, put into
+ * series when [groupSeries].
+ */
+data class WatchedFolder(val uri: String, val name: String, val lastScan: Long = 0L, val groupSeries: Boolean = false)
 
 /** How often watched folders are looked through in the background. */
 enum class ScanInterval(val hours: Long, val label: String) {
@@ -87,13 +90,16 @@ class LibraryRepository private constructor(context: Context) {
 
     // region Comics
 
-    /** Adds comic files the reader picked. Returns how many could not be opened. */
-    suspend fun addFiles(uris: List<Uri>): Int = withContext(Dispatchers.IO) {
+    /**
+     * Adds comic files the reader picked, putting numbered ones into their series if
+     * [groupSeries]. Returns how many could not be opened.
+     */
+    suspend fun addFiles(uris: List<Uri>, groupSeries: Boolean = false): Int = withContext(Dispatchers.IO) {
         awaitReady()
         var failed = 0
         for (uri in uris) {
             keepAccess(uri)
-            val entry = runCatching { importFile(uri) }.onFailure { Log.w(TAG, "Cannot add $uri", it) }.getOrNull()
+            val entry = runCatching { importFile(uri, groupSeries) }.onFailure { Log.w(TAG, "Cannot add $uri", it) }.getOrNull()
             if (entry == null) failed++ else upsert(entry)
         }
         failed
@@ -116,6 +122,19 @@ class LibraryRepository private constructor(context: Context) {
         if (entry.folder == null) {
             runCatching { app.contentResolver.releasePersistableUriPermission(entry.uri.toUri(), Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         }
+    }
+
+    /** Puts a comic into the series [name], or takes it out of its series (null or blank). */
+    fun setSeries(id: String, name: String?) {
+        val series = name?.trim()?.ifEmpty { null }?.let(::knownSeriesName)
+        _comics.update { list -> list.map { if (it.id == id) it.copy(series = series) else it } }
+        scope.launch { persist() }
+    }
+
+    /** The way a series is already written in the library, so "saga" joins "Saga". */
+    private fun knownSeriesName(name: String): String {
+        val key = Series.keyOf(name)
+        return _comics.value.firstNotNullOfOrNull { entry -> entry.series?.takeIf { Series.keyOf(it) == key } } ?: name
     }
 
     fun updateProgress(id: String, firstPage: Int, lastPage: Int) {
@@ -152,13 +171,23 @@ class LibraryRepository private constructor(context: Context) {
         }
     }
 
-    private fun importFile(uri: Uri): ComicEntry {
+    private fun importFile(uri: Uri, groupSeries: Boolean = false): ComicEntry {
         val name = ComicOpener.displayName(app, uri)
-        return import(uri.toString(), ComicOpener.titleFromName(name), fileName = name, fileSize = ComicOpener.fileSize(app, uri))
+        return import(uri.toString(), ComicOpener.titleFromName(name), fileName = name, fileSize = ComicOpener.fileSize(app, uri), groupSeries = groupSeries)
     }
 
-    /** Opens a comic once: its cover, page count and what it says about itself. */
-    private fun import(uri: String, title: String, folder: String? = null, fileName: String? = null, fileSize: Long = 0L): ComicEntry {
+    /**
+     * Opens a comic once: its cover, page count and what it says about itself. With
+     * [groupSeries] a numbered comic goes into its series (the file's own, or told from the title).
+     */
+    private fun import(
+        uri: String,
+        title: String,
+        folder: String? = null,
+        fileName: String? = null,
+        fileSize: Long = 0L,
+        groupSeries: Boolean = false,
+    ): ComicEntry {
         val id = LibraryStore.idFor(uri)
         ComicOpener.open(app, uri).use { source ->
             source.loadPage(0, COVER_WIDTH, COVER_HEIGHT)?.let { cover ->
@@ -167,10 +196,17 @@ class LibraryRepository private constructor(context: Context) {
             }
             val metadata = runCatching { source.metadata }.getOrNull()
             val existing = _comics.value.firstOrNull { it.id == id }
+            val shownTitle = existing?.title ?: metadata?.displayTitle ?: title
+            val series = existing?.series ?: if (groupSeries) {
+                (metadata?.series ?: Series.of(shownTitle).takeIf { it.number != null || it.volume != null }?.name)
+                    ?.let(::knownSeriesName)
+            } else {
+                null
+            }
             return ComicEntry(
                 id = id,
                 uri = uri,
-                title = existing?.title ?: metadata?.displayTitle ?: title,
+                title = shownTitle,
                 pageCount = source.pageCount,
                 currentPage = (existing?.currentPage ?: 0).coerceIn(0, source.pageCount - 1),
                 addedAt = existing?.addedAt ?: System.currentTimeMillis(),
@@ -181,6 +217,7 @@ class LibraryRepository private constructor(context: Context) {
                 fileSize = if (fileSize > 0) fileSize else existing?.fileSize ?: 0L,
                 writer = metadata?.writer ?: existing?.writer,
                 year = metadata?.year ?: existing?.year,
+                series = series,
             )
         }
     }
@@ -206,19 +243,20 @@ class LibraryRepository private constructor(context: Context) {
 
     // region Watched folders
 
-    /** Starts watching a folder picked with the system folder picker and looks through it. */
-    suspend fun addFolder(uri: Uri): ScanReport = withContext(Dispatchers.IO) {
+    /**
+     * Starts watching a folder picked with the system folder picker and looks through it;
+     * comics found there go into their series if [groupSeries].
+     */
+    suspend fun addFolder(uri: Uri, groupSeries: Boolean = false): ScanReport = withContext(Dispatchers.IO) {
         try {
             app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (e: SecurityException) {
             Log.w(TAG, "No lasting access to $uri", e)
         }
         val name = runCatching { ComicOpener.displayName(app, documentOf(uri)) }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast(':')
-        val folder = WatchedFolder(uri.toString(), name?.ifEmpty { null } ?: "Папка")
-        if (_folders.value.none { it.uri == folder.uri }) {
-            _folders.update { it + folder }
-            saveFolders()
-        }
+        val folder = WatchedFolder(uri.toString(), name?.ifEmpty { null } ?: "Папка", groupSeries = groupSeries)
+        _folders.update { list -> list.filter { it.uri != folder.uri } + folder }
+        saveFolders()
         scheduleScans()
         scan(listOf(folder))
     }
@@ -287,7 +325,7 @@ class LibraryRepository private constructor(context: Context) {
             if (!candidate.isFolder && (candidate.name to candidate.size) in sameFiles) continue
             val title = if (candidate.isFolder) candidate.name.replace('_', ' ').trim() else ComicOpener.titleFromName(candidate.name)
             val entry = runCatching {
-                import(candidate.uri.toString(), title, folder.uri, candidate.name, candidate.size)
+                import(candidate.uri.toString(), title, folder.uri, candidate.name, candidate.size, folder.groupSeries)
             }.onFailure { Log.w(TAG, "Cannot add ${candidate.name}", it) }.getOrNull() ?: continue
             upsert(entry)
             added++
@@ -327,13 +365,15 @@ class LibraryRepository private constructor(context: Context) {
         val array = JSONArray(prefs.getString(KEY_FOLDERS, "[]"))
         (0 until array.length()).map { i ->
             val o = array.getJSONObject(i)
-            WatchedFolder(o.getString("uri"), o.optString("name", "Папка"), o.optLong("lastScan", 0L))
+            WatchedFolder(o.getString("uri"), o.optString("name", "Папка"), o.optLong("lastScan", 0L), o.optBoolean("groupSeries", false))
         }
     }.getOrDefault(emptyList())
 
     private fun saveFolders() {
         val array = JSONArray()
-        _folders.value.forEach { array.put(JSONObject().put("uri", it.uri).put("name", it.name).put("lastScan", it.lastScan)) }
+        _folders.value.forEach {
+            array.put(JSONObject().put("uri", it.uri).put("name", it.name).put("lastScan", it.lastScan).put("groupSeries", it.groupSeries))
+        }
         prefs.edit { putString(KEY_FOLDERS, array.toString()) }
     }
 

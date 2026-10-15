@@ -33,8 +33,7 @@ class LibraryShelfArt(
         return frontHalf(bitmap)
     }
 
-    override fun label(id: String): Bitmap? {
-        val entry = entries[id] ?: return null
+    override fun label(text: String): Bitmap? {
         val bitmap = createBitmap(LABEL_WIDTH, LABEL_HEIGHT)
         val canvas = Canvas(bitmap)
         canvas.drawColor(PAPER)
@@ -44,15 +43,41 @@ class LibraryShelfArt(
             color = INK_LIGHT
         }
         canvas.drawRect(9f, 9f, LABEL_WIDTH - 9f, LABEL_HEIGHT - 9f, border)
-        val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
             textSize = 46f
             color = INK
             textAlign = Paint.Align.CENTER
         }
-        val title = TextUtils.ellipsize(entry.title, text, LABEL_WIDTH - 64f, TextUtils.TruncateAt.END)
-        val baseline = LABEL_HEIGHT / 2f - (text.descent() + text.ascent()) / 2f
-        canvas.drawText(title, 0, title.length, LABEL_WIDTH / 2f, baseline, text)
+        val title = TextUtils.ellipsize(text, paint, LABEL_WIDTH - 64f, TextUtils.TruncateAt.END)
+        val baseline = LABEL_HEIGHT / 2f - (paint.descent() + paint.ascent()) / 2f
+        canvas.drawText(title, 0, title.length, LABEL_WIDTH / 2f, baseline, paint)
+        return bitmap
+    }
+
+    override fun sign(name: String, aspect: Float): Bitmap {
+        // Engraved like the name plate: a rule round the edge and the name in spaced capitals.
+        val height = SIGN_HEIGHT
+        val width = (height * aspect).toInt().coerceIn(height * 2, 2048)
+        val bitmap = createBitmap(width, height)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.BLACK)
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = Color.WHITE
+            strokeWidth = 2.5f
+        }
+        canvas.drawRect(10f, 10f, width - 10f, height - 10f, line)
+        val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+            textSize = height * 0.46f
+            letterSpacing = 0.16f
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+        }
+        val shown = TextUtils.ellipsize(name.uppercase(), text, width - height * 0.6f, TextUtils.TruncateAt.END)
+        val baseline = height / 2f - (text.descent() + text.ascent()) / 2f
+        canvas.drawText(shown, 0, shown.length, width / 2f, baseline, text)
         return bitmap
     }
 
@@ -211,6 +236,7 @@ class LibraryShelfArt(
         private const val SPINE_HEIGHT = 1536
         private val FOIL = Color.rgb(217, 178, 106)
         private val NUMBER = Regex("""#\s*(\S{1,4})\s*$""")
+        private const val SIGN_HEIGHT = 112
         private const val PLAQUE_WIDTH = 1024
         private const val PLAQUE_HEIGHT = 166
         private const val SHARP_WIDTH = 900
@@ -219,10 +245,10 @@ class LibraryShelfArt(
         private const val INK = 0xFF3A2A1C.toInt()
         private const val INK_LIGHT = 0xFF9A8670.toInt()
 
-        private fun isWide(bitmap: Bitmap) = bitmap.width > bitmap.height * 1.1f
+        fun isWide(bitmap: Bitmap) = bitmap.width > bitmap.height * 1.1f
 
         /** The front cover: the right half of a wraparound cover, otherwise the whole picture. */
-        private fun frontHalf(bitmap: Bitmap) = if (isWide(bitmap)) half(bitmap, right = true) else bitmap
+        fun frontHalf(bitmap: Bitmap) = if (isWide(bitmap)) half(bitmap, right = true) else bitmap
 
         private fun half(bitmap: Bitmap, right: Boolean): Bitmap {
             val width = bitmap.width / 2

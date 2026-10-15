@@ -20,6 +20,13 @@ class ShelfItem(
     val pageCount: Int,
     /** Being read: a bookmark ribbon sticks out of it. */
     val inProgress: Boolean,
+    /** What the paper label under it says. */
+    val label: String = id,
+    /**
+     * The series it stands with: neighbours with the same series get a brass sign with its name
+     * on the wall above them. Null for a comic on its own.
+     */
+    val series: String? = null,
 )
 
 class ComicDraw(
@@ -32,9 +39,15 @@ class ComicDraw(
     val binding: Binding,
     val ribbon: FloatArray?,
     val held: Boolean,
+    /** Not among what is being searched for: it stays in the shade. */
+    val faded: Boolean = false,
 )
 
-class LabelDraw(val id: String, val model: FloatArray)
+/** The paper label saying [text], under a comic. */
+class LabelDraw(val text: String, val model: FloatArray)
+
+/** A brass sign with the name of a series, on the wall above [span] comics of it. */
+class SignDraw(val text: String, val span: Int, val model: FloatArray)
 
 /** Everything the renderer needs for one frame (all in meters, Y up, the wall is the plane z = 0). */
 class ShelfFrame(
@@ -50,8 +63,11 @@ class ShelfFrame(
     val plaque: FloatArray?,
     val comics: List<ComicDraw>,
     val labels: List<LabelDraw>,
+    val signs: List<SignDraw>,
     /** How much everything but the comic in hand is darkened, 0..1. */
     val dim: Float,
+    /** How much the comics that do not match a search are darkened, 0..1. */
+    val searchDim: Float,
     /** Comics in the collection, for the name plate. */
     val count: Int,
     /** Seconds since the shelf lights were switched on. */
@@ -285,11 +301,21 @@ class ShelfController(private val density: Float) {
 
         val comics = ArrayList<ComicDraw>()
         val labels = ArrayList<LabelDraw>()
+        val signs = ArrayList<SignDraw>()
         var held: ComicDraw? = null
+        val found = highlight
         items.forEachIndexed { index, item ->
             val row = index / columns
             val isHeld = item.id == heldId
             if (!isHeld && (row < topRow - 1 || row > bottomRow)) return@forEachIndexed
+            // A series gets a sign above the first of it in every row it stands on.
+            val series = item.series
+            val previous = items.getOrNull(index - 1)
+            if (series != null && (index % columns == 0 || previous?.series != series)) {
+                var span = 1
+                while (span < columns - index % columns && items.getOrNull(index + span)?.series == series) span++
+                signs += SignDraw(series, span, signModel(row, index % columns, span))
+            }
             val size = sizeOf(item)
             val (position, rotation) = poseOf(index, item, size)
             val model = Mat4.compose(position, rotation, size)
@@ -304,10 +330,11 @@ class ShelfController(private val density: Float) {
             } else {
                 null
             }
-            val draw = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld)
+            val faded = found != null && item.id !in found
+            val draw = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld, faded)
             if (isHeld) held = draw else comics += draw
             labels += LabelDraw(
-                item.id,
+                item.label,
                 Mat4.compose(
                     Vec3(slotX(index % columns), rowBase(row) - PLANK_THICKNESS / 2f, PLANK_DEPTH + 0.0006f),
                     Quat.IDENTITY,
@@ -336,11 +363,57 @@ class ShelfController(private val density: Float) {
             plaque = plaque,
             comics = comics,
             labels = labels,
+            signs = signs,
             dim = if (heldId != null) 0.5f * easedHold() else 0f,
+            searchDim = searchDim * searchDim * (3f - 2f * searchDim) * 0.72f,
             count = items.size,
             lightsTime = lightsTime,
         )
     }
+
+    /** A brass sign on the wall above [span] comics of a row, starting at [column]. */
+    private fun signModel(row: Int, column: Int, span: Int): FloatArray {
+        val width = min(span * SLOT_WIDTH - 0.05f, SIGN_MAX_WIDTH)
+        val x = (slotX(column) + slotX(column + span - 1)) / 2f
+        return Mat4.compose(
+            Vec3(x, rowBase(row) + SIGN_Y, 0.0012f),
+            Quat.IDENTITY,
+            Vec3(width, SIGN_HEIGHT, 1f),
+        )
+    }
+
+    /** Width / height of the sign above [span] comics, for its engraving. */
+    fun signAspect(span: Int) = min(span * SLOT_WIDTH - 0.05f, SIGN_MAX_WIDTH) / SIGN_HEIGHT
+
+    // endregion
+
+    // region Search
+
+    /** Comics matching a search; the others stand in the shade. Null: no search. */
+    private var highlight: Set<String>? = null
+    private var searchDim = 0f
+
+    fun highlight(ids: Set<String>?) {
+        if (ids != null) highlight = ids
+        highlightWanted = ids != null
+    }
+
+    private var highlightWanted = false
+
+    // A comic picked from the search: the shelves scroll to it, then it is taken off the shelf.
+    private var focusId: String? = null
+
+    /** Scrolls to the comic [id] and takes it into the hands. */
+    fun focus(id: String) {
+        val index = items.indexOfFirst { it.id == id }
+        if (index < 0) return
+        focusId = id
+        dragging = false
+        scrollVelocity = 0f
+    }
+
+    private fun focusY(index: Int): Float =
+        (rowBase(index / columns) + COMIC_HEIGHT * 0.5f + 0.03f).coerceIn(scrollBottom, scrollTop)
 
     // endregion
 
@@ -348,6 +421,7 @@ class ShelfController(private val density: Float) {
 
     /** Finger moved by (dx, dy) pixels: scrolls the shelves or turns the comic in hand. */
     fun drag(dx: Float, dy: Float) {
+        focusId = null
         if (heldId != null && holding) {
             rotating = true
             yaw += dx * ROTATE_PER_PIXEL / density
@@ -470,6 +544,34 @@ class ShelfController(private val density: Float) {
     fun step(dt: Float): Boolean {
         var animating = false
 
+        val dimTarget = if (highlightWanted) 1f else 0f
+        if (searchDim != dimTarget) {
+            searchDim = if (dimTarget > searchDim) min(1f, searchDim + dt / SEARCH_FADE) else max(0f, searchDim - dt / SEARCH_FADE)
+            if (searchDim == 0f) highlight = null
+            animating = true
+        }
+
+        focusId?.let { id ->
+            val index = items.indexOfFirst { it.id == id }
+            if (index < 0) {
+                focusId = null
+                return@let
+            }
+            animating = true
+            // Whatever is in hand goes back first.
+            if (heldId != null && heldId != id) {
+                if (holding) putBack()
+                return@let
+            }
+            val target = focusY(index)
+            cameraY += (target - cameraY) * (1f - exp(-FOCUS_RATE * dt))
+            if (abs(target - cameraY) < 0.004f) {
+                cameraY = target
+                focusId = null
+                take(id)
+            }
+        }
+
         if (lightsTime < LIGHTS_DONE) {
             lightsTime = min(LIGHTS_DONE, lightsTime + dt)
             animating = true
@@ -502,7 +604,7 @@ class ShelfController(private val density: Float) {
             if (abs(round(yaw / PI.toFloat()) * PI.toFloat() - yaw) > 0.0005f) animating = true
         }
 
-        if (!dragging) {
+        if (!dragging && focusId == null) {
             if (scrollVelocity != 0f) {
                 cameraY += scrollVelocity * dt
                 scrollVelocity *= exp(-SCROLL_FRICTION * dt)
@@ -540,6 +642,11 @@ class ShelfController(private val density: Float) {
         const val LIGHTS_DONE = 3f
         const val LABEL_WIDTH = 0.16f
         const val LABEL_HEIGHT = 0.025f
+        const val SIGN_HEIGHT = 0.03f
+        const val SIGN_Y = 0.312f
+        const val SIGN_MAX_WIDTH = 0.42f
+        private const val SEARCH_FADE = 0.25f
+        private const val FOCUS_RATE = 7f
         const val RIBBON_WIDTH = 0.008f
         const val RIBBON_LENGTH = 0.05f
         private const val HOLD_OMEGA = 9f

@@ -25,6 +25,8 @@ data class ComicEntry(
     val fileSize: Long = 0L,
     val writer: String? = null,
     val year: Int? = null,
+    /** The series it was put into (when adding with series on, or by hand); null stands on its own. */
+    val series: String? = null,
 ) {
     val progress: Float get() = if (pageCount <= 1) 0f else lastVisiblePage.toFloat() / (pageCount - 1)
     val isFinished: Boolean get() = lastReadAt > 0 && lastVisiblePage >= pageCount - 1
@@ -57,6 +59,7 @@ class LibraryStore(context: Context) {
                     fileSize = o.optLong("fileSize", 0L),
                     writer = o.optString("writer").ifEmpty { null },
                     year = o.optInt("year", 0).takeIf { it > 0 },
+                    series = o.optString("series").ifEmpty { null },
                 )
             }
         } catch (_: Exception) {
@@ -82,7 +85,8 @@ class LibraryStore(context: Context) {
                     .putOpt("fileName", e.fileName)
                     .put("fileSize", e.fileSize)
                     .putOpt("writer", e.writer)
-                    .putOpt("year", e.year),
+                    .putOpt("year", e.year)
+                    .putOpt("series", e.series),
             )
         }
         val tmp = File(file.parentFile, file.name + ".tmp")

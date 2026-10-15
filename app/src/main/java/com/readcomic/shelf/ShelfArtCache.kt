@@ -15,8 +15,8 @@ interface ShelfArt {
     /** The small cover saved in the library. */
     fun cover(id: String): Bitmap?
 
-    /** The paper label with the title, shown on the shelf under the comic. */
-    fun label(id: String): Bitmap?
+    /** The paper label saying [text] ("Saga", "№ 12"), shown on the shelf under a comic. */
+    fun label(text: String): Bitmap?
 
     /** A sharp front ([back] = false) or back cover for the comic in hand; may be slow. */
     fun page(id: String, back: Boolean): Bitmap?
@@ -26,6 +26,9 @@ interface ShelfArt {
 
     /** The engraving of the name plate (white letters on black) for a collection of [count] comics. */
     fun plaque(count: Int): Bitmap?
+
+    /** The engraving of the sign of the series [name], [aspect] times as wide as high. */
+    fun sign(name: String, aspect: Float): Bitmap?
 }
 
 /** GL textures for the shelf, keyed like "cover:<id>". Everything but decoding runs on the render thread. */
@@ -76,6 +79,7 @@ class ShelfArtCache(
                     "front" -> art.page(id, back = false)
                     "back" -> art.page(id, back = true)
                     "spine" -> art.spine(id)
+                    "sign" -> art.sign(id.substringAfter(':'), id.substringBefore(':').toFloat())
                     else -> art.plaque(id.toInt())
                 }
             } catch (e: Exception) {

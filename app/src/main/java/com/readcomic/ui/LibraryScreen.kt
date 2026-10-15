@@ -51,15 +51,19 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -133,9 +137,13 @@ fun LibraryScreen(
     onAdd: () -> Unit,
     onOpen: (ComicEntry) -> Unit,
     onRemove: (ComicEntry) -> Unit,
+    order: ShelfOrder = ShelfOrder.TITLE,
+    onOrderChange: (ShelfOrder) -> Unit = {},
+    onSetSeries: (ComicEntry, String?) -> Unit = { _, _ -> },
 ) {
     var toRemove by remember { mutableStateOf<ComicEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
+    var naming by remember { mutableStateOf<ComicEntry?>(null) }
     val working = busy || folders.scanning != null
 
     if (shelfMode) {
@@ -154,6 +162,9 @@ fun LibraryScreen(
             onAdd = { adding = true },
             onOpen = onOpen,
             onRemove = { toRemove = it },
+            order = order,
+            onOrderChange = onOrderChange,
+            onNameSeries = { naming = it },
         )
     } else {
         GridLibrary(
@@ -165,6 +176,21 @@ fun LibraryScreen(
             onAdd = { adding = true },
             onOpen = onOpen,
             onRemove = { toRemove = it },
+            order = order,
+            onOrderChange = onOrderChange,
+        )
+    }
+
+    naming?.let { entry ->
+        val current = comics.firstOrNull { it.id == entry.id } ?: entry
+        SeriesDialog(
+            entry = current,
+            known = remember(comics) { comics.mapNotNull { it.series }.distinct().sortedWith(CollectionOrder::compareNames) },
+            onSave = { name ->
+                onSetSeries(current, name)
+                naming = null
+            },
+            onDismiss = { naming = null },
         )
     }
 
@@ -210,31 +236,44 @@ private fun ShelfLibrary(
     onAdd: () -> Unit,
     onOpen: (ComicEntry) -> Unit,
     onRemove: (ComicEntry) -> Unit,
+    order: ShelfOrder,
+    onOrderChange: (ShelfOrder) -> Unit,
+    onNameSeries: (ComicEntry) -> Unit,
 ) {
     val context = LocalContext.current
     var view by remember { mutableStateOf<ShelfView?>(null) }
     var heldId by remember { mutableStateOf<String?>(null) }
+    // The small panels from the corner buttons: the wall paint, the order.
     var picking by remember { mutableStateOf(false) }
-    // A real shelf keeps its order: the newest additions first, nothing jumps around after reading.
-    val ordered = remember(comics) { comics.sortedByDescending { it.addedAt } }
-    val aspects by produceState<Map<String, Float>?>(null, ordered) {
+    var ordering by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    val placed = remember(comics, order) { CollectionOrder.arrange(comics, order) }
+    val ordered = remember(placed) { placed.map { it.entry } }
+    val found = remember(comics, order, query) {
+        if (query.isBlank()) emptyList() else ordered.filter { CollectionOrder.matches(it, query) }
+    }
+    val aspects by produceState<Map<String, Float>?>(null, comics) {
         value = withContext(Dispatchers.IO) {
-            ordered.associate { it.id to (LibraryShelfArt.coverAspect(coverFile(it)) ?: DEFAULT_ASPECT) }
+            comics.associate { it.id to (LibraryShelfArt.coverAspect(coverFile(it)) ?: DEFAULT_ASPECT) }
         }
     }
     val currentComics by rememberUpdatedState(comics)
     val currentOnOpen by rememberUpdatedState(onOpen)
     val currentOnHintSeen by rememberUpdatedState(onHintSeen)
 
-    LaunchedEffect(view, ordered, aspects) {
+    LaunchedEffect(view, placed, aspects) {
         val shelf = view ?: return@LaunchedEffect
         val known = aspects ?: return@LaunchedEffect
-        val items = ordered.map { entry ->
+        val items = placed.map { place ->
+            val entry = place.entry
             ShelfItem(
                 id = entry.id,
                 aspect = known[entry.id] ?: DEFAULT_ASPECT,
                 pageCount = entry.pageCount,
                 inProgress = entry.currentPage > 0 && !entry.isFinished,
+                label = place.label,
+                series = place.series,
             )
         }
         val art = LibraryShelfArt(context.applicationContext, ordered.associateBy { it.id }, coverFile)
@@ -245,9 +284,23 @@ private fun ShelfLibrary(
         view?.setWallColor(paint.red, paint.green, paint.blue)
     }
 
+    // While searching, the shelves show what is found and leave the rest in the shade.
+    LaunchedEffect(view, searching, found) {
+        view?.highlight(if (searching && query.isNotBlank()) found.map { it.id }.toSet() else null)
+    }
+    fun closeSearch() {
+        searching = false
+        query = ""
+    }
+
     val held = comics.firstOrNull { it.id == heldId }
-    BackHandler(enabled = held != null || picking) {
-        if (picking) picking = false else view?.putBack()
+    BackHandler(enabled = held != null || picking || ordering || searching) {
+        when {
+            picking -> picking = false
+            ordering -> ordering = false
+            searching -> closeSearch()
+            else -> view?.putBack()
+        }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(ShelfRoom)) {
@@ -304,7 +357,7 @@ private fun ShelfLibrary(
         )
 
         AnimatedVisibility(
-            visible = held == null,
+            visible = held == null && !searching,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopEnd),
@@ -312,7 +365,19 @@ private fun ShelfLibrary(
             ShelfToolbar(
                 theme = theme,
                 busy = busy,
-                onPickTheme = { picking = !picking },
+                onSearch = {
+                    picking = false
+                    ordering = false
+                    searching = true
+                },
+                onOrder = {
+                    picking = false
+                    ordering = !ordering
+                },
+                onPickTheme = {
+                    ordering = false
+                    picking = !picking
+                },
                 onShowGrid = onShowGrid,
             )
         }
@@ -322,7 +387,7 @@ private fun ShelfLibrary(
         }
 
         AnimatedVisibility(
-            visible = !hintDone && held == null && comics.isNotEmpty() && !picking,
+            visible = !hintDone && held == null && comics.isNotEmpty() && !picking && !ordering && !searching,
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut(),
             modifier = Modifier
@@ -343,7 +408,7 @@ private fun ShelfLibrary(
         }
 
         AnimatedVisibility(
-            visible = held == null,
+            visible = held == null && !searching,
             enter = fadeIn() + scaleIn(initialScale = 0.8f),
             exit = fadeOut() + scaleOut(targetScale = 0.8f),
             modifier = Modifier
@@ -394,18 +459,61 @@ private fun ShelfLibrary(
                     onRead = { onOpen(entry) },
                     onRemove = { onRemove(entry) },
                     onPutBack = { view?.putBack() },
+                    onSeries = { onNameSeries(entry) },
                 )
             } else {
                 Spacer(Modifier.fillMaxWidth())
             }
         }
 
-        // Choosing the paint of the wall; a tap anywhere else closes it.
-        if (picking) {
+        // Choosing the paint of the wall or the order; a tap anywhere else closes it.
+        if (picking || ordering) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(Unit) { detectTapGestures { picking = false } },
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            picking = false
+                            ordering = false
+                        }
+                    },
+            )
+        }
+        AnimatedVisibility(
+            visible = ordering && held == null,
+            enter = fadeIn() + slideInVertically { -it / 3 },
+            exit = fadeOut() + slideOutVertically { -it / 3 },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .windowInsetsPadding(SafeInsets)
+                .padding(top = 64.dp, end = 12.dp),
+        ) {
+            OrderPicker(selected = order) {
+                onOrderChange(it)
+                ordering = false
+            }
+        }
+
+        AnimatedVisibility(
+            visible = searching,
+            enter = fadeIn() + slideInVertically { -it / 4 },
+            exit = fadeOut() + slideOutVertically { -it / 4 },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(SafeInsets)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .widthIn(max = 640.dp),
+        ) {
+            SearchPanel(
+                query = query,
+                onQueryChange = { query = it },
+                found = found,
+                coverFile = coverFile,
+                onPick = { entry ->
+                    closeSearch()
+                    view?.focus(entry.id)
+                },
+                onClose = ::closeSearch,
             )
         }
         AnimatedVisibility(
@@ -430,11 +538,24 @@ private fun ShelfLibrary(
     }
 }
 
-/** Round buttons in the corner: the wall paint and the switch to a plain grid. */
+/** Round buttons in the corner: search, the order, the wall paint and the switch to a plain grid. */
 @Composable
-private fun ShelfToolbar(theme: Int, busy: Boolean, onPickTheme: () -> Unit, onShowGrid: () -> Unit) {
+private fun ShelfToolbar(
+    theme: Int,
+    busy: Boolean,
+    onSearch: () -> Unit,
+    onOrder: () -> Unit,
+    onPickTheme: () -> Unit,
+    onShowGrid: () -> Unit,
+) {
     Column(horizontalAlignment = Alignment.End, modifier = Modifier.windowInsetsPadding(SafeInsets).padding(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            RoundButton(onClick = onSearch, description = "Поиск") {
+                Icon(Icons.Filled.Search, contentDescription = null, tint = ShelfInk, modifier = Modifier.size(22.dp))
+            }
+            RoundButton(onClick = onOrder, description = "Порядок") {
+                Icon(SortIcon, contentDescription = null, tint = ShelfInk, modifier = Modifier.size(22.dp))
+            }
             RoundButton(onClick = onPickTheme, description = "Цвет стены") {
                 Box(
                     Modifier
@@ -544,6 +665,7 @@ private fun HeldComicCard(
     onRead: () -> Unit,
     onRemove: () -> Unit,
     onPutBack: () -> Unit,
+    onSeries: () -> Unit,
 ) {
     val accent by produceState(Color(0xFFB0703A), coverFile) {
         withContext(Dispatchers.IO) { LibraryShelfArt.coverAccent(coverFile) }?.let { value = Color(it) }
@@ -581,7 +703,7 @@ private fun HeldComicCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    val credits = listOfNotNull(entry.writer, entry.year?.toString()).joinToString(" · ")
+                    val credits = listOfNotNull(entry.series?.let { "Серия «$it»" }, entry.writer, entry.year?.toString()).joinToString(" · ")
                     if (credits.isNotEmpty()) {
                         Spacer(Modifier.height(2.dp))
                         Text(
@@ -653,6 +775,17 @@ private fun HeldComicCard(
                             .size(52.dp)
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.1f))
+                            .clickable(onClickLabel = "Серия", onClick = onSeries),
+                    ) {
+                        Icon(SeriesIcon, contentDescription = "Серия", tint = ShelfInk.copy(alpha = 0.75f), modifier = Modifier.size(24.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.1f))
                             .clickable(onClickLabel = "Убрать из коллекции", onClick = onRemove),
                     ) {
                         Icon(Icons.Filled.Delete, contentDescription = "Убрать из коллекции", tint = ShelfInk.copy(alpha = 0.75f))
@@ -684,10 +817,19 @@ private fun GridLibrary(
     onAdd: () -> Unit,
     onOpen: (ComicEntry) -> Unit,
     onRemove: (ComicEntry) -> Unit,
+    order: ShelfOrder,
+    onOrderChange: (ShelfOrder) -> Unit,
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    val sorted = remember(comics) {
-        comics.sortedWith(compareByDescending<ComicEntry> { it.lastReadAt }.thenByDescending { it.addedAt })
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var ordering by remember { mutableStateOf(false) }
+    val sorted = remember(comics, order, query) {
+        CollectionOrder.arrange(comics, order).map { it.entry }.filter { CollectionOrder.matches(it, query) }
+    }
+    BackHandler(enabled = searching) {
+        searching = false
+        query = ""
     }
 
     Scaffold(
@@ -706,6 +848,25 @@ private fun GridLibrary(
                         }
                     },
                     actions = {
+                        IconButton(onClick = { searching = !searching; if (!searching) query = "" }) {
+                            Icon(Icons.Filled.Search, contentDescription = "Поиск")
+                        }
+                        Box {
+                            IconButton(onClick = { ordering = true }) {
+                                Icon(SortIcon, contentDescription = "Порядок")
+                            }
+                            DropdownMenu(expanded = ordering, onDismissRequest = { ordering = false }) {
+                                ShelfOrder.entries.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label, fontWeight = if (option == order) FontWeight.Bold else FontWeight.Normal) },
+                                        onClick = {
+                                            onOrderChange(option)
+                                            ordering = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
                         IconButton(onClick = onShowShelves) {
                             Icon(ShelfIcon, contentDescription = "На полках")
                         }
@@ -713,6 +874,22 @@ private fun GridLibrary(
                     scrollBehavior = scrollBehavior,
                 )
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                AnimatedVisibility(visible = searching) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        placeholder = { Text("Название, серия, автор, год") },
+                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (query.isNotEmpty()) {
+                                IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, contentDescription = "Стереть") }
+                            }
+                        },
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
             }
         },
         floatingActionButton = {
@@ -724,7 +901,15 @@ private fun GridLibrary(
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        if (sorted.isEmpty()) {
+        if (sorted.isEmpty() && query.isNotBlank()) {
+            Text(
+                "Ничего не нашлось",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(padding).padding(32.dp),
+            )
+        } else if (sorted.isEmpty()) {
             EmptyLibrary(Modifier.padding(padding))
         } else {
             LazyVerticalGrid(

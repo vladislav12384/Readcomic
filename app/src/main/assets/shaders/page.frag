@@ -30,8 +30,11 @@ uniform vec3 uLight;         // normalized direction towards the light
 uniform vec3 uPaper;         // paper colour
 uniform float uGloss;        // strength of the glossy highlight on the bend
 uniform float uGutter;       // darkening near the spine
+uniform vec3 uNight;         // night: strength 0..1, warmth 0..1, brightness 0..1
 
 out vec4 fragColor;
+
+#include night
 
 // Samples outside of control flow so mipmapping keeps working at the letterbox edges.
 vec3 printed(sampler2D tex, float hasTex, vec4 rect, vec4 sub, float flip) {
@@ -103,5 +106,10 @@ void main() {
         color *= 1.0 - shadow * receive;
     }
 
-    fragColor = vec4(color, 1.0);
+    if (uNight.x > 0.0) {
+        // Under the lamp the middle of the page is brightest, its far corners a little darker.
+        vec2 l = (gl_FragCoord.xy - uViewport * vec2(0.5, 0.55)) / max(uViewport.x, uViewport.y);
+        color *= 1.0 - 0.18 * uNight.x * smoothstep(0.0, 0.5, dot(l, l));
+    }
+    fragColor = vec4(nightTone(color, uNight), 1.0);
 }

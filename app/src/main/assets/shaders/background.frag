@@ -1,8 +1,9 @@
 #version 300 es
 precision highp float;
 
-// The "table": background with a vignette, the soft drop shadow of the comic,
-// the visible edges of the stacks of sheets and the shadow of a turning page.
+// The "table": its surface (drawn once into uTable) under a vignette, the soft drop shadow of
+// the comic, the visible edges of the stacks of sheets and the shadow of a turning page. At
+// night the room goes dark around a warm pool of lamp light.
 
 uniform vec2 uViewport;
 uniform mat3 uBookInverse;   // view pixels to layout coordinates, for the edges of the stacks
@@ -17,12 +18,17 @@ uniform vec4 uStackRect[2];  // page lying on top of each stack
 uniform vec2 uStackShift[2]; // offset of the bottom sheet of each stack
 uniform float uStackLines[2];
 uniform int uStackCount;
-uniform vec3 uBgColor;
+uniform sampler2D uTable;    // the table's surface, as laid out unzoomed on the screen
+uniform mat3 uTableInverse;  // view pixels to that layout (zoom and pan, not the comic's pose)
+uniform float uVignette;
 uniform vec3 uPaper;
+uniform vec3 uNight;         // night: strength 0..1, warmth 0..1, brightness 0..1
 uniform sampler2D uShadowTex;
 uniform float uShadowOn;
 
 out vec4 fragColor;
+
+#include night
 
 float sdBox(vec2 p, vec2 halfSize) {
     vec2 d = abs(p) - halfSize;
@@ -59,8 +65,10 @@ void main() {
     vec2 w = (uBookInverse * vec3(frag, 1.0)).xy;
     vec2 ws = (uShadowInverse * vec3(frag, 1.0)).xy;
 
+    vec2 t = (uTableInverse * vec3(frag, 1.0)).xy / uViewport;
+    vec3 surface = texture(uTable, vec2(t.x, 1.0 - t.y)).rgb;
     vec2 q = frag / uViewport - 0.5;
-    vec3 color = uBgColor * (1.0 - 0.55 * dot(q, q));
+    vec3 color = surface * (1.0 - uVignette * dot(q, q));
 
     // Drop shadow under the comic, a little larger than the pages to include the stacks.
     float drop = 0.0;
@@ -84,5 +92,13 @@ void main() {
     if (uShadowOn > 0.5) {
         color *= 1.0 - texture(uShadowTex, gl_FragCoord.xy / uViewport).r;
     }
+
+    if (uNight.x > 0.0) {
+        // A desk lamp above the comic: the table falls into darkness away from its pool of light.
+        vec2 l = (frag - uViewport * vec2(0.5, 0.45)) / max(uViewport.x, uViewport.y);
+        float pool = exp(-dot(l, l) * 5.0);
+        color *= mix(1.0, 0.22 + 0.7 * pool, uNight.x);
+    }
+    color = nightTone(color, uNight);
     fragColor = vec4(color, 1.0);
 }

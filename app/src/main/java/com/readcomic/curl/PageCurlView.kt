@@ -108,9 +108,19 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     fun jumpTo(index: Int) = onGl { controller.jumpTo(index) }
 
-    /** Table colour behind the pages, components in 0..1. */
-    fun setBackgroundTint(red: Float, green: Float, blue: Float) {
-        renderer.backgroundColor = floatArrayOf(red, green, blue)
+    /** The table under the comic (see table.frag) and how dark its corners get. */
+    fun setTable(kind: Int, vignette: Float) {
+        renderer.table = kind
+        renderer.vignette = vignette
+        requestFrame()
+    }
+
+    /**
+     * Reading at night: [strength] 0 (day) to 1, [warmth] and [brightness] 0..1. Called for every
+     * step of the change, so it fades in and out.
+     */
+    fun setNight(strength: Float, warmth: Float, brightness: Float) {
+        renderer.night = floatArrayOf(strength, warmth, brightness)
         requestFrame()
     }
 

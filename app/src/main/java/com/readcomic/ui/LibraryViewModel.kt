@@ -39,8 +39,21 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _openRequest = MutableStateFlow<String?>(null)
     val openRequest: StateFlow<String?> = _openRequest.asStateFlow()
 
-    private val _backgroundTint = MutableStateFlow(prefs.getInt(KEY_BACKGROUND, 0))
-    val backgroundTint: StateFlow<Int> = _backgroundTint.asStateFlow()
+    /** The table the comic lies on while reading; earlier versions had plain colours instead. */
+    private val _table = MutableStateFlow(
+        runCatching { ReadingTable.valueOf(prefs.getString(KEY_TABLE, null) ?: "") }
+            .getOrElse { ReadingTable.fromOldBackground(prefs.getInt(KEY_BACKGROUND, 0)) },
+    )
+    val table: StateFlow<ReadingTable> = _table.asStateFlow()
+
+    private val _night = MutableStateFlow(
+        NightSettings(
+            mode = runCatching { NightMode.valueOf(prefs.getString(KEY_NIGHT, null) ?: "") }.getOrDefault(NightMode.OFF),
+            warmth = prefs.getFloat(KEY_NIGHT_WARMTH, NightSettings().warmth),
+            brightness = prefs.getFloat(KEY_NIGHT_BRIGHTNESS, NightSettings().brightness),
+        ),
+    )
+    val night: StateFlow<NightSettings> = _night.asStateFlow()
 
     private val _readingMode = MutableStateFlow(
         runCatching { ReadingMode.valueOf(prefs.getString(KEY_READING_MODE, null) ?: "") }.getOrDefault(ReadingMode.SPREAD),
@@ -63,6 +76,16 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _shelfTheme = MutableStateFlow(prefs.getInt(KEY_SHELF_THEME, 0).coerceIn(0, ShelfThemes.lastIndex))
     val shelfTheme: StateFlow<Int> = _shelfTheme.asStateFlow()
 
+    /** How the comics stand on the shelves (and in the grid). */
+    private val _shelfOrder = MutableStateFlow(
+        runCatching { ShelfOrder.valueOf(prefs.getString(KEY_SHELF_ORDER, null) ?: "") }.getOrDefault(ShelfOrder.TITLE),
+    )
+    val shelfOrder: StateFlow<ShelfOrder> = _shelfOrder.asStateFlow()
+
+    /** Whether comics being added go into their series; remembered for the next time. */
+    private val _groupSeries = MutableStateFlow(prefs.getBoolean(KEY_GROUP_SERIES, false))
+    val groupSeries: StateFlow<Boolean> = _groupSeries.asStateFlow()
+
     /** Whether the reader has already found out that comics can be taken off the shelf. */
     private val _shelfHintDone = MutableStateFlow(prefs.getBoolean(KEY_SHELF_HINT, false))
     val shelfHintDone: StateFlow<Boolean> = _shelfHintDone.asStateFlow()
@@ -82,7 +105,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         if (uris.isEmpty()) return
         viewModelScope.launch {
             _busy.value = true
-            val failed = library.addFiles(uris)
+            val failed = library.addFiles(uris, _groupSeries.value)
             _busy.value = false
             if (failed > 0) {
                 _messages.tryEmit(if (uris.size == 1) "Не удалось открыть файл" else "Не удалось открыть файлов: $failed")
@@ -110,6 +133,19 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     fun updateProgress(id: String, firstPage: Int, lastPage: Int) = library.updateProgress(id, firstPage, lastPage)
 
+    /** Puts [entry] into the series [name], or out of its series (null). */
+    fun setSeries(entry: ComicEntry, name: String?) = library.setSeries(entry.id, name)
+
+    fun setShelfOrder(order: ShelfOrder) {
+        _shelfOrder.value = order
+        prefs.edit { putString(KEY_SHELF_ORDER, order.name) }
+    }
+
+    fun setGroupSeries(enabled: Boolean) {
+        _groupSeries.value = enabled
+        prefs.edit { putBoolean(KEY_GROUP_SERIES, enabled) }
+    }
+
     suspend fun pageAspects(entry: ComicEntry, source: ComicSource, onProgress: (Float) -> Unit): FloatArray =
         library.pageAspects(entry, source, onProgress)
 
@@ -117,7 +153,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     fun addFolder(uri: Uri) {
         viewModelScope.launch {
-            val report = library.addFolder(uri)
+            val report = library.addFolder(uri, _groupSeries.value)
             if (report.failed.isNotEmpty()) {
                 _messages.tryEmit("Не получилось прочитать папку")
             } else {
@@ -172,17 +208,32 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putString(KEY_ORIENTATION, lock.name) }
     }
 
-    fun setBackgroundTint(index: Int) {
-        _backgroundTint.value = index
-        prefs.edit { putInt(KEY_BACKGROUND, index) }
+    fun setTable(table: ReadingTable) {
+        _table.value = table
+        prefs.edit { putString(KEY_TABLE, table.name) }
+    }
+
+    fun setNight(settings: NightSettings) {
+        _night.value = settings
+        prefs.edit {
+            putString(KEY_NIGHT, settings.mode.name)
+            putFloat(KEY_NIGHT_WARMTH, settings.warmth)
+            putFloat(KEY_NIGHT_BRIGHTNESS, settings.brightness)
+        }
     }
 
     companion object {
         private const val KEY_BACKGROUND = "background"
+        private const val KEY_TABLE = "table"
+        private const val KEY_NIGHT = "night"
+        private const val KEY_NIGHT_WARMTH = "night_warmth"
+        private const val KEY_NIGHT_BRIGHTNESS = "night_brightness"
         private const val KEY_READING_MODE = "reading_mode"
         private const val KEY_ORIENTATION = "orientation"
         private const val KEY_SHELF_MODE = "shelf_mode"
         private const val KEY_SHELF_THEME = "shelf_theme"
         private const val KEY_SHELF_HINT = "shelf_hint"
+        private const val KEY_SHELF_ORDER = "shelf_order"
+        private const val KEY_GROUP_SERIES = "group_series"
     }
 }

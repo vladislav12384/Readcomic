@@ -7,6 +7,7 @@ import android.util.LruCache
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -41,6 +43,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -71,9 +74,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -91,9 +97,11 @@ import com.readcomic.curl.PageTurnController.ReadingMode
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
 import com.readcomic.data.ComicSource
+import java.time.LocalTime
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -108,11 +116,13 @@ enum class OrientationLock { SYSTEM, PORTRAIT, LANDSCAPE }
 @Composable
 fun ReaderScreen(
     entry: ComicEntry,
-    backgroundTint: Int,
+    table: ReadingTable,
+    night: NightSettings,
     readingMode: ReadingMode,
     orientation: OrientationLock,
     pageAspects: suspend (ComicSource, onProgress: (Float) -> Unit) -> FloatArray,
-    onBackgroundTintChange: (Int) -> Unit,
+    onTableChange: (ReadingTable) -> Unit,
+    onNightChange: (NightSettings) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
     onOrientationChange: (OrientationLock) -> Unit,
     onPageChanged: (first: Int, last: Int) -> Unit,
@@ -164,10 +174,26 @@ fun ReaderScreen(
         if (settings) settings = false else overlay = false
     }
 
-    val tint = ReaderBackgrounds[backgroundTint.coerceIn(0, ReaderBackgrounds.lastIndex)]
-    LaunchedEffect(curlView, tint) {
-        curlView?.setBackgroundTint(tint.red, tint.green, tint.blue)
+    LaunchedEffect(curlView, table) {
+        curlView?.setTable(table.kind, table.vignette)
     }
+    // Night comes and goes softly; "evenings" is checked again every minute.
+    val clock by produceState(LocalTime.now()) {
+        while (true) {
+            delay(60_000L)
+            value = LocalTime.now()
+        }
+    }
+    val nightStrength by animateFloatAsState(
+        targetValue = if (night.activeAt(clock)) 1f else 0f,
+        animationSpec = tween(durationMillis = 900),
+        label = "night",
+    )
+    LaunchedEffect(curlView, nightStrength, night.warmth, night.brightness) {
+        curlView?.setNight(nightStrength, night.warmth, night.brightness)
+    }
+    // Shown before the first frame of the table: its colour, darker at night.
+    val tint = lerp(table.color, Color.Black, 0.6f * nightStrength)
     LaunchedEffect(curlView, readingMode) {
         curlView?.setReadingMode(readingMode)
     }
@@ -305,10 +331,12 @@ fun ReaderScreen(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             SettingsPanel(
-                backgroundTint = backgroundTint,
+                table = table,
+                night = night,
                 readingMode = readingMode,
                 orientation = orientation,
-                onBackgroundTintChange = onBackgroundTintChange,
+                onTableChange = onTableChange,
+                onNightChange = onNightChange,
                 onReadingModeChange = onReadingModeChange,
                 onOrientationChange = onOrientationChange,
             )
@@ -423,10 +451,12 @@ private fun BottomBar(
 /** Settings that change rarely, opened with the gear and closed by tapping anywhere else. */
 @Composable
 private fun SettingsPanel(
-    backgroundTint: Int,
+    table: ReadingTable,
+    night: NightSettings,
     readingMode: ReadingMode,
     orientation: OrientationLock,
-    onBackgroundTintChange: (Int) -> Unit,
+    onTableChange: (ReadingTable) -> Unit,
+    onNightChange: (NightSettings) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
     onOrientationChange: (OrientationLock) -> Unit,
 ) {
@@ -437,6 +467,9 @@ private fun SettingsPanel(
             .background(Color(0xF2201C19))
             // Taps on the panel itself must not reach the "tap outside to close" layer below.
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+            // On a small screen in landscape the settings scroll rather than run off the screen.
+            .heightIn(max = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * 0.8f).toDp() })
+            .verticalScroll(rememberScrollState())
             .windowInsetsPadding(barInsets.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
             .padding(top = 10.dp, bottom = 12.dp),
     ) {
@@ -473,21 +506,55 @@ private fun SettingsPanel(
             ModeChip("Вертикально", orientation == OrientationLock.PORTRAIT) { onOrientationChange(OrientationLock.PORTRAIT) }
             ModeChip("Горизонтально", orientation == OrientationLock.LANDSCAPE) { onOrientationChange(OrientationLock.LANDSCAPE) }
         }
-        SettingsRow("Фон") {
-            ReaderBackgrounds.forEachIndexed { index, color ->
-                Box(
-                    Modifier
-                        .size(30.dp)
-                        .background(color, CircleShape)
-                        .border(
-                            width = if (index == backgroundTint) 2.dp else 1.dp,
-                            color = if (index == backgroundTint) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.35f),
-                            shape = CircleShape,
-                        )
-                        .clickable { onBackgroundTintChange(index) },
-                )
+        SettingsRow("Стол") {
+            ReadingTable.entries.forEach { option ->
+                TableSwatch(option, selected = option == table) { onTableChange(option) }
             }
         }
+        Text(
+            table.label,
+            color = Color.White.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(start = 72.dp, end = 20.dp, bottom = 6.dp),
+        )
+        SettingsRow("Ночь") {
+            NightMode.entries.forEach { mode ->
+                ModeChip(mode.label, night.mode == mode) { onNightChange(night.copy(mode = mode)) }
+            }
+        }
+        AnimatedVisibility(visible = night.mode != NightMode.OFF) {
+            Column {
+                Text(
+                    if (night.mode == NightMode.EVENING) {
+                        "С ${NightSettings.EVENING_HOUR}:00 до ${NightSettings.MORNING_HOUR}:00 — тёплый свет настольной лампы"
+                    } else {
+                        "Тёплый свет настольной лампы, стол уходит в темноту"
+                    },
+                    color = Color.White.copy(alpha = 0.5f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = 72.dp, end = 20.dp, bottom = 2.dp),
+                )
+                NightSlider("Тепло", night.warmth) { onNightChange(night.copy(warmth = it)) }
+                NightSlider("Свет", night.brightness) { onNightChange(night.copy(brightness = it)) }
+            }
+        }
+    }
+}
+
+/** A setting of the night light, 0..1. */
+@Composable
+private fun NightSlider(label: String, value: Float, onChange: (Float) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+    ) {
+        Text(
+            label,
+            color = Color.White.copy(alpha = 0.6f),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.width(52.dp),
+        )
+        Slider(value = value, onValueChange = onChange, modifier = Modifier.weight(1f))
     }
 }
 

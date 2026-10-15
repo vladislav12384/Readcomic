@@ -73,6 +73,12 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
 
     fun putBack() = onGl { controller.putBack() }
 
+    /** Comics matching a search stay lit, the rest go into the shade; null ends the search. */
+    fun highlight(ids: Set<String>?) = onGl { controller.highlight(ids) }
+
+    /** Scrolls the shelves to the comic [id] and takes it into the hands. */
+    fun focus(id: String) = onGl { controller.focus(id) }
+
     /** How far the shelves are scrolled, to come back to the same place. */
     val scroll: Float get() = controller.scroll
 
