@@ -63,6 +63,11 @@ class CurlRenderer(
     private var shadowAlpha = 1f
     private var stackAlpha = 1f
     private var hidden = false
+    private var alpha = 1f
+
+    /** Called once the first frame is drawn on a new surface (on the render thread). */
+    var onFirstFrame: (() -> Unit)? = null
+    private var firstFrame = true
 
     /** The surface of the table, see table.frag; how dark its corners get. */
     @Volatile
@@ -115,6 +120,7 @@ class CurlRenderer(
         GLES30.glGenFramebuffers(2, shadowFramebuffers, 0)
         textures.onContextCreated()
         lastFrameNanos = 0L
+        firstFrame = true
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -180,7 +186,17 @@ class CurlRenderer(
         GLES30.glBindVertexArray(gridVao)
         pageProgram.use()
         setCommonPageUniforms(scene)
-        if (!hidden) for (sheet in scene.flats) drawSheet(sheet, shadowOn, depth = -1f)
+        if (!hidden) {
+            // A comic fading in is blended over the table.
+            if (alpha < 1f) {
+                GLES30.glEnable(GLES30.GL_BLEND)
+                GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+            }
+            GLES30.glUniform1f(pageProgram["uAlpha"], alpha)
+            for (sheet in scene.flats) drawSheet(sheet, shadowOn, depth = -1f)
+            GLES30.glDisable(GLES30.GL_BLEND)
+            GLES30.glUniform1f(pageProgram["uAlpha"], 1f)
+        }
         if (turning != null) {
             GLES30.glEnable(GLES30.GL_DEPTH_TEST)
             GLES30.glDepthFunc(GLES30.GL_LEQUAL)
@@ -188,6 +204,10 @@ class CurlRenderer(
             GLES30.glDisable(GLES30.GL_DEPTH_TEST)
         }
         GLES30.glBindVertexArray(0)
+        if (firstFrame) {
+            firstFrame = false
+            onFirstFrame?.invoke()
+        }
 
         if (animating) requestRender()
     }
@@ -231,6 +251,7 @@ class CurlRenderer(
             shadowAlpha = 1f
             stackAlpha = 1f
             hidden = false
+            alpha = 1f
             return
         }
 
@@ -256,9 +277,10 @@ class CurlRenderer(
             pose.scale * (1f + 0.06f * pose.lift),
         )
         shadowSoft = 1f + 7f * pose.lift
-        shadowAlpha = if (pose.hidden) 0f else 1f - 0.5f * pose.lift
+        shadowAlpha = if (pose.hidden) 0f else (1f - 0.5f * pose.lift) * pose.alpha
         stackAlpha = if (pose.hidden) 0f else pose.stacks
         hidden = pose.hidden
+        alpha = pose.alpha
     }
 
     /**
@@ -433,6 +455,7 @@ class CurlRenderer(
         GLES30.glUniform3f(p["uPaper"], PAPER[0], PAPER[1], PAPER[2])
         GLES30.glUniform1f(p["uGloss"], 0.22f)
         GLES30.glUniform1f(p["uGutter"], scene.gutter)
+        GLES30.glUniform1f(p["uAlpha"], 1f)
         val n = night
         GLES30.glUniform3f(p["uNight"], n[0], n[1], n[2])
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)

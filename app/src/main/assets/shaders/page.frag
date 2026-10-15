@@ -31,6 +31,7 @@ uniform vec3 uPaper;         // paper colour
 uniform float uGloss;        // strength of the glossy highlight on the bend
 uniform float uGutter;       // darkening near the spine
 uniform vec3 uNight;         // night: strength 0..1, warmth 0..1, brightness 0..1
+uniform float uAlpha;        // a comic fading in
 
 out vec4 fragColor;
 
@@ -111,5 +112,5 @@ void main() {
         vec2 l = (gl_FragCoord.xy - uViewport * vec2(0.5, 0.55)) / max(uViewport.x, uViewport.y);
         color *= 1.0 - 0.18 * uNight.x * smoothstep(0.0, 0.5, dot(l, l));
     }
-    fragColor = vec4(nightTone(color, uNight), 1.0);
+    fragColor = vec4(nightTone(color, uNight), uAlpha);
 }

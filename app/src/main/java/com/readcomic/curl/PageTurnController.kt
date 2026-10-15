@@ -54,6 +54,8 @@ class PageTurnController(private val density: Float) {
         val shiftY: Float,
         val stacks: Float,
         val hidden: Boolean,
+        /** It fades in where it is held up before it falls. */
+        val alpha: Float = 1f,
     )
 
     enum class ReadingMode { AUTO, SPREAD, SINGLE }
@@ -123,9 +125,12 @@ class PageTurnController(private val density: Float) {
      * opened at [image] (where reading continues).
      */
     private class Arrival(val image: Int) {
-        /** Seconds since it started to fall; negative while waiting for the cover to load. */
+        /** Seconds since it started to fall; negative while waiting for the cover and appearing. */
         var time = -1f
         var waited = 0f
+
+        /** How far it has faded in, held up above the table, before it falls: 0..1. */
+        var appear = 0f
         var landed = false
     }
 
@@ -720,18 +725,24 @@ class PageTurnController(private val density: Float) {
         // Lying closed it is seen whole with the table around it; opening it brings it close.
         val rest = if (viewHeight > viewWidth) CLOSED_SCALE_PORTRAIT else CLOSED_SCALE_LANDSCAPE
         val scale = rest + (1f - rest) * eased
-        if (closed.time < 0f) return Pose(1f, DROP_ANGLE, DROP_TILT, pivotX, pivotY, scale, shiftX, 0f, 0f, hidden = true)
+        if (closed.time < 0f) {
+            if (closed.appear <= 0f) return Pose(1f, DROP_ANGLE, DROP_TILT, pivotX, pivotY, scale, shiftX, 0f, 0f, hidden = true)
+            // Appearing in the hand: it fades in and comes a little closer, still.
+            val a = closed.appear * closed.appear * (3f - 2f * closed.appear)
+            return Pose(1f, DROP_ANGLE, DROP_TILT, pivotX, pivotY, scale * (0.965f + 0.035f * a), shiftX, 0f, 0f, hidden = false, alpha = a)
+        }
 
         val lift: Float
         val angle: Float
         val tilt: Float
         if (closed.time < DROP_DURATION) {
-            // Falling: slow at first, faster and faster, straightening out on the way down.
+            // Falling: slow at first, faster and faster, straightening out on the way down. Every
+            // motion starts from rest, so nothing jerks as it lets go.
             val u = closed.time / DROP_DURATION
             lift = 1f - u * u
-            val straighten = 1f - (1f - u) * (1f - u)
+            val straighten = u * u * (3f - 2f * u)
             angle = DROP_ANGLE * (1f - straighten)
-            tilt = DROP_TILT * (1f - u)
+            tilt = DROP_TILT * (1f - straighten)
         } else {
             // A small hop where it hits the table, quickly settling.
             val since = closed.time - DROP_DURATION
@@ -1109,9 +1120,12 @@ class PageTurnController(private val density: Float) {
 
         arrival?.let { closed ->
             if (closed.time < 0f) {
-                // Falls once its cover can be seen (or after a moment, whatever happens).
+                // Appears once its cover can be seen (or after a moment, whatever happens), then falls.
                 closed.waited += dt
-                if (coverReady || closed.waited > COVER_WAIT) closed.time = 0f
+                if (closed.appear > 0f || coverReady || closed.waited > COVER_WAIT) {
+                    closed.appear = min(1f, closed.appear + dt / APPEAR_DURATION)
+                    if (closed.appear >= 1f) closed.time = 0f
+                }
                 animating = true
             } else if (!closed.landed) {
                 val before = closed.time
@@ -1234,7 +1248,8 @@ class PageTurnController(private val density: Float) {
         private const val BOUNCE_OMEGA = 14f
 
         // The closed comic falling onto the table: time to fall, to settle, its turn and tilt in the hand.
-        private const val DROP_DURATION = 0.62f
+        private const val APPEAR_DURATION = 0.35f
+        private const val DROP_DURATION = 0.68f
         private const val SETTLE_DURATION = 0.4f
         private const val DROP_ANGLE = -8f
         private const val DROP_TILT = 16f

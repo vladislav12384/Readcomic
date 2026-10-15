@@ -74,6 +74,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -141,6 +142,7 @@ fun ReaderScreen(
     var curlView by remember { mutableStateOf<PageCurlView?>(null) }
     // The comic arrives closed on the table and waits for a touch to open.
     var closed by remember(entry.id) { mutableStateOf(true) }
+    var tableShown by remember(entry.id) { mutableStateOf(false) }
     val latestOnPageChanged by rememberUpdatedState(onPageChanged)
 
     LaunchedEffect(entry.uri) {
@@ -227,6 +229,10 @@ fun ReaderScreen(
                                 override fun onClosedChanged(isClosed: Boolean) {
                                     closed = isClosed
                                 }
+
+                                override fun onFirstFrame() {
+                                    tableShown = true
+                                }
                             }
                             setReadingMode(readingMode)
                             setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, shapes, entry.currentPage, closed = true)
@@ -234,6 +240,12 @@ fun ReaderScreen(
                         }
                     },
                 )
+                // The GL surface cannot fade by itself: a veil of the table's colour lifts off it
+                // once it has drawn the table, instead of the table popping up.
+                val veil by animateFloatAsState(if (tableShown) 0f else 1f, tween(durationMillis = 320), label = "veil")
+                if (veil > 0f) {
+                    Box(Modifier.fillMaxSize().graphicsLayer { alpha = veil }.background(tint))
+                }
                 GlLifecycle(curlView)
             }
 

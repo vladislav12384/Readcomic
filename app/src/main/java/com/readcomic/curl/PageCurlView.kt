@@ -40,6 +40,9 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
         /** The comic lies closed on the table, waiting for a touch ([closed]), or was opened. */
         fun onClosedChanged(closed: Boolean) = Unit
+
+        /** The table is on screen: the first frame was drawn. */
+        fun onFirstFrame() = Unit
     }
 
     var callbacks: Callbacks? = null
@@ -64,6 +67,8 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
         renderer = CurlRenderer(context.assets, controller, textures) { requestFrame() }
         renderer.frameClock = { pacer.frameNanos }
         renderer.beforeFrame = ::followFingers
+        // Shown a couple of refreshes later: the frame is drawn, then has to reach the screen.
+        renderer.onFirstFrame = { mainHandler.postDelayed({ callbacks?.onFirstFrame() }, FIRST_FRAME_DELAY_MILLIS) }
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY
         isHapticFeedbackEnabled = true
@@ -469,6 +474,7 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
     private companion object {
         /** A fling is considered still running this long after it started. */
         const val FLING_STOP_WINDOW_MS = 700L
+        const val FIRST_FRAME_DELAY_MILLIS = 40L
         const val NANOS_PER_MILLI = 1_000_000L
 
         /**

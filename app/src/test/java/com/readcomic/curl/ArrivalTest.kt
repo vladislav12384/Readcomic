@@ -7,6 +7,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 class ArrivalTest {
     private val changes = mutableListOf<Pair<Int, Int>>()
@@ -111,5 +112,40 @@ class ArrivalTest {
         c.doubleTap(540f, 1140f)
         c.settle()
         assertEquals(1f, c.scale, 1e-4f)
+    }
+
+    @Test
+    fun itFadesInStillThenLetsGoWithoutAJerk() {
+        val c = closedComic(ReadingMode.SINGLE, start = 3, width = 1080, height = 2280)
+        assertTrue(c.pose()!!.hidden)
+        val alphas = ArrayList<Float>()
+        var pose = c.pose()!!
+        // Held up while it fades in: nothing moves yet.
+        while (true) {
+            c.step(1f / 60f)
+            pose = c.pose()!!
+            if (pose.lift < 1f) break
+            alphas += pose.alpha
+            assertEquals(1f, pose.lift, 0f)
+        }
+        assertTrue("fades in over several frames: ${alphas.size}", alphas.size >= 15)
+        assertEquals(alphas.sorted(), alphas)
+        assertTrue(alphas.first() < 0.1f && alphas.last() > 0.95f)
+        // The first frames of the fall move only a little, then faster and faster.
+        val angles = ArrayList<Float>()
+        val tilts = ArrayList<Float>()
+        val lifts = ArrayList<Float>()
+        repeat(6) {
+            angles += c.pose()!!.angle
+            tilts += c.pose()!!.tilt
+            lifts += c.pose()!!.lift
+            c.step(1f / 60f)
+        }
+        val firstTurn = abs(angles[1] - angles[0])
+        val laterTurn = abs(angles[5] - angles[4])
+        assertTrue("turns from rest: $firstTurn then $laterTurn", firstTurn < laterTurn * 0.5f)
+        assertTrue("tilts from rest", abs(tilts[1] - tilts[0]) < abs(tilts[5] - tilts[4]) * 0.5f)
+        assertTrue("falls from rest", (lifts[0] - lifts[1]) < (lifts[4] - lifts[5]) * 0.5f)
+        assertEquals(1f, c.pose()!!.alpha, 0f)
     }
 }
