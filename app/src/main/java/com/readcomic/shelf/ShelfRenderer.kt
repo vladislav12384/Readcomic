@@ -39,6 +39,10 @@ class ShelfRenderer(
     private var blank = 0
     private var shadowTexture = 0
     private var shadowFramebuffer = 0
+
+    // The comics' own shadows, without the shelves: no shelf throws its shadow over the covers.
+    private var comicShadowTexture = 0
+    private var comicShadowFramebuffer = 0
     private var shadowSize = 2048
     private var width = 1
     private var height = 1
@@ -75,7 +79,7 @@ class ShelfRenderer(
         quad = createMesh(quadVertices(), shortArrayOf(0, 1, 2, 0, 2, 3))
         createRibbonMesh()
         blank = createBlankTexture()
-        createShadowMap()
+        createShadowMaps()
         art.onContextCreated()
         lastFrameNanos = 0L
     }
@@ -113,15 +117,29 @@ class ShelfRenderer(
         if (animating) requestRender()
     }
 
+    /**
+     * Two shadow maps from the room light: one with everything for the wall and the shelves, one
+     * with the comics alone for the comics, so that the shelf above leaves them in its light.
+     */
     private fun renderShadows(frame: ShelfFrame) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, shadowFramebuffer)
-        GLES30.glViewport(0, 0, shadowSize, shadowSize)
-        GLES30.glClear(GLES30.GL_DEPTH_BUFFER_BIT)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_POLYGON_OFFSET_FILL)
         GLES30.glPolygonOffset(1.5f, 4f)
         depthProgram.use()
         GLES30.glUniformMatrix4fv(depthProgram["uLightViewProj"], 1, false, frame.lightViewProj, 0)
+        // Neither map may stay bound for sampling while it is drawn into.
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, blank)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE5)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, blank)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, comicShadowFramebuffer)
+        GLES30.glViewport(0, 0, shadowSize, shadowSize)
+        GLES30.glClear(GLES30.GL_DEPTH_BUFFER_BIT)
+        castComics(frame)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, shadowFramebuffer)
+        GLES30.glClear(GLES30.GL_DEPTH_BUFFER_BIT)
         GLES30.glBindVertexArray(box.vao)
         fun cast(model: FloatArray) {
             GLES30.glUniformMatrix4fv(depthProgram["uModel"], 1, false, model, 0)
@@ -129,6 +147,12 @@ class ShelfRenderer(
         }
         frame.planks.forEach(::cast)
         frame.cornice?.let(::cast)
+        castComics(frame)
+        GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun castComics(frame: ShelfFrame) {
         for (comic in frame.comics) {
             // A comic lifted off the shelf would throw a hard shadow far behind it; real ones blur away.
             if (comic.held && frame.dim > 0.05f) continue
@@ -143,8 +167,6 @@ class ShelfRenderer(
             GLES30.glDrawElements(GLES30.GL_TRIANGLES, mesh.count, GLES30.GL_UNSIGNED_SHORT, 0)
             GLES30.glBindVertexArray(box.vao)
         }
-        GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
     private fun renderScene(frame: ShelfFrame) {
@@ -178,8 +200,11 @@ class ShelfRenderer(
         GLES30.glUniform1i(p["uLabel"], 2)
         GLES30.glUniform1i(p["uShadow"], 3)
         GLES30.glUniform1i(p["uSpine"], 4)
+        GLES30.glUniform1i(p["uComicShadow"], 5)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTexture)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE5)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, comicShadowTexture)
 
         GLES30.glUniform1f(p["uHeld"], 0f)
         draw(quad, frame.wall, MATERIAL_WALL, frame.dim)
@@ -315,15 +340,28 @@ class ShelfRenderer(
         return floatArrayOf(inv[0], inv[3], inv[6], inv[1], inv[4], inv[7], inv[2], inv[5], inv[8])
     }
 
-    private fun createShadowMap() {
+    private fun createShadowMaps() {
         val size = IntArray(1)
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, size, 0)
         shadowSize = min(2048, size[0])
+        createShadowMap().let { (texture, framebuffer) ->
+            shadowTexture = texture
+            shadowFramebuffer = framebuffer
+        }
+        createShadowMap().let { (texture, framebuffer) ->
+            comicShadowTexture = texture
+            comicShadowFramebuffer = framebuffer
+        }
+    }
+
+    /** A depth texture for shadows and the framebuffer that draws into it. */
+    private fun createShadowMap(): Pair<Int, Int> {
         val ids = IntArray(1)
         GLES30.glGenTextures(1, ids, 0)
-        shadowTexture = ids[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, shadowTexture)
-        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_DEPTH_COMPONENT24, shadowSize, shadowSize)
+        val texture = ids[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        // 16 bits are plenty for the few metres the light sees, and half the memory of 24.
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_DEPTH_COMPONENT16, shadowSize, shadowSize)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
@@ -331,12 +369,13 @@ class ShelfRenderer(
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_COMPARE_MODE, GLES30.GL_COMPARE_REF_TO_TEXTURE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_COMPARE_FUNC, GLES30.GL_LEQUAL)
         GLES30.glGenFramebuffers(1, ids, 0)
-        shadowFramebuffer = ids[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, shadowFramebuffer)
-        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_DEPTH_ATTACHMENT, GLES30.GL_TEXTURE_2D, shadowTexture, 0)
+        val framebuffer = ids[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer)
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_DEPTH_ATTACHMENT, GLES30.GL_TEXTURE_2D, texture, 0)
         GLES30.glDrawBuffers(1, intArrayOf(GLES30.GL_NONE), 0)
         GLES30.glReadBuffer(GLES30.GL_NONE)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        return texture to framebuffer
     }
 
     private fun createBlankTexture(): Int {

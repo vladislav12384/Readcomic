@@ -32,6 +32,7 @@ uniform float uLightsTime;    // seconds since the shelf lights were switched on
 uniform vec3 uEye;
 uniform vec3 uLightDir;       // towards the room light
 uniform sampler2DShadow uShadow;
+uniform sampler2DShadow uComicShadow;   // the same with the comics alone, for the comics
 uniform float uShadowTexel;
 uniform float uRowHeight;
 uniform vec4 uPlank;          // shelf thickness, shelf depth, z of the comics' bottom edge, cornice height
@@ -94,9 +95,13 @@ float shadowAt(vec3 n) {
     vec3 p = vLight.xyz / vLight.w * 0.5 + 0.5;
     if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
     float bias = 0.0005 + 0.0015 * (1.0 - max(dot(n, uLightDir), 0.0));
+    // The comics and their bookmarks only take the shadows of the comics: the shelf above would
+    // lay a dark band over the tops of the covers.
+    bool comic = uMaterial == 0 || uMaterial == 4;
     float sum = 0.0;
     for (int i = 0; i < 8; i++) {
-        sum += texture(uShadow, vec3(p.xy + POISSON[i] * uShadowTexel * 2.5, p.z - bias));
+        vec3 c = vec3(p.xy + POISSON[i] * uShadowTexel * 2.5, p.z - bias);
+        sum += comic ? texture(uComicShadow, c) : texture(uShadow, c);
     }
     return sum / 8.0;
 }
