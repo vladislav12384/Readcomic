@@ -4,6 +4,7 @@ import com.readcomic.curl.Spring2D
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
@@ -13,13 +14,13 @@ import kotlin.math.sin
 import kotlin.math.tan
 
 /**
- * How large the comics look on the shelves: how close together they stand ([slot] wide places,
- * metres) and how many shelves the camera takes in at least ([rows]).
+ * How large the comics are on the shelves, which stay as they are: [scale] times the usual
+ * size of a comic.
  */
-enum class ShelfSize(val label: String, val slot: Float, val rows: Float) {
-    SMALL("Мельче", 0.23f, 1.6f),
-    NORMAL("Обычно", 0.205f, 1.43f),
-    LARGE("Крупнее", 0.19f, 1.28f),
+enum class ShelfSize(val label: String, val scale: Float) {
+    SMALL("Меньше", 1f),
+    NORMAL("Средние", 1.12f),
+    LARGE("Крупные", 1.2f),
 }
 
 /** A comic on the shelf. */
@@ -83,6 +84,8 @@ class ShelfFrame(
     val count: Int,
     /** Seconds since the shelf lights were switched on. */
     val lightsTime: Float,
+    /** From one shelf to the next, metres. */
+    val rowHeight: Float,
 )
 
 /**
@@ -139,9 +142,12 @@ class ShelfController(private val density: Float) {
         lightsTime = 0f
     }
 
-    /** How far the shelves are scrolled; set it to come back to the same place later. */
+    /**
+     * How far the shelves are scrolled, in shelves (so it holds whatever the size of the
+     * comics); set it to come back to the same place later.
+     */
     var scroll: Float
-        get() = cameraY
+        get() = cameraY / rowHeight
         set(value) {
             // Kept until the view size and the comics are known, the limits depend on both.
             pendingScroll = value
@@ -165,20 +171,31 @@ class ShelfController(private val density: Float) {
         val value = pendingScroll ?: return
         if (items.isEmpty() || !sized) return
         pendingScroll = null
-        cameraY = value
+        cameraY = value * rowHeight
         scrollVelocity = 0f
         clampScroll(hard = true)
     }
 
-    /** How large the comics look: how close together they stand and how near the camera is. */
+    /** How large the comics are on the shelves; the shelves follow them, the same room above. */
     var size = ShelfSize.NORMAL
         set(value) {
-            if (field == value) return
+            if (value == field) return
+            val before = rowHeight
             field = value
-            if (sized) setViewSize(viewWidth.toInt(), viewHeight.toInt())
+            // The same shelf stays on screen; the bookmarks start again, at rest.
+            cameraY *= rowHeight / before
+            ribbons.clear()
+            clampScroll(hard = true)
         }
 
-    private val slotWidth get() = size.slot
+    /**
+     * From one shelf to the next: the comics standing on it and above them just the room the
+     * bookmark curling out of a comic and a series sign need.
+     */
+    val rowHeight: Float
+        get() = COMIC_HEIGHT * size.scale * cos(LEAN) + HEADROOM + PLANK_THICKNESS
+
+    private val slotWidth get() = SLOT_WIDTH
 
     fun setViewSize(width: Int, height: Int) {
         sized = true
@@ -186,8 +203,9 @@ class ShelfController(private val density: Float) {
         viewHeight = max(height, 1).toFloat()
         val aspect = viewWidth / viewHeight
         val tanHalf = tan(FOV / 2f)
-        // At least so many shelves visible; as many columns as fit across, never fewer than two.
-        val minDistance = size.rows * ROW_HEIGHT / (2f * tanHalf)
+        // At least that much of the bookcase in height; as many columns as fit across, never
+        // fewer than two.
+        val minDistance = MIN_VISIBLE_HEIGHT / (2f * tanHalf)
         val visibleWidth = 2f * minDistance * tanHalf * aspect
         columns = floor((visibleWidth - 0.06f) / slotWidth).toInt().coerceIn(2, 8)
         val shelfWidth = columns * slotWidth + 0.04f
@@ -212,14 +230,14 @@ class ShelfController(private val density: Float) {
 
     private val rows get() = max(1, ceil(items.size / columns.toFloat()).toInt())
 
-    private fun rowBase(row: Int) = -row * ROW_HEIGHT
+    private fun rowBase(row: Int) = -row * rowHeight
 
-    private val corniceBottom get() = ROW_HEIGHT - PLANK_THICKNESS
+    private val corniceBottom get() = rowHeight - PLANK_THICKNESS
     private val scrollTop get() = corniceBottom + CORNICE_HEIGHT + 0.10f - visibleHalfHeight
     private val scrollBottom get() = min(scrollTop, rowBase(rows - 1) - 0.08f + visibleHalfHeight)
 
     private fun sizeOf(item: ShelfItem): Vec3 {
-        var height = COMIC_HEIGHT
+        var height = COMIC_HEIGHT * size.scale
         var width = height * item.aspect.coerceIn(0.5f, 1.0f)
         // A wide comic is a smaller one, not one squeezed against its neighbours.
         val room = slotWidth - MIN_GAP
@@ -300,8 +318,8 @@ class ShelfController(private val density: Float) {
         val wall = Mat4.compose(Vec3(0f, cameraY, 0f), Quat.IDENTITY, Vec3(halfW * 2.6f, halfH * 2.6f, 1f))
 
         // Every shelf on screen, including empty ones below the collection.
-        val topRow = max(0, floor(-(cameraY + halfH * 1.3f) / ROW_HEIGHT).toInt())
-        val bottomRow = ceil(-(cameraY - halfH * 1.3f) / ROW_HEIGHT).toInt() + 1
+        val topRow = max(0, floor(-(cameraY + halfH * 1.3f) / rowHeight).toInt())
+        val bottomRow = ceil(-(cameraY - halfH * 1.3f) / rowHeight).toInt() + 1
         val planks = (topRow..bottomRow).map { row ->
             Mat4.compose(
                 Vec3(0f, rowBase(row) - PLANK_THICKNESS / 2f, PLANK_DEPTH / 2f),
@@ -387,6 +405,7 @@ class ShelfController(private val density: Float) {
             searchDim = searchDim * searchDim * (3f - 2f * searchDim) * 0.72f,
             count = items.size,
             lightsTime = lightsTime,
+            rowHeight = rowHeight,
         )
     }
 
@@ -395,11 +414,15 @@ class ShelfController(private val density: Float) {
         val width = min(span * slotWidth - 0.05f, SIGN_MAX_WIDTH)
         val x = (slotX(column) + slotX(column + span - 1)) / 2f
         return Mat4.compose(
-            Vec3(x, rowBase(row) + SIGN_Y, 0.0012f),
+            Vec3(x, rowBase(row) + signY, 0.0012f),
             Quat.IDENTITY,
             Vec3(width, SIGN_HEIGHT, 1f),
         )
     }
+
+    /** Height of the series signs above a shelf: just over the tops of the comics, under the next shelf. */
+    private val signY: Float
+        get() = min(COMIC_HEIGHT * size.scale * cos(LEAN) + SIGN_ABOVE, rowHeight - PLANK_THICKNESS - SIGN_HEIGHT / 2f - 0.008f)
 
     /** Width / height of the sign above [span] comics, for its engraving. */
     fun signAspect(span: Int) = min(span * slotWidth - 0.05f, SIGN_MAX_WIDTH) / SIGN_HEIGHT
@@ -565,8 +588,8 @@ class ShelfController(private val density: Float) {
     /** Moves the bookmarks of the comics on screen (or in the hands) along with them. */
     private fun stepRibbons(dt: Float): Boolean {
         val halfH = visibleHalfHeight
-        val topRow = max(0, floor(-(cameraY + halfH * 1.3f) / ROW_HEIGHT).toInt())
-        val bottomRow = ceil(-(cameraY - halfH * 1.3f) / ROW_HEIGHT).toInt() + 1
+        val topRow = max(0, floor(-(cameraY + halfH * 1.3f) / rowHeight).toInt())
+        val bottomRow = ceil(-(cameraY - halfH * 1.3f) / rowHeight).toInt() + 1
         var moving = false
         items.forEachIndexed { index, item ->
             if (!item.inProgress) return@forEachIndexed
@@ -669,10 +692,16 @@ class ShelfController(private val density: Float) {
     companion object {
         const val FOV = 0.63f
         const val COMIC_HEIGHT = 0.258f
+        const val SLOT_WIDTH = 0.23f
 
         /** The least room between two comics standing side by side. */
         private const val MIN_GAP = 0.018f
-        const val ROW_HEIGHT = 0.40f
+
+        /** Room above the comics, under the next shelf: the bookmark rises ~5 cm, the sign is 3 cm. */
+        const val HEADROOM = 0.062f
+
+        /** The least height of the bookcase on screen, which in landscape sets how far the camera is. */
+        private const val MIN_VISIBLE_HEIGHT = 0.64f
         const val PLANK_THICKNESS = 0.034f
         const val PLANK_DEPTH = 0.15f
         const val BOTTOM_Z = 0.065f
@@ -685,7 +714,7 @@ class ShelfController(private val density: Float) {
         const val LABEL_WIDTH = 0.16f
         const val LABEL_HEIGHT = 0.025f
         const val SIGN_HEIGHT = 0.03f
-        const val SIGN_Y = 0.312f
+        private const val SIGN_ABOVE = 0.03f
         const val SIGN_MAX_WIDTH = 0.42f
         private const val SEARCH_FADE = 0.25f
         private const val FOCUS_RATE = 7f

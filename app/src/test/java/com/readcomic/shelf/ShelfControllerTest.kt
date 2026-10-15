@@ -170,31 +170,84 @@ class ShelfControllerTest {
     }
 
     @Test
-    fun largerSizesShowLargerComicsWithoutCrowdingThem() {
-        fun widthOnScreen(size: ShelfSize, width: Int, height: Int): Pair<Float, Int> {
+    fun largerComicsOnTheSameShelves() {
+        fun look(size: ShelfSize, width: Int, height: Int): Triple<Float, Float, Float> {
             val c = ShelfController(density = 2.75f).apply {
                 setViewSize(width, height)
                 this.size = size
                 setItems(List(12) { ShelfItem("c$it", if (it == 1) 1.0f else 0.65f, 30, false) })
             }
-            val comic = c.frame().comics.single { it.id == "c0" }
-            val left = Mat4.transformPoint(c.frame().viewProj, Mat4.transformPoint(comic.model, Vec3(-0.5f, 0f, 0.5f)))
-            val right = Mat4.transformPoint(c.frame().viewProj, Mat4.transformPoint(comic.model, Vec3(0.5f, 0f, 0.5f)))
+            val frame = c.frame()
+            val comic = frame.comics.single { it.id == "c0" }
+            val left = Mat4.transformPoint(frame.viewProj, Mat4.transformPoint(comic.model, Vec3(-0.5f, 0f, 0.5f)))
+            val right = Mat4.transformPoint(frame.viewProj, Mat4.transformPoint(comic.model, Vec3(0.5f, 0f, 0.5f)))
             // Neighbours never touch, even a square comic.
-            val a = c.frame().comics.single { it.id == "c1" }
-            val gap = Mat4.transformPoint(a.model, Vec3(-0.5f, 0f, 0f)).x - Mat4.transformPoint(comic.model, Vec3(0.5f, 0f, 0f)).x
+            val square = frame.comics.single { it.id == "c1" }
+            val gap = Mat4.transformPoint(square.model, Vec3(-0.5f, 0f, 0f)).x - Mat4.transformPoint(comic.model, Vec3(0.5f, 0f, 0f)).x
             assertTrue("gap $gap", gap > 0.01f)
-            return (right.x - left.x) / 2f * width to c.columns
+            // Where the first shelf is on screen.
+            val plank = Mat4.transformPoint(frame.viewProj, Mat4.transformPoint(frame.planks.first(), Vec3.ZERO))
+            return Triple((right.x - left.x) / 2f * width, plank.y, c.columns.toFloat())
         }
-        val (small, _) = widthOnScreen(ShelfSize.SMALL, 1080, 2280)
-        val (normal, columns) = widthOnScreen(ShelfSize.NORMAL, 1080, 2280)
-        val (large, _) = widthOnScreen(ShelfSize.LARGE, 1080, 2280)
-        assertEquals(2, columns)
-        assertTrue("normal is about a tenth larger: ${normal / small}", normal / small in 1.08f..1.16f)
-        assertTrue("larger still: ${large / small}", large / small > 1.15f)
-        // In landscape too, the camera comes closer.
-        val (wideSmall, _) = widthOnScreen(ShelfSize.SMALL, 2280, 1080)
-        val (wideLarge, _) = widthOnScreen(ShelfSize.LARGE, 2280, 1080)
-        assertTrue("landscape: ${wideLarge / wideSmall}", wideLarge / wideSmall > 1.15f)
+        for ((width, height) in listOf(1080 to 2280, 2280 to 1080)) {
+            val small = look(ShelfSize.SMALL, width, height)
+            val normal = look(ShelfSize.NORMAL, width, height)
+            val large = look(ShelfSize.LARGE, width, height)
+            assertTrue("about a tenth larger: ${normal.first / small.first}", normal.first / small.first in 1.1f..1.14f)
+            assertTrue("larger still: ${large.first / small.first}", large.first / small.first > 1.18f)
+            // As many on a shelf whatever their size.
+            assertEquals(small.third, large.third, 0f)
+        }
+    }
+
+    @Test
+    fun theShelvesHugTheComicsWithJustRoomForTheBookmark() {
+        for (size in ShelfSize.entries) {
+            val c = ShelfController(density = 2.75f).apply {
+                setViewSize(1080, 2280)
+                this.size = size
+                setItems(List(4) { ShelfItem("c$it", 0.65f, if (it == 0) 320 else 30, inProgress = it == 0) })
+            }
+            repeat(3) { c.step(1f / 60f) }
+            val frame = c.frame()
+            // The first shelf stands on y = 0; the board above it is the cornice.
+            val ceiling = c.rowHeight - ShelfController.PLANK_THICKNESS
+            val tops = frame.comics.map { comic ->
+                listOf(-0.5f, 0.5f).maxOf { z -> Mat4.transformPoint(comic.model, Vec3(0f, 0.5f, z)).y }
+            }
+            val room = ceiling - tops.max()
+            assertTrue("$size: little room above the comics: $room", room in 0.05f..0.07f)
+            val ribbon = frame.comics.single { it.id == "c0" }.ribbon!!
+            val ribbonTop = (1 until ribbon.size step 9).maxOf { ribbon[it] }
+            assertTrue("$size: the bookmark under the next shelf: $ribbonTop < $ceiling", ribbonTop < ceiling - 0.003f)
+        }
+    }
+
+    @Test
+    fun theScrollIsKeptInShelvesWhenTheComicsChangeSize() {
+        val c = ShelfController(density = 2.75f).apply {
+            setViewSize(1080, 2280)
+            setItems(List(40) { ShelfItem("c$it", 0.65f, 30, false) })
+        }
+        c.scroll = -3f
+        c.size = ShelfSize.LARGE
+        assertEquals(-3f, c.scroll, 1e-4f)
+    }
+
+    @Test
+    fun largeComicsStillFitUnderTheNextShelfWithTheirSigns() {
+        val c = ShelfController(density = 2.75f).apply {
+            setViewSize(1080, 2280)
+            size = ShelfSize.LARGE
+            setItems(List(4) { ShelfItem("c$it", 0.65f, 30, false, series = "Saga") })
+        }
+        val frame = c.frame()
+        val comic = frame.comics.single { it.id == "c0" }
+        val top = Mat4.transformPoint(comic.model, Vec3(0f, 0.5f, 0.5f)).y
+        val sign = frame.signs.first()
+        val signBottom = Mat4.transformPoint(sign.model, Vec3(0f, -0.5f, 0f)).y
+        val signTop = Mat4.transformPoint(sign.model, Vec3(0f, 0.5f, 0f)).y
+        assertTrue("sign above the comics: $signBottom > $top", signBottom > top)
+        assertTrue("sign under the next shelf: $signTop", signTop < c.rowHeight - ShelfController.PLANK_THICKNESS)
     }
 }

@@ -162,7 +162,7 @@ class ShelfRenderer(
         GLES30.glUniform3f(p["uEye"], frame.eye.x, frame.eye.y, frame.eye.z)
         GLES30.glUniform3f(p["uLightDir"], frame.light.x, frame.light.y, frame.light.z)
         GLES30.glUniform1f(p["uShadowTexel"], 1f / shadowSize)
-        GLES30.glUniform1f(p["uRowHeight"], ShelfController.ROW_HEIGHT)
+        GLES30.glUniform1f(p["uRowHeight"], frame.rowHeight)
         GLES30.glUniform4f(
             p["uPlank"],
             ShelfController.PLANK_THICKNESS,
