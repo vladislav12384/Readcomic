@@ -34,53 +34,50 @@ class LibraryShelfArt(
     }
 
     override fun label(text: String): Bitmap? {
-        // Engraved in the oak of the rail: plain, light letters (white on black: the depth of the cut).
         val bitmap = createBitmap(LABEL_WIDTH, LABEL_HEIGHT)
         val canvas = Canvas(bitmap)
-        canvas.drawColor(Color.BLACK)
+        canvas.drawColor(PAPER)
+        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+            color = INK_LIGHT
+        }
+        canvas.drawRect(9f, 9f, LABEL_WIDTH - 9f, LABEL_HEIGHT - 9f, border)
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            textSize = LABEL_HEIGHT * 0.58f
-            letterSpacing = 0.04f
-            color = Color.WHITE
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
+            textSize = 46f
+            color = INK
             textAlign = Paint.Align.CENTER
         }
-        val title = TextUtils.ellipsize(text, paint, LABEL_WIDTH - LABEL_HEIGHT * 0.6f, TextUtils.TruncateAt.END)
+        val title = TextUtils.ellipsize(text, paint, LABEL_WIDTH - 64f, TextUtils.TruncateAt.END)
         val baseline = LABEL_HEIGHT / 2f - (paint.descent() + paint.ascent()) / 2f
         canvas.drawText(title, 0, title.length, LABEL_WIDTH / 2f, baseline, paint)
         return bitmap
     }
 
     override fun sign(name: String, aspect: Float): Bitmap {
-        // Letters on the wall, as in a gallery: the name in spaced capitals between two fine rules.
+        // Engraved like the name plate: a rule round the edge and the name in spaced capitals.
         val height = SIGN_HEIGHT
         val width = (height * aspect).toInt().coerceIn(height * 2, 2048)
         val bitmap = createBitmap(width, height)
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.BLACK)
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = Color.WHITE
+            strokeWidth = 2.5f
+        }
+        canvas.drawRect(10f, 10f, width - 10f, height - 10f, line)
         val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-            textSize = height * 0.42f
-            letterSpacing = 0.24f
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+            textSize = height * 0.46f
+            letterSpacing = 0.16f
             color = Color.WHITE
             textAlign = Paint.Align.CENTER
         }
-        val shown = TextUtils.ellipsize(name.uppercase(), text, width - height * 0.4f, TextUtils.TruncateAt.END)
+        val shown = TextUtils.ellipsize(name.uppercase(), text, width - height * 0.6f, TextUtils.TruncateAt.END)
         val baseline = height / 2f - (text.descent() + text.ascent()) / 2f
         canvas.drawText(shown, 0, shown.length, width / 2f, baseline, text)
-        // The rules reach out from the name to the ends of the series.
-        val half = text.measureText(shown, 0, shown.length) / 2f
-        val gap = height * 0.45f
-        val margin = height * 0.2f
-        if (width / 2f - half - gap - margin > height * 0.3f) {
-            val rule = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                strokeWidth = height * 0.025f
-            }
-            val y = height / 2f
-            canvas.drawLine(margin, y, width / 2f - half - gap, y, rule)
-            canvas.drawLine(width / 2f + half + gap, y, width - margin, y, rule)
-        }
         return bitmap
     }
 
@@ -292,49 +289,51 @@ class LibraryShelfArt(
         }
     }
 
-    override fun header(count: Int): Bitmap {
-        // Over the shelves, on the wall: "Collection" in light, widely spaced capitals, a short
-        // rule and how many comics there are.
-        val bitmap = createBitmap(HEADER_WIDTH, HEADER_HEIGHT)
+    override fun plaque(count: Int): Bitmap {
+        val bitmap = createBitmap(PLAQUE_WIDTH, PLAQUE_HEIGHT)
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.BLACK)
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = Color.WHITE
+            strokeWidth = 3f
+        }
+        canvas.drawRect(14f, 14f, PLAQUE_WIDTH - 14f, PLAQUE_HEIGHT - 14f, line)
+        line.strokeWidth = 1.5f
+        canvas.drawRect(22f, 22f, PLAQUE_WIDTH - 22f, PLAQUE_HEIGHT - 22f, line)
         val title = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-            textSize = HEADER_HEIGHT * 0.34f
-            letterSpacing = 0.36f
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+            textSize = 62f
+            letterSpacing = 0.22f
             color = Color.WHITE
             textAlign = Paint.Align.CENTER
         }
-        title.textSize *= ((HEADER_WIDTH * 0.92f) / title.measureText("КОЛЛЕКЦИЯ")).coerceAtMost(1f)
-        canvas.drawText("КОЛЛЕКЦИЯ", HEADER_WIDTH / 2f, HEADER_HEIGHT * 0.46f, title)
-        val rule = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            strokeWidth = HEADER_HEIGHT * 0.012f
-        }
-        canvas.drawLine(HEADER_WIDTH / 2f - HEADER_HEIGHT * 0.22f, HEADER_HEIGHT * 0.62f, HEADER_WIDTH / 2f + HEADER_HEIGHT * 0.22f, HEADER_HEIGHT * 0.62f, rule)
+        canvas.drawText("КОЛЛЕКЦИЯ", PLAQUE_WIDTH / 2f, 94f, title)
         val subtitle = TextPaint(title).apply {
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-            textSize = HEADER_HEIGHT * 0.15f
-            letterSpacing = 0.14f
+            typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+            textSize = 30f
+            letterSpacing = 0.08f
         }
-        canvas.drawText(comicsCount(count), HEADER_WIDTH / 2f, HEADER_HEIGHT * 0.86f, subtitle)
+        canvas.drawText(comicsCount(count), PLAQUE_WIDTH / 2f, 134f, subtitle)
         return bitmap
     }
 
     private fun coverAspect(entry: ComicEntry): Float? = coverAspect(coverFile(entry))
 
     companion object {
-        // As wide for their height as the label on the rail and the letters over the shelves.
-        private const val LABEL_HEIGHT = 88
-        private const val LABEL_WIDTH = (LABEL_HEIGHT * ShelfController.LABEL_WIDTH / ShelfController.LABEL_HEIGHT).toInt()
+        private const val LABEL_WIDTH = 640
+        private const val LABEL_HEIGHT = 100
         private const val SPINE_HEIGHT = 1536
         private val FOIL = Color.rgb(217, 178, 106)
         private val NUMBER = Regex("""#\s*(\S{1,4})\s*$""")
         private const val SIGN_HEIGHT = 112
-        private const val HEADER_HEIGHT = 210
-        private const val HEADER_WIDTH = (HEADER_HEIGHT * ShelfController.HEADER_WIDTH / ShelfController.HEADER_HEIGHT).toInt()
+        private const val PLAQUE_WIDTH = 1024
+        private const val PLAQUE_HEIGHT = 166
         private const val SHARP_WIDTH = 900
         private const val SHARP_HEIGHT = 1400
+        private const val PAPER = 0xFFEFE8DA.toInt()
+        private const val INK = 0xFF3A2A1C.toInt()
+        private const val INK_LIGHT = 0xFF9A8670.toInt()
 
         fun isWide(bitmap: Bitmap) = bitmap.width > bitmap.height * 1.1f
 
