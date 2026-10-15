@@ -381,15 +381,27 @@ class LibraryShelfArt(
         private const val BOX_WIDTH = 1024
         private const val BOX_HEIGHT = 364
 
+        // Cover shapes already read, by file and its time: they do not change while the app runs.
+        private val aspects = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Float>>()
+
         /** Width / height of the front cover saved in [file], null if there is none. */
         fun coverAspect(file: File): Float? {
-            if (!file.exists()) return null
+            val modified = file.lastModified()
+            if (modified == 0L) return null
+            aspects[file.path]?.let { (time, aspect) -> if (time == modified) return aspect }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.path, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             var width = bounds.outWidth.toFloat()
             if (width > bounds.outHeight * 1.1f) width /= 2f
-            return width / bounds.outHeight
+            return (width / bounds.outHeight).also { aspects[file.path] = modified to it }
+        }
+
+        /** The cover shapes of [entries] if all of them are known already (no files read), else null. */
+        fun knownAspects(entries: List<ComicEntry>, coverFile: (ComicEntry) -> File): Map<String, Float>? {
+            val out = HashMap<String, Float>(entries.size * 2)
+            for (entry in entries) out[entry.id] = aspects[coverFile(entry).path]?.second ?: return null
+            return out
         }
     }
 }

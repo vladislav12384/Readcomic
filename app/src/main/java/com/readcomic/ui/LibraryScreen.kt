@@ -278,7 +278,8 @@ private fun ShelfLibrary(
     val found = remember(comics, order, query) {
         if (query.isBlank()) emptyList() else ordered.filter { CollectionOrder.matches(it, query) }
     }
-    val aspects by produceState<Map<String, Float>?>(null, comics) {
+    // Back from reading the shapes are known: the shelves need not wait for them.
+    val aspects by produceState(remember { LibraryShelfArt.knownAspects(comics, coverFile) }, comics) {
         value = withContext(Dispatchers.IO) {
             comics.associate { it.id to (LibraryShelfArt.coverAspect(coverFile(it)) ?: DEFAULT_ASPECT) }
         }

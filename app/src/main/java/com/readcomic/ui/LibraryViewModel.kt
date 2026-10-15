@@ -43,7 +43,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** The table the comic lies on while reading; earlier versions had plain colours instead. */
     private val _table = MutableStateFlow(
         runCatching { ReadingTable.valueOf(prefs.getString(KEY_TABLE, null) ?: "") }
-            .getOrElse { ReadingTable.fromOldBackground(prefs.getInt(KEY_BACKGROUND, 0)) },
+            .getOrElse { if (prefs.contains(KEY_BACKGROUND)) ReadingTable.fromOldBackground(prefs.getInt(KEY_BACKGROUND, 0)) else ReadingTable.LINEN },
     )
     val table: StateFlow<ReadingTable> = _table.asStateFlow()
 
@@ -74,7 +74,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     var shelfScroll = Float.NaN
 
     /** Paint of the wall behind the shelves, an index into [ShelfThemes]. */
-    private val _shelfTheme = MutableStateFlow(prefs.getInt(KEY_SHELF_THEME, 0).coerceIn(0, ShelfThemes.lastIndex))
+    private val _shelfTheme = MutableStateFlow(prefs.getInt(KEY_SHELF_THEME, DEFAULT_SHELF_THEME).coerceIn(0, ShelfThemes.lastIndex))
     val shelfTheme: StateFlow<Int> = _shelfTheme.asStateFlow()
 
     /** How the comics stand on the shelves (and in the grid). */
@@ -272,6 +272,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     companion object {
+        /** The wall is dusty blue until the reader picks another paint. */
+        private const val DEFAULT_SHELF_THEME = 2
         private const val KEY_BACKGROUND = "background"
         private const val KEY_TABLE = "table"
         private const val KEY_NIGHT = "night"

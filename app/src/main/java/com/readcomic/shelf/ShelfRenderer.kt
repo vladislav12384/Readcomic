@@ -25,8 +25,15 @@ class ShelfRenderer(
 
     private class Mesh(val vao: Int, val count: Int)
 
-    private lateinit var program: GlProgram
+    private lateinit var shelfProgram: GlProgram
     private lateinit var depthProgram: GlProgram
+
+    // The box of new comics is drawn by its own program, built the first time a box is there:
+    // the shelves keep a lighter one.
+    private var unboxProgram: GlProgram? = null
+
+    /** The program being drawn with. */
+    private lateinit var program: GlProgram
     private lateinit var box: Mesh
     private lateinit var quad: Mesh
 
@@ -64,6 +71,8 @@ class ShelfRenderer(
     private var width = 1
     private var height = 1
     private var lastFrameNanos = 0L
+    private var freshFrames = 0
+    private var unboxWaiting = false
 
     /** Background behind the scene (where nothing is drawn). */
     @Volatile
@@ -71,7 +80,7 @@ class ShelfRenderer(
 
     /** Paint of the wall behind the shelves, linear colour. */
     @Volatile
-    var wallColor = floatArrayOf(0.17f, 0.22f, 0.17f)
+    var wallColor = floatArrayOf(0.14f, 0.19f, 0.25f)
 
     /** The display refresh the frame is drawn for (System.nanoTime clock), 0 when unknown. */
     var frameClock: () -> Long = { 0L }
@@ -89,7 +98,9 @@ class ShelfRenderer(
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
-        program = GlProgram.fromAssets(assets, "shelf.vert", "shelf.frag")
+        shelfProgram = GlProgram.fromAssets(assets, "shelf.vert", "shelf.frag")
+        program = shelfProgram
+        unboxProgram = null
         depthProgram = GlProgram.fromAssets(assets, "shelf_depth.vert", "shelf_depth.frag")
         comicMeshes.clear()
         box = createMesh(boxVertices(), boxIndices())
@@ -104,6 +115,7 @@ class ShelfRenderer(
         createShadowMaps()
         art.onContextCreated()
         lastFrameNanos = 0L
+        freshFrames = 0
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -117,7 +129,14 @@ class ShelfRenderer(
         val dt = if (lastFrameNanos == 0L) 1f / 60f else ((now - lastFrameNanos) / 1e9f).coerceIn(0f, 1f / 20f)
         beforeFrame?.invoke(now)
         var animating = controller.step(dt)
-        if (art.uploadPending(budgetMillis = if (animating || touching) 3L else 10L)) animating = true
+        // Just opened, everything waits for its pictures: let them in faster for a moment.
+        val budget = when {
+            freshFrames < 12 -> 16L
+            animating || touching -> 3L
+            else -> 10L
+        }
+        freshFrames++
+        if (art.uploadPending(budgetMillis = budget)) animating = true
         lastFrameNanos = if (animating || touching) now else 0L
 
         val frame = controller.frame()
@@ -140,6 +159,7 @@ class ShelfRenderer(
 
         renderShadows(frame)
         renderScene(frame)
+        if (unboxWaiting) animating = true
         wantsFrames = animating
         if (animating) requestRender()
     }
@@ -204,7 +224,69 @@ class ShelfRenderer(
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glDepthFunc(GLES30.GL_LEQUAL)
 
+        use(shelfProgram, frame)
         val p = program
+        draw(quad, frame.wall, MATERIAL_WALL, frame.dim)
+        frame.planks.forEach { draw(box, it, MATERIAL_WOOD, frame.dim) }
+        frame.cornice?.let { draw(box, it, MATERIAL_WOOD, frame.dim) }
+        frame.plaque?.let { draw(quad, it, MATERIAL_PLAQUE, frame.dim, label = art["plaque:${frame.count}"]) }
+        for (label in frame.labels) {
+            val texture = art["label:${label.text}"]
+            draw(quad, label.model, MATERIAL_LABEL, frame.dim, label = texture)
+        }
+        for (sign in frame.signs) {
+            draw(quad, sign.model, MATERIAL_PLAQUE, frame.dim, label = art[signKey(sign)])
+        }
+        for (comic in frame.comics) {
+            val dim = when {
+                comic.held -> 0f
+                comic.faded -> max(frame.dim, frame.searchDim)
+                else -> frame.dim
+            }
+            val cover = (if (comic.held) art["front:${comic.id}"] else null) ?: art["cover:${comic.id}"]
+            val back = if (comic.held) art["back:${comic.id}"] else null
+            GLES30.glUniform4f(
+                p["uBook"],
+                comic.binding.ordinal.toFloat(),
+                comic.pages.toFloat(),
+                min(ComicShape.BOARD, comic.size.z * 0.2f),
+                ComicShape.spineRadius(comic.binding, comic.size.z),
+            )
+            // Once out of the shelf's light, the comic in hand is lit like in a photo studio.
+            GLES30.glUniform1f(p["uHeld"], if (comic.held && frame.dim > 0.25f) 1f else 0f)
+            GLES30.glUniform1f(p["uShine"], comic.shine)
+            draw(meshFor(comic), comic.model, MATERIAL_COMIC, dim, cover = cover, back = back, spine = art["spine:${comic.id}"])
+            GLES30.glUniform1f(p["uShine"], -1f)
+            comic.ribbon?.let { vertices ->
+                fillRibbon(vertices)
+                draw(Mesh(ribbonVao, Ribbon.INDICES.size), identity, MATERIAL_RIBBON, dim)
+            }
+        }
+        frame.unbox?.let { box ->
+            // The shelves come first: the box's own program is built a few frames later.
+            if (unboxProgram == null && freshFrames < UNBOX_DELAY_FRAMES) {
+                unboxWaiting = true
+                return@let
+            }
+            unboxWaiting = false
+            val unbox = unboxProgram ?: GlProgram.fromAssets(assets, "shelf.vert", "unbox.frag").also { unboxProgram = it }
+            use(unbox, frame)
+            renderUnbox(box)
+        }
+        if (frame.unbox == null && (wrappers.isNotEmpty() || masks.isNotEmpty())) {
+            // The box is gone: so is the paper.
+            wrappers.values.forEach(::deleteWrapper)
+            wrappers.clear()
+            masks.values.forEach(::deleteMask)
+            masks.clear()
+        }
+        GLES30.glBindVertexArray(0)
+    }
+
+    /** Starts drawing with [next]: everything the frame sets once, and the plain state of the rest. */
+    private fun use(next: GlProgram, frame: ShelfFrame) {
+        program = next
+        val p = next
         p.use()
         GLES30.glUniformMatrix4fv(p["uViewProj"], 1, false, frame.viewProj, 0)
         GLES30.glUniformMatrix4fv(p["uLightViewProj"], 1, false, frame.lightViewProj, 0)
@@ -245,51 +327,6 @@ class ShelfRenderer(
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, comicShadowTexture)
 
         GLES30.glUniform1f(p["uHeld"], 0f)
-        draw(quad, frame.wall, MATERIAL_WALL, frame.dim)
-        frame.planks.forEach { draw(box, it, MATERIAL_WOOD, frame.dim) }
-        frame.cornice?.let { draw(box, it, MATERIAL_WOOD, frame.dim) }
-        frame.plaque?.let { draw(quad, it, MATERIAL_PLAQUE, frame.dim, label = art["plaque:${frame.count}"]) }
-        for (label in frame.labels) {
-            val texture = art["label:${label.text}"]
-            draw(quad, label.model, MATERIAL_LABEL, frame.dim, label = texture)
-        }
-        for (sign in frame.signs) {
-            draw(quad, sign.model, MATERIAL_PLAQUE, frame.dim, label = art[signKey(sign)])
-        }
-        for (comic in frame.comics) {
-            val dim = when {
-                comic.held -> 0f
-                comic.faded -> max(frame.dim, frame.searchDim)
-                else -> frame.dim
-            }
-            val cover = (if (comic.held) art["front:${comic.id}"] else null) ?: art["cover:${comic.id}"]
-            val back = if (comic.held) art["back:${comic.id}"] else null
-            GLES30.glUniform4f(
-                p["uBook"],
-                comic.binding.ordinal.toFloat(),
-                comic.pages.toFloat(),
-                min(ComicShape.BOARD, comic.size.z * 0.2f),
-                ComicShape.spineRadius(comic.binding, comic.size.z),
-            )
-            // Once out of the shelf's light, the comic in hand is lit like in a photo studio.
-            GLES30.glUniform1f(p["uHeld"], if (comic.held && frame.dim > 0.25f) 1f else 0f)
-            GLES30.glUniform1f(p["uShine"], comic.shine)
-            draw(meshFor(comic), comic.model, MATERIAL_COMIC, dim, cover = cover, back = back, spine = art["spine:${comic.id}"])
-            GLES30.glUniform1f(p["uShine"], -1f)
-            comic.ribbon?.let { vertices ->
-                fillRibbon(vertices)
-                draw(Mesh(ribbonVao, Ribbon.INDICES.size), identity, MATERIAL_RIBBON, dim)
-            }
-        }
-        frame.unbox?.let(::renderUnbox)
-        if (frame.unbox == null && (wrappers.isNotEmpty() || masks.isNotEmpty())) {
-            // The box is gone: so is the paper.
-            wrappers.values.forEach(::deleteWrapper)
-            wrappers.clear()
-            masks.values.forEach(::deleteMask)
-            masks.clear()
-        }
-        GLES30.glBindVertexArray(0)
     }
 
     /** The box of new comics, the comics in their paper, the torn strips and the glint, over everything. */
@@ -703,6 +740,9 @@ class ShelfRenderer(
         const val MATERIAL_PAPER = 8
         const val MATERIAL_STRIP = 9
         const val MATERIAL_STAR = 10
+
+        /** Frames drawn before the program of the box of new comics is built. */
+        const val UNBOX_DELAY_FRAMES = 4
 
         /**
          * Unit box, -0.5..0.5. Per vertex: position, normal, uv, face (0 front, 1 back, 2 left,

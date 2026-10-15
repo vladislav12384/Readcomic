@@ -5,6 +5,7 @@ import android.opengl.GLES30
 import android.opengl.GLUtils
 import android.os.SystemClock
 import android.util.Log
+import android.util.LruCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -37,12 +38,34 @@ interface ShelfArt {
     fun box(count: Int): Bitmap? = null
 }
 
+/**
+ * Pictures of the shelf kept while the app runs, so that coming back from reading the covers,
+ * spines and labels are there at once instead of being decoded all over again. Not the sharp
+ * covers of the comic in hand: they are big, and only one is needed at a time.
+ */
+internal object ShelfArtMemory {
+    private val cache = object : LruCache<String, Bitmap>(budget()) {
+        override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
+    }
+
+    fun keeps(key: String) = !key.startsWith("front:") && !key.startsWith("back:")
+
+    operator fun get(key: String): Bitmap? = cache.get(key)?.takeIf { !it.isRecycled }
+
+    fun put(key: String, bitmap: Bitmap) {
+        if (keeps(key)) cache.put(key, bitmap)
+    }
+
+    private fun budget(): Int = (Runtime.getRuntime().maxMemory() / 6).coerceAtMost(96L * 1024 * 1024).toInt()
+}
+
 /** GL textures for the shelf, keyed like "cover:<id>". Everything but decoding runs on the render thread. */
 class ShelfArtCache(
     private val scope: CoroutineScope,
     private val requestRender: () -> Unit,
 ) {
-    private class Decoded(val key: String, val bitmap: Bitmap?, val generation: Int)
+    /** A picture ready to upload; [kept] ones stay in [ShelfArtMemory] and must not be recycled. */
+    private class Decoded(val key: String, val bitmap: Bitmap?, val generation: Int, val kept: Boolean = false)
 
     private val textures = LinkedHashMap<String, Int>(64, 0.75f, true)
     private val inFlight = HashSet<String>()
@@ -64,7 +87,10 @@ class ShelfArtCache(
         textures.clear()
         inFlight.clear()
         failed.clear()
-        while (true) decoded.poll()?.bitmap?.recycle() ?: break
+        while (true) {
+            val next = decoded.poll() ?: break
+            if (!next.kept) next.bitmap?.recycle()
+        }
         generation++
     }
 
@@ -75,6 +101,12 @@ class ShelfArtCache(
         val art = art ?: return
         inFlight += key
         val requestGeneration = generation
+        // Seen before: no need to decode it again.
+        ShelfArtMemory[key]?.let { kept ->
+            decoded += Decoded(key, kept, requestGeneration, kept = true)
+            requestRender()
+            return
+        }
         scope.launch(dispatcher) {
             if (requestGeneration != generation) return@launch
             val (kind, id) = key.split(':', limit = 2)
@@ -93,7 +125,9 @@ class ShelfArtCache(
                 Log.w(TAG, "No picture for $key", e)
                 null
             }
-            decoded += Decoded(key, bitmap, requestGeneration)
+            val keep = bitmap != null && ShelfArtMemory.keeps(key)
+            if (keep) ShelfArtMemory.put(key, bitmap!!)
+            decoded += Decoded(key, bitmap, requestGeneration, kept = keep)
             requestRender()
         }
     }
@@ -104,7 +138,7 @@ class ShelfArtCache(
         while (true) {
             val next = decoded.poll() ?: return false
             if (next.generation != generation) {
-                next.bitmap?.recycle()
+                if (!next.kept) next.bitmap?.recycle()
                 continue
             }
             inFlight -= next.key
@@ -115,7 +149,7 @@ class ShelfArtCache(
             }
             textures.remove(next.key)?.let { GLES30.glDeleteTextures(1, intArrayOf(it), 0) }
             textures[next.key] = upload(bitmap)
-            bitmap.recycle()
+            if (!next.kept) bitmap.recycle()
             trim()
             if (SystemClock.uptimeMillis() - start >= budgetMillis) return decoded.isNotEmpty()
         }
