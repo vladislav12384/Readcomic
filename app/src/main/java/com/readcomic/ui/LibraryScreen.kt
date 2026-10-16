@@ -1,6 +1,5 @@
 package com.readcomic.ui
 
-import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -92,9 +91,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -118,6 +115,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.readcomic.data.ComicEntry
+import com.readcomic.data.CoverAspects
 import com.readcomic.shelf.ShelfItem
 import com.readcomic.shelf.ShelfSize
 import com.readcomic.shelf.ShelfView
@@ -159,6 +157,8 @@ fun LibraryScreen(
     /** The card of a comic in hand still says how to turn it and open it. */
     handHint: Boolean = false,
     onHandHintShown: () -> Unit = {},
+    /** The library has been read: an empty one is shown as empty only then. */
+    loaded: Boolean = true,
 ) {
     var toRemove by remember { mutableStateOf<ComicEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -168,6 +168,7 @@ fun LibraryScreen(
     if (shelfMode) {
         ShelfLibrary(
             comics = comics,
+            loaded = loaded,
             busy = working,
             snackbar = snackbar,
             coverFile = coverFile,
@@ -194,6 +195,7 @@ fun LibraryScreen(
     } else {
         GridLibrary(
             comics = comics,
+            loaded = loaded,
             busy = working,
             snackbar = snackbar,
             coverFile = coverFile,
@@ -248,6 +250,7 @@ fun LibraryScreen(
 @Composable
 private fun ShelfLibrary(
     comics: List<ComicEntry>,
+    loaded: Boolean,
     busy: Boolean,
     snackbar: SnackbarHostState,
     coverFile: (ComicEntry) -> File,
@@ -288,14 +291,24 @@ private fun ShelfLibrary(
     val placed = remember(shelved, order) { CollectionOrder.arrange(shelved, order) }
     val ordered = remember(placed) { placed.map { it.entry } }
     val found = remember(comics, order, query) {
-        if (query.isBlank()) emptyList() else ordered.filter { CollectionOrder.matches(it, query) }
+        if (query.isBlank()) emptyList() else ordered.filter(CollectionOrder.matcher(query))
     }
-    // Back from reading the shapes are known: the shelves need not wait for them.
-    val aspects by produceState(remember { LibraryShelfArt.knownAspects(comics, coverFile) }, comics) {
-        value = withContext(Dispatchers.IO) {
-            comics.associate { it.id to (LibraryShelfArt.coverAspect(coverFile(it)) ?: DEFAULT_ASPECT) }
+    // The shapes of the covers: those known already (kept on disk between runs) at once, so the
+    // shelves never wait for them; checked against the files in the background, which also reads
+    // any not known yet (a new comic) and keeps them for next time.
+    val cachedAspects = remember(comics) { LibraryShelfArt.knownAspects(comics, coverFile) }
+    val checkedAspects by produceState<Pair<List<ComicEntry>, Map<String, Float>>?>(null, comics) {
+        val checked = withContext(Dispatchers.IO) {
+            val shapes = comics.associate { it.id to (LibraryShelfArt.coverAspect(coverFile(it)) ?: DEFAULT_ASPECT) }
+            CoverAspects.save(comics.map(coverFile))
+            shapes
         }
+        value = comics to checked
     }
+    val aspects: Map<String, Float> = checkedAspects?.takeIf { it.first === comics }?.second
+        ?: cachedAspects
+        ?: checkedAspects?.second
+        ?: emptyMap()
     val currentComics by rememberUpdatedState(comics)
     val currentOnOpen by rememberUpdatedState(onOpen)
     val currentOnHintSeen by rememberUpdatedState(onHintSeen)
@@ -313,7 +326,7 @@ private fun ShelfLibrary(
 
     LaunchedEffect(view, placed, aspects) {
         val shelf = view ?: return@LaunchedEffect
-        val known = aspects ?: return@LaunchedEffect
+        val known = aspects
         val items = placed.map { place ->
             val entry = place.entry
             ShelfItem(
@@ -330,7 +343,7 @@ private fun ShelfLibrary(
     }
     LaunchedEffect(view, boxed, aspects) {
         val shelf = view ?: return@LaunchedEffect
-        val known = aspects ?: return@LaunchedEffect
+        val known = aspects
         shelf.setBox(
             boxed.map { entry ->
                 ShelfItem(id = entry.id, aspect = known[entry.id] ?: DEFAULT_ASPECT, pageCount = entry.pageCount, inProgress = false, label = entry.title)
@@ -459,7 +472,8 @@ private fun ShelfLibrary(
             )
         }
 
-        if (shelved.isEmpty() && boxed.isEmpty()) {
+        // Not while the library is still being read: it is not empty, only not here yet.
+        if (loaded && shelved.isEmpty() && boxed.isEmpty()) {
             EmptyShelves(Modifier.align(Alignment.Center))
         }
 
@@ -1079,6 +1093,7 @@ private fun CardAction(icon: ImageVector, label: String, onClick: () -> Unit) {
 @Composable
 private fun GridLibrary(
     comics: List<ComicEntry>,
+    loaded: Boolean,
     busy: Boolean,
     snackbar: SnackbarHostState,
     coverFile: (ComicEntry) -> File,
@@ -1094,7 +1109,7 @@ private fun GridLibrary(
     var query by remember { mutableStateOf("") }
     var ordering by remember { mutableStateOf(false) }
     val sorted = remember(comics, order, query) {
-        CollectionOrder.arrange(comics, order).map { it.entry }.filter { CollectionOrder.matches(it, query) }
+        CollectionOrder.arrange(comics, order).map { it.entry }.filter(CollectionOrder.matcher(query))
     }
     BackHandler(enabled = searching) {
         searching = false
@@ -1179,7 +1194,7 @@ private fun GridLibrary(
                 modifier = Modifier.fillMaxWidth().padding(padding).padding(32.dp),
             )
         } else if (sorted.isEmpty()) {
-            EmptyLibrary(Modifier.padding(padding))
+            if (loaded) EmptyLibrary(Modifier.padding(padding))
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(112.dp),
@@ -1226,10 +1241,9 @@ private fun EmptyLibrary(modifier: Modifier) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ComicCard(entry: ComicEntry, coverFile: File, onClick: () -> Unit, onLongClick: () -> Unit) {
-    val cover by produceState<ImageBitmap?>(null, coverFile, entry.pageCount) {
-        value = withContext(Dispatchers.IO) {
-            if (coverFile.exists()) BitmapFactory.decodeFile(coverFile.path)?.asImageBitmap() else null
-        }
+    // Seen before: there at once; else read in the background (and kept for scrolling back).
+    val cover by produceState(CoverThumbnails.cached(coverFile, frontOnly = false), coverFile, entry.pageCount) {
+        value = withContext(Dispatchers.IO) { CoverThumbnails.load(coverFile, frontOnly = false) }
     }
     val shape = RoundedCornerShape(4.dp)
     Column(Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {

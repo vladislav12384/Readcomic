@@ -30,23 +30,26 @@ object CollectionOrder {
     }
 
     private fun byTitle(comics: List<ComicEntry>): List<Placed> {
-        // Comics on their own and whole series, in one alphabet.
-        class Block(val name: String, val placed: List<Placed>)
+        // Comics on their own and whole series, in one alphabet. Every name is made comparable
+        // once, not again at every comparison: a large collection sorts many times faster.
+        class Block(val key: String, val placed: List<Placed>)
+        class Issue(val entry: ComicEntry, val info: SeriesInfo, val key: String)
         val units = ArrayList<Block>()
-        comics.filter { it.series == null }.forEach { units += Block(it.title, listOf(Placed(it, null, it.title))) }
+        comics.filter { it.series == null }.forEach { units += Block(normalize(it.title), listOf(Placed(it, null, it.title))) }
         comics.filter { it.series != null }.groupBy { Series.keyOf(it.series!!) }.values.forEach { members ->
             val name = members.first().series!!
+            val nameKey = Series.keyOf(name)
             val issues = members
-                .map { it to Series.of(it.title) }
+                .map { Issue(it, Series.of(it.title), normalize(it.title)) }
                 .sortedWith(
-                    compareBy<Pair<ComicEntry, SeriesInfo>> { it.second.volume ?: 0f }
-                        .thenBy { it.second.number ?: -1f }
-                        .thenComparator { a, b -> compareNames(a.first.title, b.first.title) },
+                    compareBy<Issue> { it.info.volume ?: 0f }
+                        .thenBy { it.info.number ?: -1f }
+                        .thenComparator { a, b -> NaturalOrder.compare(a.key, b.key) },
                 )
-                .map { (entry, info) -> Placed(entry, name, info.place?.takeIf { Series.keyOf(info.name) == Series.keyOf(name) } ?: entry.title) }
-            units += Block(name, issues)
+                .map { Placed(it.entry, name, it.info.place?.takeIf { _ -> Series.keyOf(it.info.name) == nameKey } ?: it.entry.title) }
+            units += Block(normalize(name), issues)
         }
-        return units.sortedWith { a, b -> compareNames(a.name, b.name) }.flatMap { it.placed }
+        return units.sortedWith { a, b -> NaturalOrder.compare(a.key, b.key) }.flatMap { it.placed }
     }
 
     /** "Batman 2" before "Batman 10", "Ёж" with "Еж", whatever the case. */
@@ -58,10 +61,17 @@ object CollectionOrder {
      * Whether [entry] is what is searched for: every word of [query] is found in its title,
      * series, writer or year, whatever the case.
      */
-    fun matches(entry: ComicEntry, query: String): Boolean {
-        val words = normalize(query).split(Regex("""\s+""")).filter { it.isNotEmpty() }
-        if (words.isEmpty()) return true
-        val haystack = normalize(listOfNotNull(entry.title, entry.series, entry.writer, entry.year?.toString()).joinToString(" "))
-        return words.all { it in haystack }
+    fun matches(entry: ComicEntry, query: String): Boolean = matcher(query)(entry)
+
+    /** The same, with [query] taken apart once for a whole collection to be searched with it. */
+    fun matcher(query: String): (ComicEntry) -> Boolean {
+        val words = normalize(query).split(SPACES).filter { it.isNotEmpty() }
+        if (words.isEmpty()) return { true }
+        return { entry ->
+            val haystack = normalize(listOfNotNull(entry.title, entry.series, entry.writer, entry.year?.toString()).joinToString(" "))
+            words.all { it in haystack }
+        }
     }
+
+    private val SPACES = Regex("""\s+""")
 }

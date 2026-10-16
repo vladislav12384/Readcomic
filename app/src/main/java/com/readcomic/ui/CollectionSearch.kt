@@ -1,6 +1,5 @@
 package com.readcomic.ui
 
-import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -56,9 +55,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.layout.ContentScale
@@ -181,10 +178,8 @@ fun SearchPanel(
 
 @Composable
 private fun FoundCover(entry: ComicEntry, coverFile: File, onClick: () -> Unit) {
-    val cover by produceState<ImageBitmap?>(null, coverFile) {
-        value = withContext(Dispatchers.IO) {
-            if (coverFile.exists()) BitmapFactory.decodeFile(coverFile.path)?.let(LibraryShelfArt::frontHalf)?.asImageBitmap() else null
-        }
+    val cover by produceState(CoverThumbnails.cached(coverFile, frontOnly = true), coverFile) {
+        value = withContext(Dispatchers.IO) { CoverThumbnails.load(coverFile, frontOnly = true) }
     }
     val shape = RoundedCornerShape(4.dp)
     Column(Modifier.width(84.dp).clickable(onClickLabel = entry.title, onClick = onClick)) {

@@ -45,6 +45,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.readcomic.shelf.ShelfArtMemory
+import com.readcomic.ui.CoverThumbnails
 import com.readcomic.ui.FolderState
 import com.readcomic.ui.LibraryScreen
 import com.readcomic.ui.LibraryViewModel
@@ -68,6 +69,7 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
         super.onTrimMemory(level)
         // Pictures of the shelves kept for a quick way back are the first to go.
         ShelfArtMemory.onTrimMemory(level)
+        CoverThumbnails.onTrimMemory(level)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -155,6 +157,7 @@ private fun saverDelay(activity: Activity?): Long {
 @Composable
 private fun App(viewModel: LibraryViewModel) {
     val comics by viewModel.comics.collectAsStateWithLifecycle()
+    val loaded by viewModel.loaded.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val openRequest by viewModel.openRequest.collectAsStateWithLifecycle()
     val table by viewModel.table.collectAsStateWithLifecycle()
@@ -304,6 +307,7 @@ private fun App(viewModel: LibraryViewModel) {
                 onShelfHintSeen = viewModel::shelfHintSeen,
                 handHint = handHint,
                 onHandHintShown = viewModel::handHintShown,
+                loaded = loaded,
                 folders = FolderState(
                     folders = folders,
                     comicsIn = { folder -> comics.count { it.folder == folder.uri } },

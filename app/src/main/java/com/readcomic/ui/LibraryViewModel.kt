@@ -26,6 +26,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val prefs = application.getSharedPreferences("settings", 0)
 
     val comics: StateFlow<List<ComicEntry>> = library.comics
+
+    /** The library has been read from disk (until then an empty list says nothing). */
+    val loaded: StateFlow<Boolean> = library.loaded
     val folders: StateFlow<List<WatchedFolder>> = library.folders
     val scanning = library.scanning
     val scanInterval: StateFlow<ScanInterval> = library.scanInterval

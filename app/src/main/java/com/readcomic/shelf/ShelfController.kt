@@ -744,7 +744,10 @@ class ShelfController(private val density: Float) {
         val far = Mat4.transformPoint(inverse, Vec3(nx, ny, 1f))
         var best: String? = null
         var bestT = Float.MAX_VALUE
+        // Only what can be on screen: the comic in hand and the shelves in view.
+        val rows = visibleRows()
         items.forEachIndexed { index, item ->
+            if (item.id != heldId && index / columns !in rows) return@forEachIndexed
             val size = sizeOf(item)
             val (position, rotation) = poseOf(index, item, size)
             val model = Mat4.compose(position, rotation, size)

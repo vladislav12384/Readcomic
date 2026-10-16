@@ -8,6 +8,7 @@ import android.provider.DocumentsContract
 import android.util.Log
 import androidx.core.content.edit
 import androidx.core.net.toUri
+import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +59,10 @@ class LibraryRepository private constructor(context: Context) {
     private val _comics = MutableStateFlow<List<ComicEntry>>(emptyList())
     val comics: StateFlow<List<ComicEntry>> = _comics.asStateFlow()
 
+    /** The library has been read from disk ([comics] is what it holds, not just empty yet). */
+    private val _loaded = MutableStateFlow(false)
+    val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
+
     private val _folders = MutableStateFlow(loadFolders())
     val folders: StateFlow<List<WatchedFolder>> = _folders.asStateFlow()
 
@@ -71,6 +76,8 @@ class LibraryRepository private constructor(context: Context) {
 
     init {
         scope.launch {
+            // The shapes of the covers first, so that the shelves are laid out at once.
+            CoverAspects.load(File(app.cacheDir, "cover_aspects.txt"))
             var list = store.load()
             // Earlier versions put a built-in demo booklet on the shelf; it is gone now.
             val demos = list.filter { it.uri == OLD_DEMO_URI }
@@ -80,6 +87,7 @@ class LibraryRepository private constructor(context: Context) {
                 store.save(list)
             }
             _comics.value = list
+            _loaded.value = true
             ready.complete(Unit)
         }
     }

@@ -43,9 +43,11 @@ object Series {
     )
     private val OF_TOTAL = Regex("""(?<![\p{L}\d.])$NUMBER\s+(?:of|из)\s+\d{1,4}\b""", RegexOption.IGNORE_CASE)
     private val TRAILING = Regex("""(?<![\p{L}\d.])$NUMBER\s*$""")
+    private val SPACES = Regex("""\s+""")
+    private val NOT_WORD = Regex("""[^\p{L}\d]+""")
 
     fun of(title: String): SeriesInfo {
-        val clean = BRACKETS.replace(title.replace('_', ' '), " ").replace(Regex("""\s+"""), " ").trim()
+        val clean = BRACKETS.replace(title.replace('_', ' '), " ").replace(SPACES, " ").trim()
         val volume = VOLUME.find(clean)
         val issue = ISSUE.find(clean) ?: OF_TOTAL.find(clean)
             ?: TRAILING.find(clean)?.takeIf { volume == null || it.range.first > volume.range.last }
@@ -67,7 +69,7 @@ object Series {
     /** Same series whatever the case, "ё" or punctuation. */
     fun keyOf(name: String): String = name.lowercase()
         .replace('ё', 'е')
-        .replace(Regex("""[^\p{L}\d]+"""), " ")
+        .replace(NOT_WORD, " ")
         .trim()
 
     /** A bare four-digit number like 2099 at the end is part of the name ("Spider-Man 2099"), not an issue. */

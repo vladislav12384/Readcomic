@@ -10,6 +10,7 @@ import android.util.LruCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
 /** Pictures for the shelf, decoded in the background (called off the render thread). */
@@ -83,13 +84,19 @@ class ShelfArtCache(
     private val scope: CoroutineScope,
     private val requestRender: () -> Unit,
 ) {
-    /** A picture ready to upload; [kept] ones stay in [ShelfArtMemory] and must not be recycled. */
-    private class Decoded(val key: String, val bitmap: Bitmap?, val generation: Int, val kept: Boolean = false)
+    /**
+     * A picture ready to upload; [kept] ones stay in [ShelfArtMemory] and must not be recycled.
+     * [skipped]: not made at all, it was no longer wanted when its turn came.
+     */
+    private class Decoded(val key: String, val bitmap: Bitmap?, val generation: Int, val kept: Boolean = false, val skipped: Boolean = false)
 
     private val textures = LinkedHashMap<String, Int>(64, 0.75f, true)
     private val inFlight = HashSet<String>()
     private val failed = HashSet<String>()
     private val decoded = ConcurrentLinkedQueue<Decoded>()
+
+    /** When each picture waiting to be made was last asked for (uptime, ms): asked for every frame it is on screen. */
+    private val wanted = ConcurrentHashMap<String, Long>()
     private val dispatcher = Dispatchers.IO.limitedParallelism(2)
 
     @Volatile
@@ -106,6 +113,7 @@ class ShelfArtCache(
         textures.clear()
         inFlight.clear()
         failed.clear()
+        wanted.clear()
         while (true) {
             val next = decoded.poll() ?: break
             if (!next.kept) next.bitmap?.recycle()
@@ -116,7 +124,9 @@ class ShelfArtCache(
     operator fun get(key: String): Int? = textures[key]
 
     fun request(key: String) {
-        if (key in textures || key in inFlight || key in failed) return
+        if (key in textures || key in failed) return
+        wanted[key] = SystemClock.uptimeMillis()
+        if (key in inFlight) return
         val art = art ?: return
         inFlight += key
         val requestGeneration = generation
@@ -128,6 +138,14 @@ class ShelfArtCache(
         }
         scope.launch(dispatcher) {
             if (requestGeneration != generation) return@launch
+            // Its turn came after the shelves had flown on past it (a fling, a jump to a search
+            // result): not made now, so the pictures on screen come first; asked for again if it
+            // is seen again.
+            if (SystemClock.uptimeMillis() - (wanted[key] ?: 0L) > STALE_MILLIS) {
+                decoded += Decoded(key, null, requestGeneration, skipped = true)
+                requestRender()
+                return@launch
+            }
             val (kind, id) = key.split(':', limit = 2)
             val bitmap = try {
                 when (kind) {
@@ -161,6 +179,8 @@ class ShelfArtCache(
                 continue
             }
             inFlight -= next.key
+            wanted.remove(next.key)
+            if (next.skipped) continue
             val bitmap = next.bitmap
             if (bitmap == null) {
                 failed += next.key
@@ -201,5 +221,8 @@ class ShelfArtCache(
         const val TAG = "ShelfArtCache"
         const val MAX_TEXTURES = 96
         const val MAX_SHARP = 6
+
+        /** A picture not asked for in that long is no longer on screen. */
+        const val STALE_MILLIS = 400L
     }
 }

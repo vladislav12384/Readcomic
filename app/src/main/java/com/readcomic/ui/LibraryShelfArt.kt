@@ -13,6 +13,7 @@ import androidx.core.graphics.createBitmap
 import androidx.core.graphics.withTranslation
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
+import com.readcomic.data.CoverAspects
 import com.readcomic.shelf.Binding
 import com.readcomic.shelf.ComicShape
 import com.readcomic.shelf.ShelfArt
@@ -381,26 +382,13 @@ class LibraryShelfArt(
         private const val BOX_WIDTH = 1024
         private const val BOX_HEIGHT = 364
 
-        // Cover shapes already read, by file and its time: they do not change while the app runs.
-        private val aspects = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Float>>()
-
         /** Width / height of the front cover saved in [file], null if there is none. */
-        fun coverAspect(file: File): Float? {
-            val modified = file.lastModified()
-            if (modified == 0L) return null
-            aspects[file.path]?.let { (time, aspect) -> if (time == modified) return aspect }
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.path, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-            var width = bounds.outWidth.toFloat()
-            if (width > bounds.outHeight * 1.1f) width /= 2f
-            return (width / bounds.outHeight).also { aspects[file.path] = modified to it }
-        }
+        fun coverAspect(file: File): Float? = CoverAspects.of(file)
 
         /** The cover shapes of [entries] if all of them are known already (no files read), else null. */
         fun knownAspects(entries: List<ComicEntry>, coverFile: (ComicEntry) -> File): Map<String, Float>? {
             val out = HashMap<String, Float>(entries.size * 2)
-            for (entry in entries) out[entry.id] = aspects[coverFile(entry).path]?.second ?: return null
+            for (entry in entries) out[entry.id] = CoverAspects.cached(coverFile(entry)) ?: return null
             return out
         }
     }

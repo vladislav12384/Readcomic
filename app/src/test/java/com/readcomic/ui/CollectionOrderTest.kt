@@ -34,6 +34,37 @@ class CollectionOrderTest {
     }
 
     @Test
+    fun aLargeCollectionSortsExactlyAsTheSlowWayDid() {
+        // Names made comparable once must give the very order the comparison of names gives.
+        val random = kotlin.random.Random(42)
+        val names = listOf("Batman", "batman", "Saga", "Ёжик", "Ежевика", "X-Men", "Хроники", "One Piece", "Spider-Man", " Watchmen")
+        val comics = List(3000) { i ->
+            val name = names[random.nextInt(names.size)]
+            val title = when (random.nextInt(4)) {
+                0 -> "$name #${random.nextInt(200)}"
+                1 -> "$name Vol. ${random.nextInt(10)} Ch. ${random.nextInt(50)}"
+                2 -> "$name ${random.nextInt(1000)}"
+                else -> name
+            }
+            ComicEntry(id = "c$i", uri = "u$i", title = title, pageCount = 20, series = if (random.nextInt(3) == 0) name.trim() else null)
+        }
+        val placed = CollectionOrder.arrange(comics, ShelfOrder.TITLE)
+        // The reference: the same blocks, ordered by comparing the names themselves.
+        val singles = comics.filter { it.series == null }.map { it.title to listOf(it.id) }
+        val series = comics.filter { it.series != null }.groupBy { com.readcomic.data.Series.keyOf(it.series!!) }.values.map { members ->
+            members.first().series!! to members
+                .sortedWith(
+                    compareBy<ComicEntry> { com.readcomic.data.Series.of(it.title).volume ?: 0f }
+                        .thenBy { com.readcomic.data.Series.of(it.title).number ?: -1f }
+                        .thenComparator { a, b -> CollectionOrder.compareNames(a.title, b.title) },
+                )
+                .map { it.id }
+        }
+        val expected = (singles + series).sortedWith { a, b -> CollectionOrder.compareNames(a.first, b.first) }.flatMap { it.second }
+        assertEquals(expected, placed.map { it.entry.id })
+    }
+
+    @Test
     fun recentOrdersDoNotGroup() {
         val comics = listOf(
             comic("Saga 1", series = "Saga", added = 1, read = 5),
