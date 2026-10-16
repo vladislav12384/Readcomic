@@ -238,53 +238,6 @@ vec2 maskCoord(vec2 p) {
     return (p + extent) / (2.0 * extent);
 }
 
-#ifdef UNBOX
-// Where a tear runs through a cell: the mask crosses this level. The same everywhere, so the
-// edge of a hole and the edge of the piece torn out of it match fibre for fibre.
-float tornEdge(vec2 u) {
-    float fibre = noise(u * 2600.0) * 0.55 + noise(u * 760.0) * 0.45;
-    return 0.5 + (fibre - 0.5) * 0.5;
-}
-
-// What is torn at a point of the paper, smoothly: a cubic B-spline over the cells of the mask,
-// read a little off where the fibres pull it, so that a tear runs in ragged curves instead of
-// the stairs of the cells. [mine] and [kept]: the parts of the torn and of the untorn cells
-// that belong to the piece [id] (when it is one); a piece draws where most of either is its own,
-// so neighbouring pieces and the holes they leave meet without gaps.
-struct Torn {
-    float m;
-    float mine;
-    float kept;
-};
-
-Torn tornAt(vec2 u, float id) {
-    ivec2 cells = textureSize(uMask, 0);
-    vec2 warp = (vec2(noise(u * 240.0), noise(u * 240.0 + 19.7)) - 0.5) * 1.1
-        + (vec2(noise(u * 900.0 + 3.1), noise(u * 900.0 + 8.3)) - 0.5) * 0.35;
-    vec2 t = maskCoord(u) * vec2(cells) - 0.5 + warp;
-    vec2 base = floor(t);
-    vec2 f = t - base;
-    vec2 f2 = f * f;
-    vec2 f3 = f2 * f;
-    vec4 wx = vec4(1.0 - 3.0 * f.x + 3.0 * f2.x - f3.x, 4.0 - 6.0 * f2.x + 3.0 * f3.x, 1.0 + 3.0 * f.x + 3.0 * f2.x - 3.0 * f3.x, f3.x) / 6.0;
-    vec4 wy = vec4(1.0 - 3.0 * f.y + 3.0 * f2.y - f3.y, 4.0 - 6.0 * f2.y + 3.0 * f3.y, 1.0 + 3.0 * f.y + 3.0 * f2.y - 3.0 * f3.y, f3.y) / 6.0;
-    Torn r = Torn(0.0, 0.0, 0.0);
-    for (int y = 0; y < 4; y++) {
-        for (int x = 0; x < 4; x++) {
-            ivec2 c = clamp(ivec2(base) + ivec2(x - 1, y - 1), ivec2(0), cells - 1);
-            float w = wx[x] * wy[y];
-            float m = texelFetch(uMask, c, 0).r;
-            r.m += w * m;
-            if (id >= 0.0 && abs(floor(texelFetch(uOwner, c, 0).r * 255.0 + 0.5) - id) < 0.5) {
-                r.mine += w * m;
-                r.kept += w * (1.0 - m);
-            }
-        }
-    }
-    return r;
-}
-#endif
-
 // A freshly unwrapped cover catches the light: a bright band sweeps across it, corner to corner.
 vec3 glint(vec2 uv) {
     float across = uv.x * 0.8 + uv.y * 0.6;
@@ -342,14 +295,9 @@ vec3 comic(vec3 v) {
         color = coat(color, n, v, binding > 1.5 ? 0.8 : 1.0, binding > 1.5 ? 0.02 : 0.0);
 #ifdef UNBOX
         if (part == 0 && uWrap.w > 0.5) {
-            // Where the paper is torn open, its edges throw a soft shadow on the cover...
+            // Where the paper is torn open, its edges throw a soft shadow on the cover.
             float paper = 1.0 - textureLod(uMask, maskCoord(p.xy), 2.2).r;
-            color *= 1.0 - 0.3 * paper;
-            // ...and a crisp one right beside them: the paper stands a millimetre off the cover
-            // and the light comes from up on the left.
-            vec2 q = p.xy + vec2(-0.0008, 0.0009);
-            float edge = tornEdge(q);
-            color *= 1.0 - 0.35 * smoothstep(edge + 0.12, edge - 0.12, tornAt(q, -1.0).m);
+            color *= 1.0 - 0.42 * paper;
         }
 #endif
         if (part == 0 && uShine >= 0.0) color += glint(vUV);

@@ -21,12 +21,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -48,7 +46,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -155,9 +152,6 @@ fun LibraryScreen(
     onSetSeries: (ComicEntry, String?) -> Unit = { _, _ -> },
     shelfSize: ShelfSize = ShelfSize.NORMAL,
     onShelfSizeChange: (ShelfSize) -> Unit = {},
-    /** Where the back of the comic in hand comes from. */
-    backCovers: BackCovers = BackCovers.MISSING,
-    onBackCoversChange: (BackCovers) -> Unit = {},
     /** Reading [ComicEntry] again from its first page. */
     onStartOver: (ComicEntry) -> Unit = {},
     /** The box of new comics: what it does, and what the reader does with it. */
@@ -192,8 +186,6 @@ fun LibraryScreen(
             onNameSeries = { naming = it },
             shelfSize = shelfSize,
             onShelfSizeChange = onShelfSizeChange,
-            backCovers = backCovers,
-            onBackCoversChange = onBackCoversChange,
             onStartOver = onStartOver,
             unboxing = unboxing,
             handHint = handHint,
@@ -274,8 +266,6 @@ private fun ShelfLibrary(
     onNameSeries: (ComicEntry) -> Unit,
     shelfSize: ShelfSize,
     onShelfSizeChange: (ShelfSize) -> Unit,
-    backCovers: BackCovers,
-    onBackCoversChange: (BackCovers) -> Unit,
     onStartOver: (ComicEntry) -> Unit,
     unboxing: UnboxSettings,
     handHint: Boolean,
@@ -335,16 +325,8 @@ private fun ShelfLibrary(
                 series = place.series,
             )
         }
-        val art = LibraryShelfArt(context.applicationContext, comics.associateBy { it.id }, coverFile, backCovers)
+        val art = LibraryShelfArt(context.applicationContext, comics.associateBy { it.id }, coverFile)
         shelf.setItems(items, art)
-    }
-    // The backs already shown came from the other way of finding them.
-    var shownBacks by remember { mutableStateOf(backCovers) }
-    LaunchedEffect(view, backCovers) {
-        if (backCovers != shownBacks) {
-            shownBacks = backCovers
-            view?.refreshBackCovers()
-        }
     }
     LaunchedEffect(view, boxed, aspects) {
         val shelf = view ?: return@LaunchedEffect
@@ -689,15 +671,7 @@ private fun ShelfLibrary(
                 .windowInsetsPadding(SafeInsets)
                 .padding(top = 64.dp, end = 12.dp),
         ) {
-            ThemePicker(
-                selected = theme,
-                onSelect = onThemeChange,
-                size = shelfSize,
-                onSizeChange = onShelfSizeChange,
-                backCovers = backCovers,
-                onBackCoversChange = onBackCoversChange,
-                unboxing = unboxing,
-            )
+            ThemePicker(selected = theme, onSelect = onThemeChange, size = shelfSize, onSizeChange = onShelfSizeChange, unboxing = unboxing)
         }
 
         SnackbarHost(
@@ -769,23 +743,14 @@ private fun RoundButton(onClick: () -> Unit, description: String, content: @Comp
 }
 
 @Composable
-private fun ThemePicker(
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    size: ShelfSize,
-    onSizeChange: (ShelfSize) -> Unit,
-    backCovers: BackCovers,
-    onBackCoversChange: (BackCovers) -> Unit,
-    unboxing: UnboxSettings,
-) {
+private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit, size: ShelfSize, onSizeChange: (ShelfSize) -> Unit, unboxing: UnboxSettings) {
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = Color(0xF21B1713),
         contentColor = ShelfInk,
         shadowElevation = 12.dp,
     ) {
-        // Scrolls when the screen is too low for all of it (in landscape).
-        Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 14.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Text("Стена", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -813,49 +778,28 @@ private fun ThemePicker(
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ShelfSize.entries.forEach { option ->
-                    Chip(option.label, option == size) { onSizeChange(option) }
+                    val chosen = option == size
+                    Text(
+                        option.label,
+                        fontFamily = FontFamily.Serif,
+                        fontStyle = if (chosen) FontStyle.Italic else FontStyle.Normal,
+                        fontSize = 15.sp,
+                        color = if (chosen) Color(0xFF2A1F17) else ShelfInk,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(if (chosen) ShelfInk else Color.Transparent)
+                            .border(1.dp, ShelfInk.copy(alpha = if (chosen) 1f else 0.35f), CircleShape)
+                            .clickable(onClickLabel = option.label) { onSizeChange(option) }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            Text("Задняя обложка", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
-            Spacer(Modifier.height(8.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                BackCovers.entries.forEach { option ->
-                    Chip(option.label, option == backCovers) { onBackCoversChange(option) }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                backCovers.note,
-                style = MaterialTheme.typography.bodySmall,
-                fontStyle = FontStyle.Italic,
-                color = ShelfInk.copy(alpha = 0.65f),
-                modifier = Modifier.widthIn(max = 300.dp),
-            )
             Spacer(Modifier.height(16.dp))
             Text("Новые комиксы", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             SettingSwitch("Приходят в коробке, распаковывать самому", unboxing.wrapNew, unboxing.onWrapNewChange)
             SettingSwitch("Звук распаковки", unboxing.sound, unboxing.onSoundChange)
         }
     }
-}
-
-/** One of a few choices, as a pill; the chosen one filled. */
-@Composable
-private fun Chip(label: String, chosen: Boolean, onClick: () -> Unit) {
-    Text(
-        label,
-        fontFamily = FontFamily.Serif,
-        fontStyle = if (chosen) FontStyle.Italic else FontStyle.Normal,
-        fontSize = 15.sp,
-        color = if (chosen) Color(0xFF2A1F17) else ShelfInk,
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(if (chosen) ShelfInk else Color.Transparent)
-            .border(1.dp, ShelfInk.copy(alpha = if (chosen) 1f else 0.35f), CircleShape)
-            .clickable(onClickLabel = label, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-    )
 }
 
 @Composable

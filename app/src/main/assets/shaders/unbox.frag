@@ -51,11 +51,11 @@ float creases(vec2 p) {
     return big * big * 0.00045 + small * small * 0.00005 + noise(p * 520.0) * 0.00001;
 }
 
-// Long fibres in the paper, criss-crossing: faint streaks, a little lighter and darker.
-float fibres(vec2 u) {
-    float a = noise(vec2(dot(u, vec2(0.82, 0.57)) * 2400.0, dot(u, vec2(-0.57, 0.82)) * 190.0));
-    float b = noise(vec2(dot(u, vec2(0.34, -0.94)) * 2100.0, dot(u, vec2(0.94, 0.34)) * 170.0) + 5.3);
-    return (a + b) * 0.5 - 0.5;
+// Where a tear runs through a cell: the mask crosses this level. The same everywhere, so the
+// edge of a hole and the edge of the piece torn out of it match fibre for fibre.
+float tornEdge(vec2 u) {
+    float fibre = noise(u * 2600.0) * 0.55 + noise(u * 760.0) * 0.45;
+    return 0.5 + (fibre - 0.5) * 0.5;
 }
 
 // The colour of the paper: a dense white wrapping paper, cloudy with its fibres, through which
@@ -63,7 +63,7 @@ float fibres(vec2 u) {
 // ([rim]) whiter still.
 vec3 paperColour(vec2 u, float contact, float rim, bool back) {
     float cloud = fbm(u * 150.0) * 0.6 + fbm(u * 420.0 + 3.0) * 0.4;
-    vec3 milk = vec3(0.91, 0.90, 0.87) * (0.95 + 0.08 * cloud + 0.12 * fibres(u));
+    vec3 milk = vec3(0.91, 0.90, 0.87) * (0.95 + 0.08 * cloud);
     vec3 under = uHasCover > 0.5 ? toLinear(textureLod(uCover, vec2(0.5), 10.0).rgb) * 0.75 : PAPER * 0.5;
     bool onCover = !back && abs(u.x) < uWrap.x * 0.5 && abs(u.y) < uWrap.y * 0.5;
     if (onCover && uHasCover > 0.5) under = toLinear(textureLod(uCover, vec2(u.x / uWrap.x + 0.5, 0.5 - u.y / uWrap.y), 2.6).rgb);
@@ -89,10 +89,10 @@ vec3 paper(vec3 v, out float alpha) {
     if (uReleased > 0.5 && front) discard;
     float rim = 0.0;
     if (!back && uWrap.w > 0.5) {
-        float m = tornAt(u, -1.0).m;
+        float m = texture(uMask, maskCoord(u)).r;
         float edge = tornEdge(u);
         if (m > edge) discard;
-        rim = smoothstep(edge - 0.12, edge, m) * (0.55 + 0.45 * noise(u * 1800.0));
+        rim = smoothstep(edge - 0.09, edge, m) * (0.55 + 0.45 * noise(u * 1800.0));
     }
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
@@ -111,14 +111,17 @@ vec3 strip(vec3 v, out float alpha) {
     float id = floor(rest + 0.0005);
     float f = clamp((rest - id) / 0.98, 0.0, 1.0);
     vec2 u = vUV;
-    Torn torn = tornAt(u, id);
-    float m = torn.m;
+    vec2 mc = maskCoord(u);
+    ivec2 cells = textureSize(uOwner, 0);
+    ivec2 cell = clamp(ivec2(floor(mc * vec2(cells))), ivec2(0), cells - 1);
+    float owner = floor(texelFetch(uOwner, cell, 0).r * 255.0 + 0.5);
+    if (abs(owner - id) > 0.5) discard;
+    float m = texture(uMask, mc).r;
     float edge = tornEdge(u);
     // A strip is what was torn out; a piece of the rest is what was left.
     bool leftover = kind > 1.5;
     if (leftover ? m > edge : m <= edge) discard;
-    if (leftover ? torn.kept < 0.5 * (1.0 - m) : torn.mine < 0.5 * m) discard;
-    float rim = (leftover ? smoothstep(edge - 0.12, edge, m) : smoothstep(edge + 0.12, edge, m)) * (0.55 + 0.45 * noise(u * 1800.0));
+    float rim = (leftover ? smoothstep(edge - 0.09, edge, m) : smoothstep(edge + 0.09, edge, m)) * (0.55 + 0.45 * noise(u * 1800.0));
     float contact = kind < 0.5 ? f : (leftover ? 1.0 - smoothstep(0.0, 0.12, f) : 0.0);
     float age = kind < 0.5 ? 0.0 : f;
     // Off the cover the thin paper lets a little of what is behind it through.
@@ -155,33 +158,17 @@ vec3 cardboard(vec3 v) {
         float gap = (1.0 - liner) * (1.0 - flute);
         a = mix(vec3(0.46, 0.33, 0.19), vec3(0.08, 0.05, 0.03), gap * 0.85);
     }
-    // Rubbed a little darker towards the edges of every face; handled: blotches, a few scuffs.
+    // Rubbed a little darker towards the edges of every face.
     vec3 dist = (0.5 - abs(vLocal)) * size;
     float wear = min(min(fn.x == 0.0 ? dist.x : 1.0, fn.y == 0.0 ? dist.y : 1.0), fn.z == 0.0 ? dist.z : 1.0);
     a *= 0.86 + 0.14 * smoothstep(0.0, 0.012, wear);
-    if (!inside) {
-        a *= 0.95 + 0.1 * fbm(q * 9.0 + 2.7);
-        float scuff = smoothstep(0.82, 0.95, noise(vec2(q.x * 26.0 + q.y * 9.0, q.y * 700.0 - q.x * 60.0)))
-            * smoothstep(0.55, 0.75, noise(q * 14.0 + 4.1));
-        a = mix(a, a * 1.12 + vec3(0.015, 0.012, 0.01), scuff * 0.4);
-    }
     if (vFace == uPrintFace && uHasLabel > 0.5) {
         vec4 print = texture(uLabel, vUV);
         // Ink soaks into the board unevenly.
         float soak = 0.82 + 0.18 * noise(vUV * vec2(500.0, 180.0));
         a = mix(a, toLinear(print.rgb), print.a * soak);
     }
-    // Inside, the light falls off towards the bottom and into the corners.
-    float occlusion = 1.0;
-    if (inside) {
-        if (vFace == 4) {
-            occlusion = 0.5 + 0.3 * smoothstep(0.0, 0.05, min(dist.x, dist.z));
-        } else if (vFace == 5) {
-            occlusion = 0.8;
-        } else {
-            occlusion = mix(0.45, 0.85, smoothstep(-0.5, 0.45, vLocal.y));
-        }
-    }
+    float occlusion = inside ? 0.72 : 1.0;
     return a * irradiance(n, occlusion) + sparkle(n, v, 20.0, 0.03);
 }
 
@@ -191,16 +178,8 @@ vec3 tape(vec3 v) {
     vec3 p = vLocal * size;
     vec3 n = normalize(uNormalMatrix * faceNormal(vFace));
     float along = vLocal.z + 0.5;
-    // Stretched on: here and there a fine wrinkle across it; its edges lift a hair.
-    float wrinkle = smoothstep(0.7, 1.0, noise(vec2(p.z * 130.0, p.x * 9.0))) * smoothstep(0.4, 0.7, noise(vec2(p.z * 21.0, 1.7)));
-    // Only its outer edges: where the two halves meet over the seam it is one piece of tape.
-    float outer = uInnerFace == 3 ? -vLocal.x : (uInnerFace == 2 ? vLocal.x : abs(vLocal.x));
-    float lifted = (1.0 - smoothstep(0.0, 0.0015, (0.5 - outer) * size.x)) * step(0.0, outer);
-    n = bump(n, wrinkle * 0.00018 + lifted * 0.0001);
     float streaks = noise(vec2(p.x * 1400.0, p.z * 30.0)) * 0.08;
-    // The board under it shows through the brown film: its fibres, faintly.
-    float board = noise(p.xz * vec2(900.0, 260.0)) * 0.08;
-    vec3 a = vec3(0.30, 0.15, 0.045) * (0.9 + streaks + board) * (1.0 + 0.25 * lifted);
+    vec3 a = vec3(0.30, 0.15, 0.045) * (0.92 + streaks);
     vec3 color = a * irradiance(n, 1.0);
     if (uInnerFace >= 0 && along >= uTapeCut.x && along <= uTapeCut.y && uTapeCut.y > uTapeCut.x) {
         // The slit of the cutter along the seam, the edges lifting a hair.

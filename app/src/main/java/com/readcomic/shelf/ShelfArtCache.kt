@@ -20,7 +20,7 @@ interface ShelfArt {
     /** The paper label saying [text] ("Saga", "№ 12"), shown on the shelf under a comic. */
     fun label(text: String): Bitmap?
 
-    /** A sharp front ([back] = false) or back cover for the comic in hand (drawn if it has none); may be slow. */
+    /** A sharp front ([back] = false) or back cover for the comic in hand; may be slow. */
     fun page(id: String, back: Boolean): Bitmap?
 
     /** What is printed on the spine: its colour and, on thicker comics, the title. */
@@ -83,11 +83,8 @@ class ShelfArtCache(
     private val scope: CoroutineScope,
     private val requestRender: () -> Unit,
 ) {
-    /**
-     * A picture ready to upload; [kept] ones stay in [ShelfArtMemory] and must not be recycled.
-     * [epoch]: how many times pictures under its key had been forgotten when it was asked for.
-     */
-    private class Decoded(val key: String, val bitmap: Bitmap?, val generation: Int, val kept: Boolean = false, val epoch: Int = 0)
+    /** A picture ready to upload; [kept] ones stay in [ShelfArtMemory] and must not be recycled. */
+    private class Decoded(val key: String, val bitmap: Bitmap?, val generation: Int, val kept: Boolean = false)
 
     private val textures = LinkedHashMap<String, Int>(64, 0.75f, true)
     private val inFlight = HashSet<String>()
@@ -97,20 +94,6 @@ class ShelfArtCache(
 
     @Volatile
     private var generation = 0
-
-    /** Pictures forgotten by [forget], by kind ("back"): ones asked for before then are stale. */
-    private val epochs = HashMap<String, Int>()
-
-    private fun epochOf(key: String) = epochs[key.substringBefore(':')] ?: 0
-
-    /** Drops every picture whose key starts with [kind] and a colon, so that it is made anew. */
-    fun forget(kind: String) {
-        epochs[kind] = epochOf("$kind:") + 1
-        val prefix = "$kind:"
-        textures.keys.filter { it.startsWith(prefix) }.forEach { key -> textures.remove(key)?.let { GLES30.glDeleteTextures(1, intArrayOf(it), 0) } }
-        failed.removeAll { it.startsWith(prefix) }
-        inFlight.removeAll { it.startsWith(prefix) }
-    }
 
     /** Where pictures come from; a new source gets another chance at pictures that failed. */
     var art: ShelfArt? = null
@@ -139,11 +122,10 @@ class ShelfArtCache(
         val requestGeneration = generation
         // Seen before: no need to decode it again.
         ShelfArtMemory[key]?.let { kept ->
-            decoded += Decoded(key, kept, requestGeneration, kept = true, epoch = epochOf(key))
+            decoded += Decoded(key, kept, requestGeneration, kept = true)
             requestRender()
             return
         }
-        val requestEpoch = epochOf(key)
         scope.launch(dispatcher) {
             if (requestGeneration != generation) return@launch
             val (kind, id) = key.split(':', limit = 2)
@@ -164,7 +146,7 @@ class ShelfArtCache(
             }
             val keep = bitmap != null && ShelfArtMemory.keeps(key)
             if (keep) ShelfArtMemory.put(key, bitmap!!)
-            decoded += Decoded(key, bitmap, requestGeneration, kept = keep, epoch = requestEpoch)
+            decoded += Decoded(key, bitmap, requestGeneration, kept = keep)
             requestRender()
         }
     }
@@ -174,7 +156,7 @@ class ShelfArtCache(
         val start = SystemClock.uptimeMillis()
         while (true) {
             val next = decoded.poll() ?: return false
-            if (next.generation != generation || next.epoch != epochOf(next.key)) {
+            if (next.generation != generation) {
                 if (!next.kept) next.bitmap?.recycle()
                 continue
             }

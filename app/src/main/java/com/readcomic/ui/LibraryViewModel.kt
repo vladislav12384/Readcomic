@@ -89,12 +89,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     )
     val shelfSize: StateFlow<ShelfSize> = _shelfSize.asStateFlow()
 
-    /** Where the back of the comic in hand comes from; drawn from the front when there is none. */
-    private val _backCovers = MutableStateFlow(
-        runCatching { BackCovers.valueOf(prefs.getString(KEY_BACK_COVERS, null) ?: "") }.getOrDefault(BackCovers.MISSING),
-    )
-    val backCovers: StateFlow<BackCovers> = _backCovers.asStateFlow()
-
     /** Whether comics being added go into their series; remembered for the next time. */
     private val _groupSeries = MutableStateFlow(prefs.getBoolean(KEY_GROUP_SERIES, false))
     val groupSeries: StateFlow<Boolean> = _groupSeries.asStateFlow()
@@ -168,11 +162,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun setShelfOrder(order: ShelfOrder) {
         _shelfOrder.value = order
         prefs.edit { putString(KEY_SHELF_ORDER, order.name) }
-    }
-
-    fun setBackCovers(value: BackCovers) {
-        _backCovers.value = value
-        prefs.edit { putString(KEY_BACK_COVERS, value.name) }
     }
 
     fun setShelfSize(size: ShelfSize) {
@@ -307,7 +296,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_SHELF_HINT = "shelf_hint"
         private const val KEY_SHELF_ORDER = "shelf_order"
         private const val KEY_SHELF_SIZE = "shelf_size"
-        private const val KEY_BACK_COVERS = "back_covers"
         private const val KEY_GROUP_SERIES = "group_series"
         private const val KEY_UNBOX_SOUND = "unbox_sound"
         private const val KEY_BOX_HINT = "box_hint"

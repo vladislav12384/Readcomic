@@ -109,9 +109,6 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
 
     fun putBack() = onGl { controller.putBack() }
 
-    /** The backs of comics are made anew (where they come from changed). */
-    fun refreshBackCovers() = onGl { artCache.forget("back") }
-
     /** Pixels the UI takes from each edge of the view while a comic is in hand; the comic keeps clear of them. */
     fun setHandRoom(left: Float, top: Float, right: Float, bottom: Float) = onGl { controller.setHandRoom(left, top, right, bottom) }
 
