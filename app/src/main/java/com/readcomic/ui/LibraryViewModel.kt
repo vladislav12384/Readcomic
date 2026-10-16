@@ -162,6 +162,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Puts [entry] into the series [name], or out of its series (null). */
     fun setSeries(entry: ComicEntry, name: String?) = library.setSeries(entry.id, name)
 
+    /** A drawn back cover for [entry] ([on]), or its own last page. */
+    fun setDrawnBack(entry: ComicEntry, on: Boolean) = library.setDrawnBack(entry.id, on)
+
     fun setShelfOrder(order: ShelfOrder) {
         _shelfOrder.value = order
         prefs.edit { putString(KEY_SHELF_ORDER, order.name) }

@@ -109,6 +109,9 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
 
     fun putBack() = onGl { controller.putBack() }
 
+    /** Turns the comic in hand round to show its back. */
+    fun showBack() = onGl { controller.showBack() }
+
     /** Pixels the UI takes from each edge of the view while a comic is in hand; the comic keeps clear of them. */
     fun setHandRoom(left: Float, top: Float, right: Float, bottom: Float) = onGl { controller.setHandRoom(left, top, right, bottom) }
 

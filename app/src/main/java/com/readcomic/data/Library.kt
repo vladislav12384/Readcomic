@@ -32,6 +32,11 @@ data class ComicEntry(
      * shelf once the reader has torn the paper off.
      */
     val wrapped: Boolean = false,
+    /**
+     * The reader asked for a drawn back cover: the comic's own back is missing or not a cover
+     * (its last page is a story page or an advert), so the back on the shelf is drawn instead.
+     */
+    val drawnBack: Boolean = false,
 ) {
     val progress: Float get() = if (pageCount <= 1) 0f else lastVisiblePage.toFloat() / (pageCount - 1)
     val isFinished: Boolean get() = lastReadAt > 0 && lastVisiblePage >= pageCount - 1
@@ -66,6 +71,7 @@ class LibraryStore(context: Context) {
                     year = o.optInt("year", 0).takeIf { it > 0 },
                     series = o.optString("series").ifEmpty { null },
                     wrapped = o.optBoolean("wrapped", false),
+                    drawnBack = o.optBoolean("drawnBack", false),
                 )
             }
         } catch (_: Exception) {
@@ -93,7 +99,8 @@ class LibraryStore(context: Context) {
                     .putOpt("writer", e.writer)
                     .putOpt("year", e.year)
                     .putOpt("series", e.series)
-                    .put("wrapped", e.wrapped),
+                    .put("wrapped", e.wrapped)
+                    .put("drawnBack", e.drawnBack),
             )
         }
         val tmp = File(file.parentFile, file.name + ".tmp")

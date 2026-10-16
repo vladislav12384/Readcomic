@@ -153,6 +153,13 @@ class LibraryRepository private constructor(context: Context) {
         scope.launch { persist() }
     }
 
+    /** Gives the comic [id] a drawn back cover ([on]) or its own last page back. */
+    fun setDrawnBack(id: String, on: Boolean) {
+        if (_comics.value.none { it.id == id && it.drawnBack != on }) return
+        _comics.update { list -> list.map { if (it.id == id) it.copy(drawnBack = on) else it } }
+        scope.launch { persist() }
+    }
+
     /** The way a series is already written in the library, so "saga" joins "Saga". */
     private fun knownSeriesName(name: String): String {
         val key = Series.keyOf(name)
@@ -241,6 +248,7 @@ class LibraryRepository private constructor(context: Context) {
                 year = metadata?.year ?: existing?.year,
                 series = series,
                 wrapped = existing?.wrapped ?: wrapNew,
+                drawnBack = existing?.drawnBack ?: false,
             )
         }
     }

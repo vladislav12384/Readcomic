@@ -49,6 +49,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -148,6 +149,8 @@ fun LibraryScreen(
     order: ShelfOrder = ShelfOrder.TITLE,
     onOrderChange: (ShelfOrder) -> Unit = {},
     onSetSeries: (ComicEntry, String?) -> Unit = { _, _ -> },
+    /** A drawn back cover for [ComicEntry] (true), or its own. */
+    onDrawnBackChange: (ComicEntry, Boolean) -> Unit = { _, _ -> },
     shelfSize: ShelfSize = ShelfSize.NORMAL,
     onShelfSizeChange: (ShelfSize) -> Unit = {},
     /** Reading [ComicEntry] again from its first page. */
@@ -185,6 +188,7 @@ fun LibraryScreen(
             order = order,
             onOrderChange = onOrderChange,
             onNameSeries = { naming = it },
+            onDrawnBackChange = onDrawnBackChange,
             shelfSize = shelfSize,
             onShelfSizeChange = onShelfSizeChange,
             onStartOver = onStartOver,
@@ -267,6 +271,7 @@ private fun ShelfLibrary(
     order: ShelfOrder,
     onOrderChange: (ShelfOrder) -> Unit,
     onNameSeries: (ComicEntry) -> Unit,
+    onDrawnBackChange: (ComicEntry, Boolean) -> Unit,
     shelfSize: ShelfSize,
     onShelfSizeChange: (ShelfSize) -> Unit,
     onStartOver: (ComicEntry) -> Unit,
@@ -336,6 +341,7 @@ private fun ShelfLibrary(
                 inProgress = entry.currentPage > 0 && !entry.isFinished,
                 label = place.label,
                 series = place.series,
+                drawnBack = entry.drawnBack,
             )
         }
         val art = LibraryShelfArt(context.applicationContext, comics.associateBy { it.id }, coverFile)
@@ -619,6 +625,12 @@ private fun ShelfLibrary(
                     onPutBack = { view?.putBack() },
                     onSeries = { onNameSeries(entry) },
                     onStartOver = { onStartOver(entry) },
+                    drawnBack = entry.drawnBack,
+                    onDrawnBackChange = { on ->
+                        onDrawnBackChange(entry, on)
+                        // Turned round at once, to see the back that is now there.
+                        view?.showBack()
+                    },
                     modifier = Modifier.onSizeChanged { cardSize = it },
                 )
             } else {
@@ -949,6 +961,9 @@ private fun HeldComicCard(
     onPutBack: () -> Unit,
     onSeries: () -> Unit,
     onStartOver: () -> Unit,
+    /** Its back cover is drawn (the reader turned it on for this comic). */
+    drawnBack: Boolean,
+    onDrawnBackChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val accent by produceState(Color(0xFFB0703A), coverFile) {
@@ -1052,7 +1067,55 @@ private fun HeldComicCard(
                     // Started already: it can also be read again from the first page.
                     if (reading) CardAction(RestartIcon, "Начать заново", onStartOver)
                     CardAction(SeriesIcon, "Серия", onSeries)
-                    CardAction(Icons.Filled.Delete, "Убрать из коллекции", onRemove)
+                    // The rarer things go into a menu, so the card stays small.
+                    var menu by remember { mutableStateOf(false) }
+                    CardAction(Icons.Filled.MoreVert, "Ещё", onClick = { menu = true }) {
+                        DropdownMenu(
+                            expanded = menu,
+                            onDismissRequest = { menu = false },
+                            containerColor = CardMenu,
+                            shape = RoundedCornerShape(16.dp),
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("Нарисовать заднюю обложку", color = ShelfInk)
+                                        Text(
+                                            "Если у этого выпуска её нет",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = ShelfInk.copy(alpha = 0.6f),
+                                        )
+                                    }
+                                },
+                                trailingIcon = {
+                                    Switch(
+                                        checked = drawnBack,
+                                        onCheckedChange = null,
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color(0xFF2A1F17),
+                                            checkedTrackColor = ShelfInk,
+                                            uncheckedThumbColor = ShelfInk.copy(alpha = 0.7f),
+                                            uncheckedTrackColor = Color.Transparent,
+                                            uncheckedBorderColor = ShelfInk.copy(alpha = 0.4f),
+                                        ),
+                                        modifier = Modifier.padding(start = 12.dp),
+                                    )
+                                },
+                                onClick = {
+                                    menu = false
+                                    onDrawnBackChange(!drawnBack)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Убрать из коллекции", color = ShelfInk) },
+                                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null, tint = ShelfInk.copy(alpha = 0.75f)) },
+                                onClick = {
+                                    menu = false
+                                    onRemove()
+                                },
+                            )
+                        }
+                    }
                 }
                 if (hint) {
                     Text(
@@ -1069,9 +1132,9 @@ private fun HeldComicCard(
     }
 }
 
-/** A round button with an icon on the card of the comic in hand. */
+/** A round button with an icon on the card of the comic in hand; [content] goes with it (a menu it opens). */
 @Composable
-private fun CardAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+private fun CardAction(icon: ImageVector, label: String, onClick: () -> Unit, content: @Composable () -> Unit = {}) {
     Spacer(Modifier.width(8.dp))
     Box(
         contentAlignment = Alignment.Center,
@@ -1082,6 +1145,7 @@ private fun CardAction(icon: ImageVector, label: String, onClick: () -> Unit) {
             .clickable(onClickLabel = label, onClick = onClick),
     ) {
         Icon(icon, contentDescription = label, tint = ShelfInk.copy(alpha = 0.75f), modifier = Modifier.size(22.dp))
+        content()
     }
 }
 
@@ -1321,6 +1385,9 @@ fun MessagesEffect(messages: kotlinx.coroutines.flow.SharedFlow<String>, snackba
 private const val DEFAULT_ASPECT = 0.66f
 private val ShelfRoom = Color(0xFF0C0B0A)
 private val ShelfInk = Color(0xFFF3E6D0)
+
+/** The menu of the card of the comic in hand: dark, like the card. */
+private val CardMenu = Color(0xFF241C16)
 
 /** System bars, cutouts and the keyboard. */
 private val SafeInsets: WindowInsets

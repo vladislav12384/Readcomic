@@ -330,6 +330,7 @@ private fun App(viewModel: LibraryViewModel) {
                 order = shelfOrder,
                 onOrderChange = viewModel::setShelfOrder,
                 onSetSeries = viewModel::setSeries,
+                onDrawnBackChange = viewModel::setDrawnBack,
                 shelfSize = shelfSize,
                 onShelfSizeChange = viewModel::setShelfSize,
                 onStartOver = { entry ->

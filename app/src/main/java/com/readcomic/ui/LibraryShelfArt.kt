@@ -194,6 +194,20 @@ class LibraryShelfArt(
         }
     }
 
+    override fun drawnBack(id: String): Bitmap? {
+        val entry = entries[id] ?: return null
+        val aspect = coverAspect(entry) ?: DRAWN_BACK_ASPECT
+        val cover = coverFile(entry).takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) }?.let(::frontHalf)
+        // The summary, if the file has one, goes on the back as on a real comic.
+        val summary = runCatching { ComicOpener.open(context, entry.uri).use { it.metadata?.summary } }.getOrNull()
+        val issue = DrawnBackCover.Issue(entry.title, entry.writer, entry.year, summary, entry.id)
+        return try {
+            DrawnBackCover.draw(cover, spineColors(entry), issue, aspect)
+        } finally {
+            cover?.recycle()
+        }
+    }
+
     override fun spine(id: String): Bitmap? {
         val entry = entries[id] ?: return null
         val binding = ComicShape.binding(entry.pageCount)
@@ -332,6 +346,9 @@ class LibraryShelfArt(
         private const val PLAQUE_HEIGHT = 166
         private const val SHARP_WIDTH = 900
         private const val SHARP_HEIGHT = 1400
+
+        /** The shape of the usual American comic, for a drawn back whose cover is not known. */
+        private const val DRAWN_BACK_ASPECT = 0.65f
         private const val PAPER = 0xFFEFE8DA.toInt()
         private const val INK = 0xFF3A2A1C.toInt()
         private const val INK_LIGHT = 0xFF9A8670.toInt()

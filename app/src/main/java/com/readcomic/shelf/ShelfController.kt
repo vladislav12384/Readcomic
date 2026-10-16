@@ -38,6 +38,8 @@ class ShelfItem(
      * on the wall above them. Null for a comic on its own.
      */
     val series: String? = null,
+    /** Its back cover is drawn instead of taken from the comic (the reader asked for it). */
+    val drawnBack: Boolean = false,
 )
 
 class ComicDraw(
@@ -55,6 +57,8 @@ class ComicDraw(
     val faded: Boolean = false,
     /** A glint running over the cover, 0..1; negative for none. */
     val shine: Float = -1f,
+    /** Its back cover is drawn instead of taken from the comic. */
+    val drawnBack: Boolean = false,
 )
 
 /** The paper label saying [text], under a comic. */
@@ -545,7 +549,7 @@ class ShelfController(private val density: Float) {
             val ribbon = if (item.inProgress) ribbons.getOrPut(item.id) { Ribbon() }.mesh(position, rotation, size) else null
             val faded = found != null && item.id !in found
             val shine = appearing[item.id]?.let { (it / APPEAR_SHINE).coerceAtMost(1f) } ?: -1f
-            val draw = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld, faded, shine)
+            val draw = ComicDraw(item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld, faded, shine, item.drawnBack)
             if (isHeld) held = draw else comics += draw
             labels += LabelDraw(
                 item.label,
@@ -657,6 +661,17 @@ class ShelfController(private val density: Float) {
         // Rubber band past the ends.
         if (cameraY > scrollTop || cameraY < scrollBottom) delta *= 0.35f
         cameraY += delta
+    }
+
+    /** Turns the comic in hand round to show its back; one showing it already stays as it is. */
+    fun showBack() {
+        if (heldId == null || rotating) return
+        val turns = round(yaw / PI.toFloat())
+        // An odd number of half turns faces the back.
+        if (abs(turns % 2f) == 1f) return
+        // Spun just hard enough to coast to the back, where it settles as after a flick.
+        val target = (turns + 1f) * PI.toFloat()
+        yawVelocity = (target - yaw) * ROTATE_FRICTION + SETTLE_SPEED
     }
 
     fun release(velocityX: Float, velocityY: Float) {
@@ -910,7 +925,7 @@ class ShelfController(private val density: Float) {
             // Coast, then settle facing the front or the back; the tilt eases back to level.
             yaw += yawVelocity * dt
             yawVelocity *= exp(-ROTATE_FRICTION * dt)
-            if (abs(yawVelocity) < 0.6f) {
+            if (abs(yawVelocity) < SETTLE_SPEED) {
                 val rest = round(yaw / PI.toFloat()) * PI.toFloat()
                 yaw += (rest - yaw) * (1f - exp(-5f * dt))
                 if (abs(rest - yaw) < 0.0005f) yaw = rest
@@ -989,6 +1004,9 @@ class ShelfController(private val density: Float) {
         private const val ROTATE_PER_PIXEL = 0.0075f
         private const val MAX_PITCH = 0.8f
         private const val ROTATE_FRICTION = 2.2f
+
+        /** Turning slower than this (radians a second), the comic in hand settles facing front or back. */
+        private const val SETTLE_SPEED = 0.6f
         private const val SCROLL_FRICTION = 3.2f
         private const val PICK_SLACK = 0.004f
         private const val APPEAR_SHINE = 0.8f

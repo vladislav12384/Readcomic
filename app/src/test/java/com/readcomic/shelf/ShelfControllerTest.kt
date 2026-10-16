@@ -160,6 +160,25 @@ class ShelfControllerTest {
     }
 
     @Test
+    fun showBackTurnsTheComicInHandToItsBackAndKeepsItThere() {
+        val c = controller()
+        c.take("c0")
+        c.settle()
+        fun facing(): Float {
+            val held = c.frame().comics.last()
+            val normal = Mat4.transformPoint(held.model, Vec3(0f, 0f, 1f)) - Mat4.transformPoint(held.model, Vec3.ZERO)
+            return normal.normalized().z
+        }
+        assertTrue("starts facing front, z=${facing()}", facing() > 0.95f)
+        c.showBack()
+        c.settle()
+        assertTrue("shows its back, z=${facing()}", facing() < -0.95f)
+        c.showBack()
+        c.settle()
+        assertTrue("stays on its back, z=${facing()}", facing() < -0.95f)
+    }
+
+    @Test
     fun turningInHandSettlesFacingFrontOrBack() {
         val c = controller()
         c.take("c0")

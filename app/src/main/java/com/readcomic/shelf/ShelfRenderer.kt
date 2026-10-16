@@ -145,7 +145,7 @@ class ShelfRenderer(
             art.request("spine:${comic.id}")
             if (comic.held) {
                 art.request("front:${comic.id}")
-                art.request("back:${comic.id}")
+                art.request(backKey(comic))
             }
         }
         frame.labels.forEach { art.request("label:${it.text}") }
@@ -244,7 +244,7 @@ class ShelfRenderer(
                 else -> frame.dim
             }
             val cover = (if (comic.held) art["front:${comic.id}"] else null) ?: art["cover:${comic.id}"]
-            val back = if (comic.held) art["back:${comic.id}"] else null
+            val back = if (comic.held) art[backKey(comic)] else null
             GLES30.glUniform4f(
                 p["uBook"],
                 comic.binding.ordinal.toFloat(),
@@ -577,6 +577,9 @@ class ShelfRenderer(
         GLES30.glBindVertexArray(mesh.vao)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, mesh.count, GLES30.GL_UNSIGNED_SHORT, 0)
     }
+
+    /** The back cover of [comic] in hand: its own, or one drawn for it when the reader asked. */
+    private fun backKey(comic: ComicDraw) = if (comic.drawnBack) "drawnback:${comic.id}" else "back:${comic.id}"
 
     private fun signKey(sign: SignDraw) = "sign:${"%.1f".format(java.util.Locale.ROOT, controller.signAspect(sign.span))}:${sign.text}"
 

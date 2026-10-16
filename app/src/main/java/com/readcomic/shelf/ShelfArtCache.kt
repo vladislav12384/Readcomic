@@ -24,6 +24,12 @@ interface ShelfArt {
     /** A sharp front ([back] = false) or back cover for the comic in hand; may be slow. */
     fun page(id: String, back: Boolean): Bitmap?
 
+    /**
+     * A back cover drawn for the comic in hand, for comics whose own back is missing or is not a
+     * cover (the reader turns it on for each such comic); may be slow.
+     */
+    fun drawnBack(id: String): Bitmap? = null
+
     /** What is printed on the spine: its colour and, on thicker comics, the title. */
     fun spine(id: String): Bitmap?
 
@@ -57,7 +63,10 @@ internal object ShelfArtMemory {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
 
-    fun keeps(key: String) = !key.startsWith("front:") && !key.startsWith("back:")
+    fun keeps(key: String) = !isSharp(key)
+
+    /** The big pictures of the comic in hand: only a few at a time, never kept for later. */
+    fun isSharp(key: String) = key.startsWith("front:") || key.startsWith("back:") || key.startsWith("drawnback:")
 
     operator fun get(key: String): Bitmap? = cache.get(key)?.takeIf { !it.isRecycled }
 
@@ -153,6 +162,7 @@ class ShelfArtCache(
                     "label" -> art.label(id)
                     "front" -> art.page(id, back = false)
                     "back" -> art.page(id, back = true)
+                    "drawnback" -> art.drawnBack(id)
                     "spine" -> art.spine(id)
                     "sign" -> art.sign(id.substringAfter(':'), id.substringBefore(':').toFloat())
                     "box" -> art.box(id.toInt())
@@ -196,7 +206,7 @@ class ShelfArtCache(
 
     /** Keeps the most recently used textures; sharp covers are big, so only a few of them. */
     private fun trim() {
-        val sharp = textures.keys.filter { it.startsWith("front:") || it.startsWith("back:") }
+        val sharp = textures.keys.filter(ShelfArtMemory::isSharp)
         sharp.dropLast(MAX_SHARP).forEach { key -> textures.remove(key)?.let { GLES30.glDeleteTextures(1, intArrayOf(it), 0) } }
         while (textures.size > MAX_TEXTURES) {
             val key = textures.keys.first()
