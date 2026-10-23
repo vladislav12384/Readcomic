@@ -397,4 +397,12 @@ class ShelfControllerTest {
         assertTrue("sign above the comics: $signBottom > $top", signBottom > top)
         assertTrue("sign under the next shelf: $signTop", signTop < c.rowHeight - ShelfController.PLANK_THICKNESS)
     }
+
+    @Test
+    fun theDisplayCaseLightsGoDownInThreeStepsFromHowItWasMade() {
+        assertEquals(listOf(CaseLight.DIM, CaseLight.MEDIUM, CaseLight.BRIGHT), CaseLight.entries)
+        // The brightest is the display case as it was made: the shaders take it unchanged.
+        assertEquals(1f, CaseLight.BRIGHT.glow, 0f)
+        assertTrue(CaseLight.DIM.glow > 0f && CaseLight.DIM.glow < CaseLight.MEDIUM.glow && CaseLight.MEDIUM.glow < CaseLight.BRIGHT.glow)
+    }
 }

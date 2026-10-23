@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -54,6 +57,8 @@ class UpdateUi(
     val currentBuild: Long = 0,
     /** This is the preview build, "Readcomic β". */
     val preview: Boolean = false,
+    /** The reader asked to look for an update, and the answer is on its way: the banner says so. */
+    val checkingByHand: Boolean = false,
     val onEnabledChange: (Boolean) -> Unit = {},
     val onCheckNow: () -> Unit = {},
     val onDownload: () -> Unit = {},
@@ -69,6 +74,7 @@ class UpdateUi(
         get() = when (val s = state) {
             is AppUpdater.State.Available, is AppUpdater.State.Downloading, is AppUpdater.State.Ready -> true
             is AppUpdater.State.Failed -> s.offer != null
+            AppUpdater.State.Checking -> checkingByHand
             else -> false
         }
 }
@@ -96,6 +102,10 @@ fun UpdateInstallEffect(ui: UpdateUi) {
 fun UpdateBanner(ui: UpdateUi, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val state = ui.state
+    if (state == AppUpdater.State.Checking) {
+        if (ui.checkingByHand) CheckingBanner(ui, modifier)
+        return
+    }
     val offer: UpdateOffer = when (state) {
         is AppUpdater.State.Available -> state.offer
         is AppUpdater.State.Downloading -> state.offer
@@ -191,6 +201,31 @@ fun UpdateBanner(ui: UpdateUi, modifier: Modifier = Modifier) {
                         BannerTextButton("Позже", ui.onPutOff)
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Looking for an update, as the reader asked: what it is doing, until GitHub answers. */
+@Composable
+private fun CheckingBanner(ui: UpdateUi, modifier: Modifier) {
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xF21B1713),
+        contentColor = BannerInk,
+        shadowElevation = 10.dp,
+        modifier = modifier,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
+            CircularProgressIndicator(color = BannerInk, trackColor = Color.White.copy(alpha = 0.14f), strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text("Проверяю обновления…", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Text(
+                    "Сейчас стоит сборка ${ui.currentBuild}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BannerInk.copy(alpha = 0.7f),
+                )
             }
         }
     }

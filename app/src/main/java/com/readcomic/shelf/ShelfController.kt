@@ -54,6 +54,19 @@ enum class ShelfStyle(
     SHOP("Комикс-шоп", 2),
 }
 
+/**
+ * How bright the lights of the display case are on the case itself: the cones of light on its
+ * back, the light on its shelves and the glow along them. The comics stay lit as they are. The
+ * brightest is the display case as it was made.
+ *
+ * @param glow how much of that light is left, as the shaders take it (uGlow)
+ */
+enum class CaseLight(val label: String, val glow: Float) {
+    DIM("Слабая", 0.3f),
+    MEDIUM("Средняя", 0.6f),
+    BRIGHT("Яркая", 1f),
+}
+
 /** A comic on the shelf. */
 class ShelfItem(
     val id: String,

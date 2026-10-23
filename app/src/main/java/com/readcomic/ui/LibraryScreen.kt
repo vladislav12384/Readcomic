@@ -141,6 +141,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.CoverAspects
+import com.readcomic.shelf.CaseLight
 import com.readcomic.shelf.ShelfItem
 import com.readcomic.shelf.ShelfSize
 import com.readcomic.shelf.ShelfStyle
@@ -187,6 +188,9 @@ fun LibraryScreen(
     /** How many comics a shelf holds at least (2 to 4). */
     shelfColumns: Int = 2,
     onShelfColumnsChange: (Int) -> Unit = {},
+    /** How bright the lights of the display case are. */
+    caseLight: CaseLight = CaseLight.BRIGHT,
+    onCaseLightChange: (CaseLight) -> Unit = {},
     /** Reading [ComicEntry] again from its first page. */
     onStartOver: (ComicEntry) -> Unit = {},
     /** The box of new comics: what it does, and what the reader does with it. */
@@ -232,6 +236,8 @@ fun LibraryScreen(
             onShelfStyleChange = onShelfStyleChange,
             shelfColumns = shelfColumns,
             onShelfColumnsChange = onShelfColumnsChange,
+            caseLight = caseLight,
+            onCaseLightChange = onCaseLightChange,
             onStartOver = onStartOver,
             unboxing = unboxing,
             handHint = handHint,
@@ -322,6 +328,8 @@ private fun ShelfLibrary(
     onShelfStyleChange: (ShelfStyle) -> Unit,
     shelfColumns: Int,
     onShelfColumnsChange: (Int) -> Unit,
+    caseLight: CaseLight,
+    onCaseLightChange: (CaseLight) -> Unit,
     onStartOver: (ComicEntry) -> Unit,
     unboxing: UnboxSettings,
     handHint: Boolean,
@@ -420,6 +428,9 @@ private fun ShelfLibrary(
     }
     LaunchedEffect(view, shelfStyle) {
         view?.setStyle(shelfStyle)
+    }
+    LaunchedEffect(view, caseLight) {
+        view?.setCaseLight(caseLight)
     }
     LaunchedEffect(view, shelfColumns) {
         view?.setColumns(shelfColumns)
@@ -841,10 +852,17 @@ private fun ShelfLibrary(
                 onStyleChange = onShelfStyleChange,
                 columns = shelfColumns,
                 onColumnsChange = onShelfColumnsChange,
+                caseLight = caseLight,
+                onCaseLightChange = onCaseLightChange,
                 size = shelfSize,
                 onSizeChange = onShelfSizeChange,
                 unboxing = unboxing,
                 updates = updates,
+                onCheckNow = {
+                    // Back to the shelves, where the banner shows the check and what came of it.
+                    picking = false
+                    updates.onCheckNow()
+                },
             )
         }
 
@@ -1045,10 +1063,13 @@ private fun ThemePicker(
     onStyleChange: (ShelfStyle) -> Unit,
     columns: Int,
     onColumnsChange: (Int) -> Unit,
+    caseLight: CaseLight,
+    onCaseLightChange: (CaseLight) -> Unit,
     size: ShelfSize,
     onSizeChange: (ShelfSize) -> Unit,
     unboxing: UnboxSettings,
     updates: UpdateUi,
+    onCheckNow: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(24.dp),
@@ -1061,6 +1082,12 @@ private fun ThemePicker(
             Text("Полки", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             Spacer(Modifier.height(8.dp))
             PillRow(ShelfStyle.entries, style, { it.label }, onStyleChange, wrap = true)
+            if (style.showcase) {
+                Spacer(Modifier.height(16.dp))
+                Text("Подсветка", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
+                Spacer(Modifier.height(8.dp))
+                PillRow(CaseLight.entries, caseLight, { it.label }, onCaseLightChange)
+            }
             if (style.paint) {
                 Spacer(Modifier.height(16.dp))
                 WallPaints(selected, onSelect)
@@ -1089,7 +1116,7 @@ private fun ThemePicker(
                     modifier = Modifier.weight(1f),
                 )
                 val checking = updates.state == AppUpdater.State.Checking
-                TextButton(onClick = updates.onCheckNow, enabled = !checking) {
+                TextButton(onClick = onCheckNow, enabled = !checking) {
                     Text(if (checking) "Проверяю…" else "Проверить сейчас", color = ShelfInk.copy(alpha = if (checking) 0.5f else 1f))
                 }
             }
@@ -1568,7 +1595,7 @@ private fun GridLibraryContent(
                     style = style,
                     chrome = chrome,
                     onMenu = { viewing = true },
-                    menu = { GridViewMenu(expanded = viewing, look = look, onDismiss = { viewing = false }) },
+                    menu = { GridViewMenu(expanded = viewing, look = look, updates = updates, onDismiss = { viewing = false }) },
                     onSearch = {
                         searching = !searching
                         if (!searching) query = ""
@@ -1698,7 +1725,7 @@ private fun GridHeader(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.align(Alignment.CenterStart)) {
                 Box {
                     // The menu wears no button, as in the header of a magazine.
-                    HeaderButton(onMenu, "Оформление", chrome, plain = true) {
+                    HeaderButton(onMenu, "Меню", chrome, plain = true) {
                         Icon(Icons.Filled.Menu, contentDescription = null, tint = chrome.ink, modifier = Modifier.size(24.dp))
                     }
                     menu()
@@ -1830,7 +1857,7 @@ private fun ComicCard(entry: ComicEntry, coverFile: File, look: GridLook, onClic
 
 /** The look of the grid: its colours and the covers in the shapes of the issues. */
 @Composable
-private fun GridViewMenu(expanded: Boolean, look: GridLook, onDismiss: () -> Unit) {
+private fun GridViewMenu(expanded: Boolean, look: GridLook, updates: UpdateUi, onDismiss: () -> Unit) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         Text(
             "Оформление",
@@ -1861,6 +1888,37 @@ private fun GridViewMenu(expanded: Boolean, look: GridLook, onDismiss: () -> Uni
             },
             trailingIcon = { Switch(checked = look.byShape, onCheckedChange = null, modifier = Modifier.padding(start = 12.dp)) },
             onClick = { look.onByShapeChange(!look.byShape) },
+        )
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        Text(
+            "Обновления",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        DropdownMenuItem(
+            text = { Text("Проверять раз в день") },
+            trailingIcon = { Switch(checked = updates.enabled, onCheckedChange = null, modifier = Modifier.padding(start = 12.dp)) },
+            onClick = { updates.onEnabledChange(!updates.enabled) },
+        )
+        val checking = updates.state == AppUpdater.State.Checking
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text(if (checking) "Проверяю…" else "Проверить обновления")
+                    Text(
+                        "Сейчас стоит сборка ${updates.currentBuild}" + if (updates.preview) " · β" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            enabled = !checking,
+            // Back to the grid, where the banner shows the check and what came of it.
+            onClick = {
+                onDismiss()
+                updates.onCheckNow()
+            },
         )
     }
 }

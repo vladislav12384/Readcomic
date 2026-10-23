@@ -86,6 +86,10 @@ class ShelfRenderer(
     @Volatile
     var mirrors = false
 
+    /** How bright the display case itself is lit ([CaseLight.glow]); other bookcases ignore it. */
+    @Volatile
+    var glow = 1f
+
     /** Where the mirrored comic is put together, so that no frame makes garbage. */
     private val mirrored = FloatArray(16)
 
@@ -326,6 +330,7 @@ class ShelfRenderer(
         val wall = wallColor
         GLES30.glUniform3f(p["uWall"], wall[0], wall[1], wall[2])
         GLES30.glUniform1i(p["uStyle"], style)
+        GLES30.glUniform1f(p["uGlow"], glow)
         GLES30.glUniform2f(p["uCells"], frame.cellWidth, frame.cellOrigin)
         GLES30.glUniform1f(p["uMirror"], 0f)
         GLES30.glUniform1i(p["uCover"], 0)

@@ -55,6 +55,7 @@ uniform int uStyle;           // the bookcase: 0 oak and painted boards, 1 light
 uniform vec2 uCells;          // places of the comics across a shelf: their width, the x of one of their sides
 uniform float uMirror;        // 1 while drawing the comics mirrored in the shelf tops
 uniform float uMirrorY;       // the shelf top they are mirrored in
+uniform float uGlow;          // display case: how bright its lights are on the case, 1 the brightest
 
 out vec4 fragColor;
 
@@ -133,7 +134,10 @@ float bayOf(float y) {
 float stripOn(float bay) {
     if (bay < 0.0) return 0.0;
     float t = clamp((uLightsTime - 0.2 - bay * 0.16) / 0.5, 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
+    // The display case can have its lights turned down, on the case itself only (its boards, its
+    // back, the glow along its shelves): the comics in it stay lit as they are.
+    bool caseItself = uMaterial == 1 || uMaterial == 2 || uMaterial == 13;
+    return t * t * (3.0 - 2.0 * t) * (uStyle >= 3 && caseItself ? uGlow : 1.0);
 }
 
 // The shelf lights: warm, or a cold white in the display case.

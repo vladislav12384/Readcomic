@@ -13,6 +13,7 @@ import com.readcomic.data.LibraryRepository
 import com.readcomic.data.ScanInterval
 import com.readcomic.data.ScanReport
 import com.readcomic.data.WatchedFolder
+import com.readcomic.shelf.CaseLight
 import com.readcomic.shelf.ShelfSize
 import com.readcomic.shelf.ShelfStyle
 import com.readcomic.update.AppUpdater
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
@@ -106,6 +108,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** How many comics a shelf holds at least: 2 (as always), 3 or 4. */
     private val _shelfColumns = MutableStateFlow(prefs.getInt(KEY_SHELF_COLUMNS, 2).coerceIn(2, 4))
     val shelfColumns: StateFlow<Int> = _shelfColumns.asStateFlow()
+
+    /** How bright the lights of the display case are: as it was made, unless turned down. */
+    private val _caseLight = MutableStateFlow(
+        runCatching { CaseLight.valueOf(prefs.getString(KEY_CASE_LIGHT, null) ?: "") }.getOrDefault(CaseLight.BRIGHT),
+    )
+    val caseLight: StateFlow<CaseLight> = _caseLight.asStateFlow()
 
     /** How large the comics look on the shelves. */
     private val _shelfSize = MutableStateFlow(
@@ -222,6 +230,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putInt(KEY_SHELF_COLUMNS, _shelfColumns.value) }
     }
 
+    fun setCaseLight(light: CaseLight) {
+        _caseLight.value = light
+        prefs.edit { putString(KEY_CASE_LIGHT, light.name) }
+    }
+
     fun setShelfSize(size: ShelfSize) {
         _shelfSize.value = size
         prefs.edit { putString(KEY_SHELF_SIZE, size.name) }
@@ -264,13 +277,25 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     fun setUpdateCheck(enabled: Boolean) = updater.setEnabled(enabled)
 
+    /** The reader asked to look for an update, and it is on its way. */
+    private val _checkingByHand = MutableStateFlow(false)
+    val checkingByHand: StateFlow<Boolean> = _checkingByHand.asStateFlow()
+
     /** Looks for an update now, and says what came of it. */
     fun checkForUpdate() {
+        if (_checkingByHand.value) return
+        _checkingByHand.value = true
         viewModelScope.launch {
-            when (updater.check(manual = true)) {
-                AppUpdater.CheckResult.UP_TO_DATE -> _messages.tryEmit("Это последняя версия — сборка ${updater.currentBuild}")
-                AppUpdater.CheckResult.FAILED -> _messages.tryEmit("Не получилось проверить обновления: нет связи с GitHub")
-                AppUpdater.CheckResult.AVAILABLE -> Unit
+            try {
+                // A check of the app's own may be on its way already: wait for it, then ask again.
+                updater.state.first { it != AppUpdater.State.Checking }
+                when (updater.check(manual = true)) {
+                    AppUpdater.CheckResult.UP_TO_DATE -> _messages.tryEmit("Это последняя версия — сборка ${updater.currentBuild}")
+                    AppUpdater.CheckResult.FAILED -> _messages.tryEmit("Не получилось проверить обновления: нет связи с GitHub")
+                    AppUpdater.CheckResult.AVAILABLE -> Unit
+                }
+            } finally {
+                _checkingByHand.value = false
             }
         }
     }
@@ -384,6 +409,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_SHELF_SIZE = "shelf_size"
         private const val KEY_SHELF_STYLE = "shelf_style"
         private const val KEY_SHELF_COLUMNS = "shelf_columns"
+        private const val KEY_CASE_LIGHT = "case_light"
         private const val KEY_GRID_STYLE = "grid_style"
         private const val KEY_GRID_SHAPE = "grid_shape"
         private const val KEY_GROUP_SERIES = "group_series"

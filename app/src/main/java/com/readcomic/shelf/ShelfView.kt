@@ -154,6 +154,12 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
         onGl { controller.showcase = style.showcase }
     }
 
+    /** How bright the lights of the display case are. */
+    fun setCaseLight(light: CaseLight) {
+        renderer.glow = light.glow
+        requestFrame()
+    }
+
     /** The shelf lights come on one after another, as when walking into the room. */
     fun switchLightsOn() = onGl { controller.switchLightsOn() }
 

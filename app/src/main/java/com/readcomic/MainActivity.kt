@@ -174,6 +174,7 @@ private fun App(viewModel: LibraryViewModel) {
     val shelfSize by viewModel.shelfSize.collectAsStateWithLifecycle()
     val shelfStyle by viewModel.shelfStyle.collectAsStateWithLifecycle()
     val shelfColumns by viewModel.shelfColumns.collectAsStateWithLifecycle()
+    val caseLight by viewModel.caseLight.collectAsStateWithLifecycle()
     val gridStyle by viewModel.gridStyle.collectAsStateWithLifecycle()
     val gridByShape by viewModel.gridByShape.collectAsStateWithLifecycle()
     val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
@@ -182,6 +183,7 @@ private fun App(viewModel: LibraryViewModel) {
     val boxHintDone by viewModel.boxHintDone.collectAsStateWithLifecycle()
     val update by viewModel.update.collectAsStateWithLifecycle()
     val updateCheck by viewModel.updateCheck.collectAsStateWithLifecycle()
+    val checkingByHand by viewModel.checkingByHand.collectAsStateWithLifecycle()
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     MessagesEffect(viewModel.messages, snackbar)
@@ -351,6 +353,8 @@ private fun App(viewModel: LibraryViewModel) {
                 onShelfStyleChange = viewModel::setShelfStyle,
                 shelfColumns = shelfColumns,
                 onShelfColumnsChange = viewModel::setShelfColumns,
+                caseLight = caseLight,
+                onCaseLightChange = viewModel::setCaseLight,
                 onStartOver = { entry ->
                     viewModel.startOver(entry)
                     openId = entry.id
@@ -370,6 +374,7 @@ private fun App(viewModel: LibraryViewModel) {
                     enabled = updateCheck,
                     currentBuild = viewModel.currentBuild,
                     preview = viewModel.isPreview,
+                    checkingByHand = checkingByHand,
                     onEnabledChange = viewModel::setUpdateCheck,
                     onCheckNow = viewModel::checkForUpdate,
                     onDownload = viewModel::downloadUpdate,
