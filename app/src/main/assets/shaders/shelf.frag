@@ -386,6 +386,13 @@ void main() {
 
     // Filmic tone curve (ACES fit), then back to sRGB.
     color *= EXPOSURE;
-    color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
+    if (uStyle >= 3 && uMaterial == 0 && uMirror < 0.5 && uHeld < 0.5) {
+        // The covers standing in a display: shown as they are, only the brightest light rolled off
+        // softly; the filmic curve lifted their middle tones and deepened their colours.
+        vec3 soft = 0.8 + 0.2 * (1.0 - exp(-(color - 0.8) / 0.2));
+        color = clamp(mix(color, soft, step(0.8, color)), 0.0, 1.0);
+    } else {
+        color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
+    }
     fragColor = vec4(pow(color, vec3(1.0 / 2.2)), alpha);
 }

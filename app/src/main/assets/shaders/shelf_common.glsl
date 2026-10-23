@@ -185,6 +185,9 @@ vec3 irradiance(vec3 n, float occlusion) {
     vec3 light = (ambient(n) + key) * occlusion * room + stripLight(vWorld, n);
     // A display lights its comics from in front too, softly, as a shop window does.
     if (uStyle >= 3 && uMaterial == 0) light += vec3(0.15, 0.17, 0.21) * max(dot(n, normalize(vec3(0.0, 0.35, 1.0))), 0.0) * room;
+    // The covers in a display keep their own colours: less of its cold tint on them, and less
+    // light, which showed them overexposed (a mid grey came out three quarters bright).
+    if (uStyle >= 3 && uMaterial == 0) light = mix(light, vec3(luminance(light)), 0.5) * 0.8;
     return light;
 }
 
@@ -321,8 +324,8 @@ vec3 comic(vec3 v) {
         vec3 a;
         if (part == 0) {
             a = uHasCover > 0.5 ? toLinear(texture(uCover, vUV).rgb) : PAPER * 0.6;
-            // Ink on coated paper: a touch richer.
-            a = max(mix(vec3(luminance(a)), a, 1.12), 0.0);
+            // Ink on coated paper: a touch richer (not in a display, whose covers keep their own colours).
+            if (uStyle < 3) a = max(mix(vec3(luminance(a)), a, 1.12), 0.0);
         } else if (uHasBack > 0.5) {
             a = toLinear(texture(uBack, vUV).rgb);
         } else {
