@@ -14,10 +14,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -63,8 +65,27 @@ class GridLook(
     val onByShapeChange: (Boolean) -> Unit = {},
 )
 
-/** Colours of the grid in each look; the dark one keeps the app's own scheme. */
+/** Colours of the grid in each look. */
 internal object GridPalette {
+    // Cool graphite with white ink; the amber of the app stays only as its accent.
+    private val Graphite = darkColorScheme(
+        primary = Color(0xFFFFB55A),
+        onPrimary = Color(0xFF3A2200),
+        primaryContainer = Color(0xFF5A3A12),
+        onPrimaryContainer = Color(0xFFFFDDB6),
+        secondary = Color(0xFFB9C0CC),
+        background = Color(0xFF0D0F13),
+        onBackground = Color(0xFFF2F4F7),
+        surface = Color(0xFF15181D),
+        onSurface = Color(0xFFF2F4F7),
+        surfaceVariant = Color(0xFF262A31),
+        onSurfaceVariant = Color(0xFF9EA5B0),
+        surfaceContainer = Color(0xFF1C1F25),
+        surfaceContainerHigh = Color(0xFF23272E),
+        outline = Color(0xFF4A505A),
+        error = Color(0xFFFFB4AB),
+    )
+
     private val Light = lightColorScheme(
         primary = Color(0xFFA0632A),
         onPrimary = Color.White,
@@ -115,9 +136,9 @@ internal object GridPalette {
         outline = Color(0xFF141414),
     )
 
-    /** The colour scheme of [style]; null keeps the app's dark one. */
-    fun colors(style: GridStyle): ColorScheme? = when (style) {
-        GridStyle.DARK -> null
+    /** The colour scheme of [style]. */
+    fun colors(style: GridStyle): ColorScheme = when (style) {
+        GridStyle.DARK -> Graphite
         GridStyle.LIGHT -> Light
         GridStyle.VINTAGE -> Vintage
         GridStyle.COMIC -> Comic
@@ -125,8 +146,8 @@ internal object GridPalette {
 
     /** The background, top to bottom, and the soft light at its top. */
     fun ground(style: GridStyle): Triple<Color, Color, Color> = when (style) {
-        // Deep warm charcoal, a faint amber light from above (the colour of the buttons).
-        GridStyle.DARK -> Triple(Color(0xFF1D1915), Color(0xFF0D0B0A), Color(0x1CFFB55A))
+        // Cool deep graphite, a faint light from above.
+        GridStyle.DARK -> Triple(Color(0xFF1E222A), Color(0xFF0D0F13), Color(0x0FFFFFFF))
         GridStyle.LIGHT -> Triple(Color(0xFFFCF9F4), Color(0xFFEEE7DB), Color(0x99FFFFFF))
         GridStyle.VINTAGE -> Triple(Color(0xFFF1E7D1), Color(0xFFDFCFAD), Color(0x66FFF8E6))
         GridStyle.COMIC -> Triple(Color(0xFFFFE58C), Color(0xFFFFCF45), Color(0x66FFFFFF))
@@ -134,6 +155,26 @@ internal object GridPalette {
 
     /** The bar along the top in the comic look: red, as on the covers of old comics. */
     val ComicBar = Color(0xFFD8352A)
+
+    /** The header and the add button in each look. */
+    class Chrome(
+        val ink: Color,
+        val muted: Color,
+        /** The round buttons: their fill, and their rim (transparent for none). */
+        val button: Color,
+        val rim: Color,
+        val fab: Color,
+        val fabInk: Color,
+        /** Behind the header itself (the red bar of the comic look), transparent elsewhere. */
+        val bar: Color,
+    )
+
+    fun chrome(style: GridStyle): Chrome = when (style) {
+        GridStyle.DARK -> Chrome(Color(0xFFF2F4F7), Color(0x80F2F4F7), Color(0x17FFFFFF), Color(0x0FFFFFFF), Color(0xFF2B3039), Color(0xFFF2F4F7), Color.Transparent)
+        GridStyle.LIGHT -> Chrome(Color(0xFF2A231D), Color(0x992A231D), Color(0x0D000000), Color.Transparent, Color(0xFF2A231D), Color(0xFFFCF9F4), Color.Transparent)
+        GridStyle.VINTAGE -> Chrome(Color(0xFF3B2A1B), Color(0xA63B2A1B), Color.Transparent, Color(0x998A7154), Color(0xFF5E4029), Color(0xFFF5ECD8), Color.Transparent)
+        GridStyle.COMIC -> Chrome(Color.White, Color(0xD9FFFFFF), Color(0x26000000), Color.Transparent, Color(0xFF161616), Color(0xFFFFD84D), ComicBar)
+    }
 
     /** Covers on yellowed paper look printed long ago, a little. */
     val Sepia: ColorFilter by lazy {
@@ -211,6 +252,14 @@ internal object GridPalette {
                     ),
             )
             if (style == GridStyle.DARK || style == GridStyle.LIGHT) {
+                // The edge of the pages on the right, catching a little light: a book, not a picture.
+                Box(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(1.5.dp)
+                        .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.32f), Color.White.copy(alpha = 0.08f)))),
+                )
                 // A fine light along the top edge, as glossy card catches it.
                 val rim = if (style == GridStyle.DARK) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.5f)
                 Box(Modifier.fillMaxSize().border(1.dp, Brush.verticalGradient(listOf(rim, Color.Transparent), endY = 220f), shape))
@@ -252,11 +301,10 @@ internal object GridPalette {
     const val TILE_ASPECT = 0.66f
 }
 
-/** The theme of the grid in [style]: the app's own when dark. */
+/** The theme of the grid in [style]. */
 @Composable
 internal fun GridTheme(style: GridStyle, content: @Composable () -> Unit) {
-    val colors = GridPalette.colors(style)
-    if (colors == null) content() else MaterialTheme(colorScheme = colors, typography = MaterialTheme.typography, content = content)
+    MaterialTheme(colorScheme = GridPalette.colors(style), typography = MaterialTheme.typography, content = content)
 }
 
 /**

@@ -31,10 +31,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -46,6 +48,7 @@ import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -68,6 +71,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -88,6 +92,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -1532,7 +1537,6 @@ private fun GridLibraryContent(
 ) {
     val style = look.style
     SystemBarsFor(style)
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var ordering by remember { mutableStateOf(false) }
@@ -1545,80 +1549,52 @@ private fun GridLibraryContent(
         query = ""
     }
 
-    // The page under the grid is drawn by gridBackground: a soft gradient in every look.
+    val gridState = rememberLazyGridState()
+    // Once the covers scroll under the header, it takes a veil of the page's top colour.
+    val scrolled by remember { derivedStateOf { gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 8 } }
+    val chrome = GridPalette.chrome(style)
     val (groundTop, _, _) = GridPalette.ground(style)
+    val veil by animateColorAsState(if (scrolled) groundTop.copy(alpha = 0.94f) else groundTop.copy(alpha = 0f), label = "veil")
+    // The page under the grid is drawn by gridBackground: a soft gradient in every look.
     Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection).gridBackground(style),
+        modifier = Modifier.gridBackground(style),
         containerColor = Color.Transparent,
+        // A see-through page still needs its own ink: the titles under the covers.
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
-            Column {
-                TopAppBar(
-                    colors = when (style) {
-                        GridStyle.COMIC -> TopAppBarDefaults.topAppBarColors(
-                            containerColor = GridPalette.ComicBar,
-                            scrolledContainerColor = GridPalette.ComicBar,
-                            titleContentColor = Color.White,
-                            actionIconContentColor = Color.White,
-                        )
-                        // Over the page itself; once the covers scroll under it, a veil of the page's top colour.
-                        else -> TopAppBarDefaults.topAppBarColors(
-                            containerColor = Color.Transparent,
-                            scrolledContainerColor = groundTop.copy(alpha = 0.94f),
-                        )
+            Column(Modifier.background(veil)) {
+                GridHeader(
+                    count = comics.size,
+                    style = style,
+                    chrome = chrome,
+                    onMenu = { viewing = true },
+                    menu = { GridViewMenu(expanded = viewing, look = look, onDismiss = { viewing = false }) },
+                    onSearch = {
+                        searching = !searching
+                        if (!searching) query = ""
                     },
-                    title = {
-                        Column {
-                            when (style) {
-                                GridStyle.VINTAGE -> Text("Readcomic", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic, fontSize = 24.sp)
-                                GridStyle.COMIC -> Text("READCOMIC", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic, letterSpacing = 1.sp)
-                                else -> Text("Readcomic", fontWeight = FontWeight.SemiBold, letterSpacing = 0.3.sp)
+                    onShowShelves = onShowShelves,
+                    onOrder = { ordering = true },
+                    orderMenu = {
+                        DropdownMenu(expanded = ordering, onDismissRequest = { ordering = false }) {
+                            ShelfOrder.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label, fontWeight = if (option == order) FontWeight.Bold else FontWeight.Normal) },
+                                    onClick = {
+                                        onOrderChange(option)
+                                        ordering = false
+                                    },
+                                )
                             }
-                            Text(
-                                "Библиотека · ${comics.size}",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontFamily = if (style == GridStyle.VINTAGE) FontFamily.Serif else null,
-                                color = if (style == GridStyle.COMIC) Color.White.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                         }
                     },
-                    actions = {
-                        IconButton(onClick = { searching = !searching; if (!searching) query = "" }) {
-                            Icon(Icons.Filled.Search, contentDescription = "Поиск")
-                        }
-                        Box {
-                            IconButton(onClick = { ordering = true }) {
-                                Icon(SortIcon, contentDescription = "Порядок")
-                            }
-                            DropdownMenu(expanded = ordering, onDismissRequest = { ordering = false }) {
-                                ShelfOrder.entries.forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text(option.label, fontWeight = if (option == order) FontWeight.Bold else FontWeight.Normal) },
-                                        onClick = {
-                                            onOrderChange(option)
-                                            ordering = false
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                        Box {
-                            IconButton(onClick = { viewing = true }) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "Вид")
-                            }
-                            GridViewMenu(expanded = viewing, look = look, onDismiss = { viewing = false })
-                        }
-                        IconButton(onClick = onShowShelves) {
-                            Icon(ShelfIcon, contentDescription = "На полках")
-                        }
-                    },
-                    scrollBehavior = scrollBehavior,
                 )
                 if (style == GridStyle.VINTAGE) {
                     // A double rule under the masthead, as in an old magazine.
-                    val rule = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(rule))
+                    val rule = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(0.6.dp).background(rule))
                     Spacer(Modifier.height(2.dp))
-                    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(2.dp).background(rule))
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.5.dp).background(rule))
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 AnimatedVisibility(visible = searching) {
@@ -1643,11 +1619,15 @@ private fun GridLibraryContent(
             }
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
+            FloatingActionButton(
                 onClick = onAdd,
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("Добавить") },
-            )
+                shape = CircleShape,
+                containerColor = chrome.fab,
+                contentColor = chrome.fabInk,
+                modifier = Modifier.size(60.dp),
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = "Добавить", modifier = Modifier.size(28.dp))
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
@@ -1664,11 +1644,12 @@ private fun GridLibraryContent(
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(112.dp),
+                state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,
                     top = padding.calculateTopPadding() + 8.dp,
-                    bottom = padding.calculateBottomPadding() + 88.dp,
+                    bottom = padding.calculateBottomPadding() + 96.dp,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(18.dp),
                 verticalArrangement = Arrangement.spacedBy(26.dp),
@@ -1685,6 +1666,100 @@ private fun GridLibraryContent(
                 }
             }
         }
+    }
+}
+
+/**
+ * The header of the plain grid: the collection named in the very middle, the look's menu and
+ * search on the left, the shelves and the order on the right, in round buttons.
+ */
+@Composable
+private fun GridHeader(
+    count: Int,
+    style: GridStyle,
+    chrome: GridPalette.Chrome,
+    onMenu: () -> Unit,
+    menu: @Composable () -> Unit,
+    onSearch: () -> Unit,
+    onShowShelves: () -> Unit,
+    onOrder: () -> Unit,
+    orderMenu: @Composable () -> Unit,
+) {
+    Box(
+        Modifier
+            .background(chrome.bar)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(SafeInsets.only(WindowInsetsSides.Horizontal))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .fillMaxWidth(),
+    ) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val side = 40.dp * 2 + 8.dp
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.align(Alignment.CenterStart)) {
+                Box {
+                    // The menu wears no button, as in the header of a magazine.
+                    HeaderButton(onMenu, "Оформление", chrome, plain = true) {
+                        Icon(Icons.Filled.Menu, contentDescription = null, tint = chrome.ink, modifier = Modifier.size(24.dp))
+                    }
+                    menu()
+                }
+                HeaderButton(onSearch, "Поиск", chrome) {
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = chrome.ink, modifier = Modifier.size(21.dp))
+                }
+            }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.align(Alignment.Center).width((maxWidth - side * 2 - 8.dp).coerceAtLeast(60.dp)),
+            ) {
+                val (family, weight, italic) = when (style) {
+                    GridStyle.VINTAGE -> Triple(FontFamily.Serif, FontWeight.SemiBold, FontStyle.Normal)
+                    GridStyle.COMIC -> Triple(null, FontWeight.Black, FontStyle.Italic)
+                    else -> Triple(null, FontWeight.Medium, FontStyle.Normal)
+                }
+                BasicText(
+                    "КОЛЛЕКЦИЯ",
+                    style = TextStyle(color = chrome.ink, fontFamily = family, fontWeight = weight, fontStyle = italic, letterSpacing = 1.5.sp),
+                    maxLines = 1,
+                    autoSize = TextAutoSize.StepBased(minFontSize = 11.sp, maxFontSize = 20.sp),
+                )
+                Text(
+                    comicsCount(count).uppercase(),
+                    color = chrome.muted,
+                    fontFamily = family,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.2.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.align(Alignment.CenterEnd)) {
+                HeaderButton(onShowShelves, "На полках", chrome) {
+                    Icon(ShelfIcon, contentDescription = null, tint = chrome.ink, modifier = Modifier.size(21.dp))
+                }
+                Box {
+                    HeaderButton(onOrder, "Порядок", chrome) {
+                        Icon(MoreHorizIcon, contentDescription = null, tint = chrome.ink, modifier = Modifier.size(22.dp))
+                    }
+                    orderMenu()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeaderButton(onClick: () -> Unit, description: String, chrome: GridPalette.Chrome, plain: Boolean = false, content: @Composable () -> Unit) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(if (plain) Color.Transparent else chrome.button)
+            .border(1.dp, if (plain) Color.Transparent else chrome.rim, CircleShape)
+            .clickable(onClickLabel = description, onClick = onClick)
+            .semantics { contentDescription = description },
+    ) {
+        content()
     }
 }
 
@@ -1732,6 +1807,8 @@ private fun ComicCard(entry: ComicEntry, coverFile: File, look: GridLook, onClic
                 GridStyle.VINTAGE -> FontWeight.SemiBold
                 else -> FontWeight.Medium
             },
+            // Its own ink, whatever the page around it: white on the dark look.
+            color = MaterialTheme.colorScheme.onBackground,
             lineHeight = 18.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
