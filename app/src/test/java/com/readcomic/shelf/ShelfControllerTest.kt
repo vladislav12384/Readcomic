@@ -1,6 +1,7 @@
 package com.readcomic.shelf
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -404,5 +405,22 @@ class ShelfControllerTest {
         // The brightest is the display case as it was made: the shaders take it unchanged.
         assertEquals(1f, CaseLight.BRIGHT.glow, 0f)
         assertTrue(CaseLight.DIM.glow > 0f && CaseLight.DIM.glow < CaseLight.MEDIUM.glow && CaseLight.MEDIUM.glow < CaseLight.BRIGHT.glow)
+    }
+
+    @Test
+    fun bigPicturesWaitWhileAComicFliesToTheHandOrBack() {
+        val c = controller()
+        c.settle()
+        assertTrue(c.frame().calm)
+        c.take("c2")
+        repeat(6) { c.step(1f / 60f) }
+        assertFalse("on its way to the hand", c.frame().calm)
+        c.settle()
+        assertTrue("in hand", c.frame().calm)
+        c.putBack()
+        repeat(6) { c.step(1f / 60f) }
+        assertFalse("on its way back", c.frame().calm)
+        c.settle()
+        assertTrue("back on its shelf", c.frame().calm)
     }
 }

@@ -179,14 +179,35 @@ class ShelfArtCache(
         }
     }
 
-    /** Uploads decoded pictures within a small time budget. Returns true if more are waiting. */
-    fun uploadPending(budgetMillis: Long): Boolean {
+    /**
+     * Uploads decoded pictures within a small time budget. Returns true if more are waiting.
+     *
+     * The big pictures of a comic in hand ([ShelfArtMemory.isSharp]) take a frame of their own
+     * to upload, which shows as a jolt in anything moving: they wait for a [calm] frame (the
+     * small cover stands in for them meanwhile). Those of a comic that is no longer [sharpWanted]
+     * (it went back to its shelf before they were ready) are dropped.
+     */
+    fun uploadPending(budgetMillis: Long, calm: Boolean = true, sharpWanted: (String) -> Boolean = { true }): Boolean {
         val start = SystemClock.uptimeMillis()
+        val later = ArrayList<Decoded>(0)
+        var more = false
         while (true) {
-            val next = decoded.poll() ?: return false
+            val next = decoded.poll() ?: break
             if (next.generation != generation) {
                 if (!next.kept) next.bitmap?.recycle()
                 continue
+            }
+            if (ShelfArtMemory.isSharp(next.key) && next.bitmap != null && !next.skipped) {
+                if (!sharpWanted(next.key.substringAfter(':'))) {
+                    inFlight -= next.key
+                    wanted.remove(next.key)
+                    if (!next.kept) next.bitmap.recycle()
+                    continue
+                }
+                if (!calm) {
+                    later += next
+                    continue
+                }
             }
             inFlight -= next.key
             wanted.remove(next.key)
@@ -200,8 +221,14 @@ class ShelfArtCache(
             textures[next.key] = upload(bitmap)
             if (!next.kept) bitmap.recycle()
             trim()
-            if (SystemClock.uptimeMillis() - start >= budgetMillis) return decoded.isNotEmpty()
+            if (SystemClock.uptimeMillis() - start >= budgetMillis) {
+                more = decoded.isNotEmpty()
+                break
+            }
         }
+        // Back in line for a calm frame.
+        decoded.addAll(later)
+        return more || later.isNotEmpty()
     }
 
     /** Keeps the most recently used textures; sharp covers are big, so only a few of them. */

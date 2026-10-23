@@ -145,6 +145,11 @@ class ShelfFrame(
     /** Where the comics stand across a shelf: the width of a place and the x of one of its sides. */
     val cellWidth: Float = 0f,
     val cellOrigin: Float = 0f,
+    /**
+     * Nothing is on its way: no comic flying to the hand or back, no box moving. Big pictures
+     * wait for such a frame to be uploaded, as one takes a frame of its own.
+     */
+    val calm: Boolean = true,
 )
 
 /**
@@ -718,6 +723,7 @@ class ShelfController(private val density: Float) {
             lightsTime = lightsTime,
             rowHeight = rowHeight,
             unbox = unbox,
+            calm = (heldId == null || (holding && hold.isAt(1f, 0f, 0.01f, 0.05f))) && !unboxing.moving,
             glows = glows,
             cellWidth = slotWidth,
             cellOrigin = cellOrigin,

@@ -77,7 +77,6 @@ class ShelfRenderer(
     private var height = 1
     private var lastFrameNanos = 0L
     private var freshFrames = 0
-    private var unboxWaiting = false
 
     /** Background behind the scene (where nothing is drawn). */
     @Volatile
@@ -158,10 +157,13 @@ class ShelfRenderer(
             else -> 10L
         }
         freshFrames++
-        if (art.uploadPending(budgetMillis = budget)) animating = true
+        val frame = controller.frame()
+        // The big pictures are only for the comic in hand and the one coming out of the box.
+        val heldId = frame.comics.lastOrNull { it.held }?.id
+        val boxFront = frame.unbox?.frontId
+        if (art.uploadPending(budget, frame.calm) { id -> id == heldId || id == boxFront }) animating = true
         lastFrameNanos = if (animating || touching) now else 0L
 
-        val frame = controller.frame()
         for (comic in frame.comics) {
             art.request("cover:${comic.id}")
             art.request("spine:${comic.id}")
@@ -181,7 +183,6 @@ class ShelfRenderer(
 
         renderShadows(frame)
         renderScene(frame)
-        if (unboxWaiting) animating = true
         wantsFrames = animating
         if (animating) requestRender()
     }
@@ -297,16 +298,13 @@ class ShelfRenderer(
             GLES30.glDisable(GLES30.GL_BLEND)
         }
         frame.unbox?.let { box ->
-            // The shelves come first: the box's own program is built a few frames later.
+            // Built with the box's first frame: with the first frame of the shelves when the box is
+            // there already (hidden by the curtain), not a few frames into the box coming in,
+            // where it would stop it for a moment.
             if (unboxProgramStyle != look) {
                 unboxProgram?.delete()
                 unboxProgram = null
             }
-            if (unboxProgram == null && freshFrames < UNBOX_DELAY_FRAMES) {
-                unboxWaiting = true
-                return@let
-            }
-            unboxWaiting = false
             val unbox = unboxProgram ?: GlProgram.fromAssets(assets, "shelf.vert", "unbox.frag", styleDefine(look)).also {
                 unboxProgram = it
                 unboxProgramStyle = look
@@ -837,9 +835,6 @@ class ShelfRenderer(
         const val MATERIAL_STRIP = 9
         const val MATERIAL_STAR = 10
         const val MATERIAL_GLOW = 13
-
-        /** Frames drawn before the program of the box of new comics is built. */
-        const val UNBOX_DELAY_FRAMES = 4
 
         /**
          * Unit box, -0.5..0.5. Per vertex: position, normal, uv, face (0 front, 1 back, 2 left,
