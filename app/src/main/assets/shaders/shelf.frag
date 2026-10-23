@@ -105,13 +105,13 @@ vec3 caseBoard(vec3 v, bool panel) {
     if (vFace == 0) {
         float d = panel ? abs(vLocal.x) * size.x : (0.5 - vLocal.y) * size.y;
         float line = 1.0 - smoothstep(0.0005, 0.0012 + fwidth(d), d);
-        color += COLD * line * (panel ? 0.5 : 1.4) * (0.3 + 0.7 * lit);
+        color += COLD * line * (panel ? 0.5 : 0.4) * (0.3 + 0.7 * lit);
         if (!panel) {
             // Along the bottom of the edge the light strip itself shows, bright, and lights the edge a little.
             float b = (vLocal.y + 0.5) * size.y;
-            float led = 1.0 - smoothstep(0.0008, 0.0022 + fwidth(b), b);
+            float led = 1.0 - smoothstep(0.0005, 0.0015 + fwidth(b), b);
             float below = stripOn(max(bayOf(p.y - 0.02), 0.0));
-            color += COLD * (led * 2.6 + exp(-b / 0.008) * 0.12) * below;
+            color += COLD * (led * 1.5 + exp(-b / 0.006) * 0.07) * below;
         }
     }
     if (vFace == 5) color = withStrip(color, p);
@@ -175,7 +175,7 @@ vec3 caseWall(vec3 p, float occlusion, float bay, float ceilingY) {
         // that widens and fades as it goes down the wall.
         float wash = exp(-below / 0.02) * (0.4 + 0.6 * exp(-dx * dx / 0.003));
         float cone = exp(-below / 0.13) * exp(-dx * dx / (0.0012 + below * 0.014));
-        color += COLD * (wash * 0.42 + cone * 0.28) * stripOn(bay);
+        color += COLD * (wash * 0.32 + cone * 0.22) * stripOn(bay);
     }
     return color;
 }
@@ -195,7 +195,7 @@ vec3 ledGlow() {
     float y = vLocal.y * boxSize().y;
     float lit = stripOn(max(bayOf(uModel[3].y - 0.004), 0.0));
     // Gone by the edges of the quad, so that no edge of it shows.
-    float glow = (exp(-abs(y) / 0.004) * 0.5 + exp(-abs(y) / 0.014) * 0.16) * (1.0 - smoothstep(0.25, 0.5, abs(vLocal.y)));
+    float glow = (exp(-abs(y) / 0.004) * 0.3 + exp(-abs(y) / 0.014) * 0.1) * (1.0 - smoothstep(0.25, 0.5, abs(vLocal.y)));
     float f = fract((vWorld.x - uCells.y) / uCells.x);
     float pool = uStyle == 3 ? 0.45 + 0.55 * (0.5 - 0.5 * cos(f * 2.0 * PI)) : 1.0;
     return COLD * glow * pool * lit;

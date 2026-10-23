@@ -218,10 +218,7 @@ class ShelfController(private val density: Float) {
      */
     var cells = false
 
-    /**
-     * Laid out as a display: at least four comics across (smaller on screen), standing upright,
-     * without paper labels, name plate or series signs.
-     */
+    /** Laid out as a display: comics standing upright, without paper labels, name plate or series signs. */
     var showcase = false
         set(value) {
             if (field == value) return
@@ -235,6 +232,34 @@ class ShelfController(private val density: Float) {
             if (field == value) return
             field = value
             if (sized) setViewSize(viewWidth.toInt(), viewHeight.toInt())
+        }
+
+    /**
+     * How many comics a shelf holds at least, as the reader chose (2 to 4): more make them
+     * smaller on screen. A wide screen may fit more anyway.
+     */
+    var columnsWanted = 2
+        set(value) {
+            val wanted = value.coerceIn(2, 4)
+            if (field == wanted) return
+            field = wanted
+            if (sized) setViewSize(viewWidth.toInt(), viewHeight.toInt())
+        }
+
+    /**
+     * Pixels the screen's own header takes at the top over a display: at the top of the scroll
+     * the bookcase starts right under it (its top board hidden behind it).
+     */
+    var topRoom = 0f
+        set(value) {
+            if (field == value) return
+            val wasTop = sized && cameraY >= scrollTop - TOP_SLACK
+            field = value
+            if (sized) {
+                updateHeaderDrop()
+                // At the top of the scroll it stays there: the bookcase moves down under the header.
+                if (wasTop && showcase) cameraY = scrollTop else clampScroll(hard = false)
+            }
         }
 
     /** How far the comics lean back against the wall. */
@@ -405,6 +430,8 @@ class ShelfController(private val density: Float) {
     private val slotWidth get() = SLOT_WIDTH
 
     fun setViewSize(width: Int, height: Int) {
+        // A display at the top of its scroll stays at the top of the new layout.
+        val wasTop = sized && cameraY >= scrollTop - TOP_SLACK
         sized = true
         viewWidth = max(width, 1).toFloat()
         viewHeight = max(height, 1).toFloat()
@@ -414,13 +441,15 @@ class ShelfController(private val density: Float) {
         // fewer than two (four in a display).
         val minDistance = MIN_VISIBLE_HEIGHT / (2f * tanHalf)
         val visibleWidth = 2f * minDistance * tanHalf * aspect
-        columns = floor((visibleWidth - 0.06f) / slotWidth).toInt().coerceIn(if (showcase) 4 else 2, 8)
+        columns = max(columnsWanted, floor((visibleWidth - 0.06f) / slotWidth).toInt().coerceIn(2, 8))
         // A glass frame is seen whole, with a little of the wall on either side.
         val shelfWidth = columns * slotWidth + if (framed) 2f * (FRAME_INSET + POST_WIDTH) + 0.07f else 0.04f
         distance = max(minDistance, shelfWidth / 2f / (tanHalf * aspect)) + PLANK_DEPTH
         handFill = if (aspect > 1f) 0.66f else 0.52f
+        updateHeaderDrop()
         // Turned round: everything is laid out anew, no need to slide.
         room.copyInto(shownRoom)
+        if (wasTop && showcase) cameraY = scrollTop
         clampScroll(hard = true)
         applyPendingScroll()
     }
@@ -435,11 +464,22 @@ class ShelfController(private val density: Float) {
     private fun rowBase(row: Int) = -row * rowHeight
 
     private val corniceBottom get() = rowHeight - PLANK_THICKNESS
-    private val scrollTop get() = corniceBottom + CORNICE_HEIGHT + topMargin - visibleHalfHeight
+    private val scrollTop: Float
+        get() = if (showcase) {
+            // The top board hides behind the header; the first shelf's light starts right under it.
+            corniceBottom + 0.012f + headerDrop
+        } else {
+            corniceBottom + CORNICE_HEIGHT + 0.10f - visibleHalfHeight
+        }
 
-    /** Wall above the bookcase at the top of the scroll; in a display, room for the screen's header. */
-    private val topMargin: Float
-        get() = if (showcase) max(0.10f, SHOWCASE_HEADER_DP * density * 2f * visibleHalfHeight / viewHeight) else 0.10f
+    /** How far below the camera's height the bottom of the header ([topRoom]) falls, on the plane of the comics. */
+    private var headerDrop = 0f
+
+    private fun updateHeaderDrop() {
+        val (near, far) = eyeRay(viewWidth / 2f, topRoom) ?: return
+        val t = (BOTTOM_Z - near.z) / (far.z - near.z)
+        headerDrop = cameraY - (near.y + (far.y - near.y) * t)
+    }
     private val scrollBottom get() = min(scrollTop, rowBase(rows - 1) - 0.08f + visibleHalfHeight)
 
     private fun sizeOf(item: ShelfItem): Vec3 {
@@ -1142,14 +1182,14 @@ class ShelfController(private val density: Float) {
         const val DIVIDER_THICKNESS = 0.007f
         const val DIVIDER_DEPTH = PLANK_DEPTH - 0.008f
 
-        /** The header over a display (ShowcaseHeader), dp: the top of the bookcase stays clear of it. */
-        private const val SHOWCASE_HEADER_DP = 76f
-
         /** How far the glow of a light strip reaches above and below it. */
         private const val GLOW_HEIGHT = 0.08f
 
         /** A comic in a display stands nearly upright, on a little stand. */
         private const val SHOWCASE_LEAN = 0.035f
+
+        /** Within this of the top of the scroll counts as at the top. */
+        private const val TOP_SLACK = 0.002f
 
         /** A glass frame: the width of its uprights, and the room between them and the comics beside them. */
         const val POST_WIDTH = 0.028f

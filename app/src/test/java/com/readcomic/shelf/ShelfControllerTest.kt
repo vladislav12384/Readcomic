@@ -184,6 +184,9 @@ class ShelfControllerTest {
         assertTrue(plain.frame().plaque != null)
 
         val display = controller().apply { showcase = true }
+        // Two across on a phone, as the plain bookcase, unless the reader asks for more.
+        assertEquals(2, display.columns)
+        display.columnsWanted = 4
         assertEquals(4, display.columns)
         val frame = display.frame()
         assertTrue(frame.labels.isEmpty())
@@ -192,9 +195,37 @@ class ShelfControllerTest {
         val comic = frame.comics.first()
         val normal = (Mat4.transformPoint(comic.model, Vec3(0f, 0f, 1f)) - Mat4.transformPoint(comic.model, Vec3.ZERO)).normalized()
         assertTrue("upright, z=${normal.z}", normal.z > 0.99f)
-        // Back to the plain bookcase: as it was.
+        // Back to the plain bookcase and two across: as it was.
         display.showcase = false
+        display.columnsWanted = 2
         assertEquals(2, display.columns)
+    }
+
+    @Test
+    fun theReaderChoosesHowManyAcrossAndAWideScreenStillFitsMore() {
+        val c = controller()
+        c.columnsWanted = 3
+        assertEquals(3, c.columns)
+        c.columnsWanted = 9
+        assertEquals(4, c.columns)
+        val wide = controller(2280, 1080).apply { columnsWanted = 3 }
+        assertTrue(wide.columns >= 4)
+    }
+
+    @Test
+    fun aDisplayStartsRightUnderItsHeader() {
+        val c = controller().apply {
+            showcase = true
+            topRoom = 300f
+        }
+        c.settle()
+        // The top of the first comic is seen below the header's bottom edge.
+        val frame = c.frame()
+        val first = frame.comics.first { it.id == "c0" }
+        val top = Mat4.transformPoint(frame.viewProj, Mat4.transformPoint(first.model, Vec3(0f, 0.5f, 0f)))
+        val y = (1f - top.y) / 2f * 2280f
+        assertTrue("first comic at $y px, under a 300 px header", y > 300f)
+        assertTrue("but not far below it, at $y px", y < 600f)
     }
 
     @Test
@@ -202,6 +233,7 @@ class ShelfControllerTest {
         val c = controller().apply {
             showcase = true
             framed = true
+            columnsWanted = 4
         }
         val frame = c.frame()
         assertEquals(2, frame.posts.size)

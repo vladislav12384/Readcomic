@@ -89,6 +89,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -113,6 +114,8 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -176,6 +179,9 @@ fun LibraryScreen(
     /** The look of the bookcase. */
     shelfStyle: ShelfStyle = ShelfStyle.WOOD,
     onShelfStyleChange: (ShelfStyle) -> Unit = {},
+    /** How many comics a shelf holds at least (2 to 4). */
+    shelfColumns: Int = 2,
+    onShelfColumnsChange: (Int) -> Unit = {},
     /** Reading [ComicEntry] again from its first page. */
     onStartOver: (ComicEntry) -> Unit = {},
     /** The box of new comics: what it does, and what the reader does with it. */
@@ -219,6 +225,8 @@ fun LibraryScreen(
             onShelfSizeChange = onShelfSizeChange,
             shelfStyle = shelfStyle,
             onShelfStyleChange = onShelfStyleChange,
+            shelfColumns = shelfColumns,
+            onShelfColumnsChange = onShelfColumnsChange,
             onStartOver = onStartOver,
             unboxing = unboxing,
             handHint = handHint,
@@ -307,6 +315,8 @@ private fun ShelfLibrary(
     onShelfSizeChange: (ShelfSize) -> Unit,
     shelfStyle: ShelfStyle,
     onShelfStyleChange: (ShelfStyle) -> Unit,
+    shelfColumns: Int,
+    onShelfColumnsChange: (Int) -> Unit,
     onStartOver: (ComicEntry) -> Unit,
     unboxing: UnboxSettings,
     handHint: Boolean,
@@ -321,6 +331,8 @@ private fun ShelfLibrary(
     val unpacking = unbox.phase == UnboxPhase.SEALED || unbox.phase == UnboxPhase.TEARING || unbox.phase == UnboxPhase.BUSY
     val currentUnboxing by rememberUpdatedState(unboxing)
     var view by remember { mutableStateOf<ShelfView?>(null) }
+    // Where the header of a display ends on screen, pixels (it is measured once laid out).
+    var headerBottom by remember { mutableFloatStateOf(0f) }
     var heldId by remember { mutableStateOf<String?>(null) }
     // The small panels from the corner buttons: the wall paint, the order.
     var picking by remember { mutableStateOf(false) }
@@ -405,6 +417,9 @@ private fun ShelfLibrary(
     LaunchedEffect(view, shelfStyle) {
         view?.setStyle(shelfStyle)
     }
+    LaunchedEffect(view, shelfColumns) {
+        view?.setColumns(shelfColumns)
+    }
     LaunchedEffect(view, shelfSize) {
         view?.setShelfSize(shelfSize)
     }
@@ -433,6 +448,9 @@ private fun ShelfLibrary(
         val landscape = maxWidth > maxHeight
         // Where panels open: under the corner buttons, or under the header of a display.
         val underHeader = if (shelfStyle.showcase) 84.dp else 64.dp
+        LaunchedEffect(view, headerBottom, shelfStyle.showcase) {
+            view?.setTopRoom(if (shelfStyle.showcase) headerBottom else 0f)
+        }
 
         AndroidView(
             factory = { ctx ->
@@ -492,6 +510,24 @@ private fun ShelfLibrary(
                 .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.45f), 1f to Color.Black.copy(alpha = 0.1f))),
         )
 
+        if (shelfStyle.showcase && held == null) {
+            // Under the header of a display: the dark of the room, fading out just below it, so
+            // the bookcase seems to start under the header.
+            val scrimHeight = with(LocalDensity.current) { headerBottom.toDp() } + 14.dp
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(scrimHeight)
+                    .background(
+                        Brush.verticalGradient(
+                            0f to ShelfRoom.copy(alpha = 0.97f),
+                            0.82f to ShelfRoom.copy(alpha = 0.9f),
+                            1f to Color.Transparent,
+                        ),
+                    ),
+            )
+        }
         AnimatedVisibility(
             visible = shelfStyle.showcase && held == null && !searching && !unpacking,
             enter = fadeIn(),
@@ -516,6 +552,7 @@ private fun ShelfLibrary(
                     picking = false
                     ordering = !ordering
                 },
+                onBottom = { headerBottom = it },
             )
         }
         AnimatedVisibility(
@@ -798,6 +835,8 @@ private fun ShelfLibrary(
                 onSelect = onThemeChange,
                 style = shelfStyle,
                 onStyleChange = onShelfStyleChange,
+                columns = shelfColumns,
+                onColumnsChange = onShelfColumnsChange,
                 size = shelfSize,
                 onSizeChange = onShelfSizeChange,
                 unboxing = unboxing,
@@ -917,6 +956,8 @@ private fun ShowcaseHeader(
     onSearch: () -> Unit,
     onShowGrid: () -> Unit,
     onOrder: () -> Unit,
+    /** Where the header ends, in pixels from the top of the screen. */
+    onBottom: (Float) -> Unit,
 ) {
     val iris = style.framed
     val bar = if (style.framed) {
@@ -934,32 +975,41 @@ private fun ShowcaseHeader(
             .windowInsetsPadding(SafeInsets)
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .widthIn(max = 640.dp)
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .onGloballyPositioned { onBottom(it.boundsInRoot().bottom) },
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().then(bar)) {
-            RoundButton(onClick = onMenu, description = "Настройки", glass = true, iridescent = iris, size = 42.dp) {
-                Icon(Icons.Filled.Menu, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
+        // Two buttons either side, so that the name stands right in the middle.
+        BoxWithConstraints(Modifier.fillMaxWidth().then(bar)) {
+            val side = 42.dp * 2 + 8.dp
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.CenterStart)) {
+                RoundButton(onClick = onMenu, description = "Настройки", glass = true, iridescent = iris, size = 42.dp) {
+                    Icon(Icons.Filled.Menu, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
+                }
+                RoundButton(onClick = onSearch, description = "Поиск", glass = true, iridescent = iris, size = 42.dp) {
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
+                }
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).padding(horizontal = 6.dp)) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.align(Alignment.Center).width((maxWidth - side * 2 - 12.dp).coerceAtLeast(60.dp)),
+            ) {
                 // As large as fits between the buttons, down to small screens.
                 BasicText(
                     "КОЛЛЕКЦИЯ",
                     style = TextStyle(color = ShowcaseInk, fontWeight = FontWeight.Medium, letterSpacing = 1.5.sp),
                     maxLines = 1,
-                    autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = 19.sp),
+                    autoSize = TextAutoSize.StepBased(minFontSize = 11.sp, maxFontSize = 19.sp),
                 )
                 Text(
                     comicsCount(count).uppercase(),
                     color = ShowcaseInk.copy(alpha = 0.55f),
                     fontSize = 11.sp,
-                    letterSpacing = 1.5.sp,
+                    letterSpacing = 1.2.sp,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RoundButton(onClick = onSearch, description = "Поиск", glass = true, iridescent = iris, size = 42.dp) {
-                    Icon(Icons.Filled.Search, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.CenterEnd)) {
                 RoundButton(onClick = onShowGrid, description = "Сеткой", glass = true, iridescent = iris, accent = true, size = 42.dp) {
                     Icon(GridIcon, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(20.dp))
                 }
@@ -1004,6 +1054,8 @@ private fun ThemePicker(
     onSelect: (Int) -> Unit,
     style: ShelfStyle,
     onStyleChange: (ShelfStyle) -> Unit,
+    columns: Int,
+    onColumnsChange: (Int) -> Unit,
     size: ShelfSize,
     onSizeChange: (ShelfSize) -> Unit,
     unboxing: UnboxSettings,
@@ -1028,6 +1080,10 @@ private fun ThemePicker(
             Text("Комиксы на полках", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             Spacer(Modifier.height(8.dp))
             PillRow(ShelfSize.entries, size, { it.label }, onSizeChange)
+            Spacer(Modifier.height(16.dp))
+            Text("В ряд", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
+            Spacer(Modifier.height(8.dp))
+            PillRow(listOf(2, 3, 4), columns, { "$it" }, onColumnsChange)
             Spacer(Modifier.height(16.dp))
             Text("Новые комиксы", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             SettingSwitch("Приходят в коробке, распаковывать самому", unboxing.wrapNew, unboxing.onWrapNewChange)

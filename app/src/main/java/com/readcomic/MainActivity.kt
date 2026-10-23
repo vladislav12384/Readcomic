@@ -173,6 +173,7 @@ private fun App(viewModel: LibraryViewModel) {
     val shelfOrder by viewModel.shelfOrder.collectAsStateWithLifecycle()
     val shelfSize by viewModel.shelfSize.collectAsStateWithLifecycle()
     val shelfStyle by viewModel.shelfStyle.collectAsStateWithLifecycle()
+    val shelfColumns by viewModel.shelfColumns.collectAsStateWithLifecycle()
     val gridStyle by viewModel.gridStyle.collectAsStateWithLifecycle()
     val gridByShape by viewModel.gridByShape.collectAsStateWithLifecycle()
     val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
@@ -348,6 +349,8 @@ private fun App(viewModel: LibraryViewModel) {
                 onShelfSizeChange = viewModel::setShelfSize,
                 shelfStyle = shelfStyle,
                 onShelfStyleChange = viewModel::setShelfStyle,
+                shelfColumns = shelfColumns,
+                onShelfColumnsChange = viewModel::setShelfColumns,
                 onStartOver = { entry ->
                     viewModel.startOver(entry)
                     openId = entry.id

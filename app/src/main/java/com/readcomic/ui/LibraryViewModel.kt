@@ -103,6 +103,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     )
     val shelfStyle: StateFlow<ShelfStyle> = _shelfStyle.asStateFlow()
 
+    /** How many comics a shelf holds at least: 2 (as always), 3 or 4. */
+    private val _shelfColumns = MutableStateFlow(prefs.getInt(KEY_SHELF_COLUMNS, 2).coerceIn(2, 4))
+    val shelfColumns: StateFlow<Int> = _shelfColumns.asStateFlow()
+
     /** How large the comics look on the shelves. */
     private val _shelfSize = MutableStateFlow(
         runCatching { ShelfSize.valueOf(prefs.getString(KEY_SHELF_SIZE, null) ?: "") }.getOrDefault(ShelfSize.NORMAL),
@@ -211,6 +215,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun setShelfStyle(style: ShelfStyle) {
         _shelfStyle.value = style
         prefs.edit { putString(KEY_SHELF_STYLE, style.name) }
+    }
+
+    fun setShelfColumns(columns: Int) {
+        _shelfColumns.value = columns.coerceIn(2, 4)
+        prefs.edit { putInt(KEY_SHELF_COLUMNS, _shelfColumns.value) }
     }
 
     fun setShelfSize(size: ShelfSize) {
@@ -374,6 +383,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_SHELF_ORDER = "shelf_order"
         private const val KEY_SHELF_SIZE = "shelf_size"
         private const val KEY_SHELF_STYLE = "shelf_style"
+        private const val KEY_SHELF_COLUMNS = "shelf_columns"
         private const val KEY_GRID_STYLE = "grid_style"
         private const val KEY_GRID_SHAPE = "grid_shape"
         private const val KEY_GROUP_SERIES = "group_series"

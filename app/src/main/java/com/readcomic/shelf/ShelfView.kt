@@ -118,6 +118,12 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
     /** How large the comics look on the shelves. */
     fun setShelfSize(size: ShelfSize) = onGl { controller.size = size }
 
+    /** How many comics a shelf holds at least (2 to 4). */
+    fun setColumns(columns: Int) = onGl { controller.columnsWanted = columns }
+
+    /** Pixels the header takes at the top over a display; the bookcase starts under it. */
+    fun setTopRoom(pixels: Float) = onGl { controller.topRoom = pixels }
+
     /** Comics matching a search stay lit, the rest go into the shade; null ends the search. */
     fun highlight(ids: Set<String>?) = onGl { controller.highlight(ids) }
 
