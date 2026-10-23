@@ -29,7 +29,8 @@ uniform sampler2D uSpine;     // what is printed on the spine
 uniform float uHasSpine;
 uniform vec4 uBook;           // binding (0 stapled, 1 paperback, 2 hardcover), pages, board thickness, spine rounding
 uniform float uDim;           // darkening of everything but the comic in hand
-uniform float uHeld;          // 1 for the comic in hand: lit like in a photo studio
+uniform float uHeld;          // 1 for the comic in hand: lit like in a photo studio; between 0 and 1
+                              // on its way there or back, going over from the room's light smoothly
 uniform float uLightsTime;    // seconds since the shelf lights were switched on
 uniform vec3 uEye;
 uniform vec3 uLightDir;       // towards the room light
@@ -60,6 +61,7 @@ uniform float uAlpha;         // fading things: their opacity
 uniform vec2 uCells;          // places of the comics across a shelf: their width, the x of one of their sides
 uniform float uMirror;        // 1 while drawing the comics mirrored in the shelf tops
 uniform float uMirrorY;       // the shelf top they are mirrored in
+uniform float uMirrorFade;    // how much of the reflection there is (it fades as the comic is lifted off)
 uniform float uGlow;          // display case: how bright its lights are on the case, 1 the brightest
 
 out vec4 fragColor;
@@ -115,7 +117,7 @@ float luminance(vec3 c) {
 // region Light
 
 float shadowAt(vec3 n) {
-    if (uHeld > 0.5) return 1.0;
+    if (uHeld >= 1.0) return 1.0;
     vec3 p = vLight.xyz / vLight.w * 0.5 + 0.5;
     if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
     float bias = 0.0005 + 0.0015 * (1.0 - max(dot(n, uLightDir), 0.0));
@@ -128,7 +130,9 @@ float shadowAt(vec3 n) {
         vec3 c = vec3(p.xy + POISSON[i] * uShadowTexel * 2.5, p.z - bias);
         sum += comicsOnly ? texture(uComicShadow, c) : texture(uShadow, c);
     }
-    return sum / 8.0;
+    float shade = sum / 8.0;
+    // On its way to the hand the comic leaves the room's shadows behind, little by little.
+    return uHeld > 0.0 ? mix(shade, 1.0, uHeld) : shade;
 }
 
 // Bays are the spaces between two shelves; bay r stands on shelf r (its top at y = -r * row height).
@@ -169,16 +173,18 @@ vec3 ambient(vec3 n) {
     return mix(vec3(0.09, 0.075, 0.06), vec3(0.32, 0.30, 0.27), n.y * 0.5 + 0.5);
 }
 
-// Diffuse light reaching a surface (without its colour).
-vec3 irradiance(vec3 n, float occlusion) {
-    if (uHeld > 0.5) {
-        // Studio: a big soft key light up left, a fill on the right, a rim from behind.
-        float key = max(dot(n, normalize(vec3(-0.45, 0.50, 0.75))), 0.0);
-        float fill = max(dot(n, normalize(vec3(0.75, 0.10, 0.55))), 0.0);
-        float rim = max(dot(n, normalize(vec3(0.30, 0.55, -0.75))), 0.0);
-        return ambient(n) * 0.8 + vec3(1.0, 0.95, 0.88) * key * 1.0 + vec3(0.85, 0.90, 1.0) * fill * 0.3
-            + vec3(1.0, 0.85, 0.65) * rim * 0.5;
-    }
+// The studio the comic in hand is lit in: a big soft key light up left, a fill on the right, a
+// rim from behind.
+vec3 studioLight(vec3 n) {
+    float key = max(dot(n, normalize(vec3(-0.45, 0.50, 0.75))), 0.0);
+    float fill = max(dot(n, normalize(vec3(0.75, 0.10, 0.55))), 0.0);
+    float rim = max(dot(n, normalize(vec3(0.30, 0.55, -0.75))), 0.0);
+    return ambient(n) * 0.8 + vec3(1.0, 0.95, 0.88) * key * 1.0 + vec3(0.85, 0.90, 1.0) * fill * 0.3
+        + vec3(1.0, 0.85, 0.65) * rim * 0.5;
+}
+
+// The light of the room and of the shelf strips.
+vec3 roomLight(vec3 n, float occlusion) {
     vec3 key = vec3(1.0, 0.94, 0.86) * max(dot(n, uLightDir), 0.0) * shadowAt(n) * 0.6;
     // The room light comes up together with the first shelf lights.
     float room = 0.45 + 0.55 * smoothstep(0.0, 0.9, uLightsTime);
@@ -188,22 +194,41 @@ vec3 irradiance(vec3 n, float occlusion) {
     return light;
 }
 
+// Diffuse light reaching a surface (without its colour).
+vec3 irradiance(vec3 n, float occlusion) {
+    if (uHeld >= 1.0) return studioLight(n);
+    vec3 light = roomLight(n, occlusion);
+    // On its way to the hand the comic goes from the room's light into the studio's, smoothly.
+    return uHeld > 0.0 ? mix(light, studioLight(n), uHeld) : light;
+}
+
 // The room in front of the shelves as mirrored by shiny things: a tall window on the left with
 // its crossbars, a narrow studio softbox on the right, a glowing ceiling, a warm room and a dark
 // floor. [blur] softens every edge, for less polished surfaces.
+vec3 roomEnvironment(vec3 r, float blur);
+
+// A display mirrors a dark blue room: the long light strips above, a soft panel to the left.
+vec3 caseEnvironment(vec3 r, float blur) {
+    vec3 dark = mix(vec3(0.004, 0.006, 0.012), vec3(0.035, 0.05, 0.09), smoothstep(-0.4, 0.6, r.y));
+    if (r.z < 0.05) return dark;
+    vec2 q = r.xy / r.z;
+    float s = 0.012 + blur;
+    float strip = band(q.y, 0.9, 0.05, s + 0.02);
+    float panel = band(q.x, -0.75, 0.25, s + 0.05) * band(q.y, 0.3, 0.5, s + 0.05);
+    return dark + vec3(1.5, 1.8, 2.3) * strip * 0.6 + vec3(0.45, 0.6, 0.9) * panel * 0.3;
+}
+
 vec3 environment(vec3 r, float blur) {
     // The comic in hand mirrors the bright room whatever the bookcase, so that its gloss shows as
-    // it is turned; the rest of a display mirrors its own dark blue room.
-    if (uStyle >= 3 && uHeld < 0.5) {
-        // A display mirrors a dark blue room: the long light strips above, a soft panel to the left.
-        vec3 dark = mix(vec3(0.004, 0.006, 0.012), vec3(0.035, 0.05, 0.09), smoothstep(-0.4, 0.6, r.y));
-        if (r.z < 0.05) return dark;
-        vec2 q = r.xy / r.z;
-        float s = 0.012 + blur;
-        float strip = band(q.y, 0.9, 0.05, s + 0.02);
-        float panel = band(q.x, -0.75, 0.25, s + 0.05) * band(q.y, 0.3, 0.5, s + 0.05);
-        return dark + vec3(1.5, 1.8, 2.3) * strip * 0.6 + vec3(0.45, 0.6, 0.9) * panel * 0.3;
+    // it is turned (going over to it on its way); the rest of a display mirrors its own room.
+    if (uStyle >= 3 && uHeld < 1.0) {
+        vec3 dark = caseEnvironment(r, blur);
+        return uHeld > 0.0 ? mix(dark, roomEnvironment(r, blur), uHeld) : dark;
     }
+    return roomEnvironment(r, blur);
+}
+
+vec3 roomEnvironment(vec3 r, float blur) {
     vec3 room = mix(vec3(0.03, 0.025, 0.02), vec3(0.30, 0.27, 0.23), smoothstep(-0.45, 0.55, r.y));
     if (r.z < 0.05) return room * 0.8;
     vec2 q = r.xy / r.z;
@@ -228,14 +253,17 @@ vec3 coat(vec3 base, vec3 n, vec3 v, float strength, float blur) {
     return base * (1.0 - f) + environment(reflect(-v, n), blur) * f;
 }
 
-// Sharp highlight of the room light on a shiny surface.
+vec3 studioSparkle(vec3 n, vec3 v, float shininess, float amount) {
+    vec3 h = normalize(normalize(vec3(-0.45, 0.50, 0.75)) + v);
+    return vec3(1.0, 0.96, 0.9) * pow(max(dot(n, h), 0.0), shininess) * amount * 1.5;
+}
+
+// Sharp highlight of the room light on a shiny surface (of the studio's for the comic in hand).
 vec3 sparkle(vec3 n, vec3 v, float shininess, float amount) {
-    if (uHeld > 0.5) {
-        vec3 h = normalize(normalize(vec3(-0.45, 0.50, 0.75)) + v);
-        return vec3(1.0, 0.96, 0.9) * pow(max(dot(n, h), 0.0), shininess) * amount * 1.5;
-    }
+    if (uHeld >= 1.0) return studioSparkle(n, v, shininess, amount);
     vec3 h = normalize(uLightDir + v);
-    return vec3(1.0, 0.95, 0.88) * pow(max(dot(n, h), 0.0), shininess) * amount * shadowAt(n);
+    vec3 room = vec3(1.0, 0.95, 0.88) * pow(max(dot(n, h), 0.0), shininess) * amount * shadowAt(n);
+    return uHeld > 0.0 ? mix(room, studioSparkle(n, v, shininess, amount), uHeld) : room;
 }
 
 // endregion
@@ -313,7 +341,8 @@ vec3 comic(vec3 v) {
     float binding = uBook.x;
     float pages = max(uBook.y, 2.0);
     // Standing on the shelf: darker where the comic meets the wood.
-    float occlusion = uHeld > 0.5 ? 1.0 : 1.0 - 0.45 * exp(-(p.y + size.y * 0.5) / 0.012);
+    float occlusion = uHeld >= 1.0 ? 1.0 : 1.0 - 0.45 * exp(-(p.y + size.y * 0.5) / 0.012);
+    if (uHeld > 0.0 && uHeld < 1.0) occlusion = mix(occlusion, 1.0, uHeld);
     int part = vFace;
 
     if (part == 0 || part == 1) {

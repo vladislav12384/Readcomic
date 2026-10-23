@@ -529,13 +529,18 @@ private fun ShelfLibrary(
                 .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.45f), 1f to Color.Black.copy(alpha = 0.1f))),
         )
 
-        if (shelfStyle.showcase && held == null) {
-            // Under the header of a display: the dark of the room, fading out just below it, so
-            // the bookcase seems to start under the header.
+        // Under the header of a display: the dark of the room, fading out just below it, so the
+        // bookcase seems to start under the header. It goes and comes back with the header, as
+        // smoothly (all at once it showed as a flash at the top).
+        AnimatedVisibility(
+            visible = shelfStyle.showcase && held == null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
             val scrimHeight = with(LocalDensity.current) { headerBottom.toDp() } + 14.dp
             Box(
                 Modifier
-                    .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(scrimHeight)
                     .background(

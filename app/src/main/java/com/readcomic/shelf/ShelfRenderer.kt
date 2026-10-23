@@ -9,6 +9,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
@@ -161,7 +163,7 @@ class ShelfRenderer(
         // The big pictures are only for the comic in hand and the one coming out of the box.
         val heldId = frame.comics.lastOrNull { it.held }?.id
         val boxFront = frame.unbox?.frontId
-        if (art.uploadPending(budget, frame.calm) { id -> id == heldId || id == boxFront }) animating = true
+        if (art.uploadPending(budget) { id -> id == heldId || id == boxFront }) animating = true
         lastFrameNanos = if (animating || touching) now else 0L
 
         for (comic in frame.comics) {
@@ -279,7 +281,7 @@ class ShelfRenderer(
                 ComicShape.spineRadius(comic.binding, comic.size.z),
             )
             // Once out of the shelf's light, the comic in hand is lit like in a photo studio.
-            GLES30.glUniform1f(p["uHeld"], if (comic.held && frame.dim > 0.25f) 1f else 0f)
+            GLES30.glUniform1f(p["uHeld"], if (comic.held) studioLight(frame.dim) else 0f)
             GLES30.glUniform1f(p["uShine"], comic.shine)
             draw(meshFor(comic), comic.model, MATERIAL_COMIC, dim, cover = cover, back = back, spine = art["spine:${comic.id}"])
             GLES30.glUniform1f(p["uShine"], -1f)
@@ -647,10 +649,12 @@ class ShelfRenderer(
         GLES30.glDisable(GLES30.GL_DEPTH_TEST)
         GLES30.glDepthMask(false)
         GLES30.glUniform1f(p["uMirror"], 1f)
+        GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
         for (comic in frame.comics) {
             val floor = comic.standsOn
             // Only the tops of shelves below the eye are seen.
-            if (floor.isNaN() || frame.eye.y <= floor) continue
+            if (floor.isNaN() || frame.eye.y <= floor || comic.mirror <= 0f) continue
+            if (!scissorToShelfTop(frame, comic, floor)) GLES30.glScissor(0, 0, width, height)
             // Turned over the shelf top (y = floor): y goes to 2 floor - y.
             val m = comic.model
             for (c in 0 until 4) {
@@ -660,13 +664,63 @@ class ShelfRenderer(
                 mirrored[c * 4 + 3] = m[c * 4 + 3]
             }
             GLES30.glUniform1f(p["uMirrorY"], floor)
+            GLES30.glUniform1f(p["uMirrorFade"], comic.mirror)
             val dim = if (comic.faded) max(frame.dim, frame.searchDim) else frame.dim
             draw(meshFor(comic), mirrored, MATERIAL_COMIC, dim, cover = art["cover:${comic.id}"])
         }
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
         GLES30.glUniform1f(p["uMirror"], 0f)
         GLES30.glDepthMask(true)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
+    /**
+     * How far the comic in hand is in the studio's light, from how far the room is darkened
+     * (0.5 with the comic in hand): 0 on its shelf, 1 in the hand, smoothly over most of the way
+     * between, instead of switching halfway, which showed as a flash.
+     */
+    private fun studioLight(dim: Float): Float {
+        val t = ((dim - 0.05f) / 0.4f).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
+    /**
+     * Keeps the drawing of [comic]'s reflection to where it can be seen: the top of its shelf, from
+     * the comic over to the middle of the view (the eye meets the mirror image on the shelf top
+     * between them). The shader cuts away the rest of the turned-over comic anyway, but its
+     * pixels would still be worked on: most of the work of reflections. False when the box
+     * cannot be told (a corner behind the eye); then it is all drawn, as before.
+     */
+    private fun scissorToShelfTop(frame: ShelfFrame, comic: ComicDraw, shelfY: Float): Boolean {
+        val vp = frame.viewProj
+        val cx = comic.model[12]
+        val half = comic.size.x * 0.5f + comic.size.z + 0.01f
+        val eyeX = frame.eye.x
+        val xs = floatArrayOf(min(cx - half, eyeX), max(cx + half, eyeX))
+        val zs = floatArrayOf(0f, ShelfController.PLANK_DEPTH)
+        var left = Float.MAX_VALUE
+        var right = -Float.MAX_VALUE
+        var bottom = Float.MAX_VALUE
+        var top = -Float.MAX_VALUE
+        for (x in xs) {
+            for (z in zs) {
+                val w = vp[3] * x + vp[7] * shelfY + vp[11] * z + vp[15]
+                if (w <= 1e-4f) return false
+                val sx = ((vp[0] * x + vp[4] * shelfY + vp[8] * z + vp[12]) / w + 1f) * 0.5f * width
+                val sy = ((vp[1] * x + vp[5] * shelfY + vp[9] * z + vp[13]) / w + 1f) * 0.5f * height
+                left = min(left, sx)
+                right = max(right, sx)
+                bottom = min(bottom, sy)
+                top = max(top, sy)
+            }
+        }
+        val x0 = (floor(left).toInt() - 2).coerceIn(0, width)
+        val x1 = (ceil(right).toInt() + 2).coerceIn(0, width)
+        val y0 = (floor(bottom).toInt() - 2).coerceIn(0, height)
+        val y1 = (ceil(top).toInt() + 2).coerceIn(0, height)
+        GLES30.glScissor(x0, y0, x1 - x0, y1 - y0)
+        return true
     }
 
     /** The back cover of [comic] in hand: its own, or one drawn for it when the reader asked. */

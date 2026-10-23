@@ -10,6 +10,8 @@ import android.util.LruCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
@@ -95,9 +97,26 @@ class ShelfArtCache(
 ) {
     /**
      * A picture ready to upload; [kept] ones stay in [ShelfArtMemory] and must not be recycled.
-     * [skipped]: not made at all, it was no longer wanted when its turn came.
+     * [skipped]: not made at all, it was no longer wanted when its turn came. A big one (of the
+     * comic in hand) comes as [pixels] instead of a bitmap, to go up a few rows at a time.
      */
-    private class Decoded(val key: String, val bitmap: Bitmap?, val generation: Int, val kept: Boolean = false, val skipped: Boolean = false)
+    private class Decoded(
+        val key: String,
+        val bitmap: Bitmap?,
+        val generation: Int,
+        val kept: Boolean = false,
+        val skipped: Boolean = false,
+        val pixels: Pixels? = null,
+    )
+
+    /** The bytes of a picture, RGBA as GL takes them, row after row from the top, [rowBytes] apart. */
+    private class Pixels(val width: Int, val height: Int, val rowBytes: Int, val bytes: ByteBuffer)
+
+    /** A big picture on its way up: rows from the top down to [row] are in its texture already. */
+    private class Partial(val key: String, val texture: Int, val pixels: Pixels, var row: Int = 0)
+
+    /** At most one big picture goes up at a time, over a few frames, so that no frame takes long. */
+    private var partial: Partial? = null
 
     private val textures = LinkedHashMap<String, Int>(64, 0.75f, true)
     private val inFlight = HashSet<String>()
@@ -119,6 +138,8 @@ class ShelfArtCache(
         }
 
     fun onContextCreated() {
+        // Its texture went with the old context.
+        partial = null
         textures.clear()
         inFlight.clear()
         failed.clear()
@@ -174,7 +195,11 @@ class ShelfArtCache(
             }
             val keep = bitmap != null && ShelfArtMemory.keeps(key)
             if (keep) ShelfArtMemory.put(key, bitmap!!)
-            decoded += Decoded(key, bitmap, requestGeneration, kept = keep)
+            // A big one is made ready to go up in parts: uploaded at once it would take a frame of its
+            // own. (If that fails it counts as no picture: its bitmap is gone either way.)
+            val sharp = bitmap != null && ShelfArtMemory.isSharp(key)
+            val pixels = if (sharp) pixelsOf(bitmap!!) else null
+            decoded += Decoded(key, if (sharp) null else bitmap, requestGeneration, kept = keep, pixels = pixels)
             requestRender()
         }
     }
@@ -182,35 +207,56 @@ class ShelfArtCache(
     /**
      * Uploads decoded pictures within a small time budget. Returns true if more are waiting.
      *
-     * The big pictures of a comic in hand ([ShelfArtMemory.isSharp]) take a frame of their own
-     * to upload, which shows as a jolt in anything moving: they wait for a [calm] frame (the
-     * small cover stands in for them meanwhile). Those of a comic that is no longer [sharpWanted]
-     * (it went back to its shelf before they were ready) are dropped.
+     * A big picture of the comic in hand ([ShelfArtMemory.isSharp]) goes up a band of rows at a
+     * time, over as many frames as it takes, and is used once all of it is there (the small cover
+     * stands in for it meanwhile): uploaded at once it took a frame of its own, a jolt in the
+     * comic flying to the hand. Those of a comic that is no longer [sharpWanted] (it went back to
+     * its shelf before they were ready) are dropped.
      */
-    fun uploadPending(budgetMillis: Long, calm: Boolean = true, sharpWanted: (String) -> Boolean = { true }): Boolean {
+    fun uploadPending(budgetMillis: Long, sharpWanted: (String) -> Boolean = { true }): Boolean {
         val start = SystemClock.uptimeMillis()
+        fun spent() = SystemClock.uptimeMillis() - start >= budgetMillis
+        partial?.let { going ->
+            if (!sharpWanted(going.key.substringAfter(':'))) {
+                GLES30.glDeleteTextures(1, intArrayOf(going.texture), 0)
+                forget(going.key)
+                partial = null
+            } else if (!uploadRows(going, ::spent)) {
+                return true
+            }
+        }
         val later = ArrayList<Decoded>(0)
         var more = false
         while (true) {
+            if (spent()) {
+                more = decoded.isNotEmpty()
+                break
+            }
             val next = decoded.poll() ?: break
             if (next.generation != generation) {
                 if (!next.kept) next.bitmap?.recycle()
                 continue
             }
-            if (ShelfArtMemory.isSharp(next.key) && next.bitmap != null && !next.skipped) {
+            val pixels = next.pixels
+            if (pixels != null) {
                 if (!sharpWanted(next.key.substringAfter(':'))) {
-                    inFlight -= next.key
-                    wanted.remove(next.key)
-                    if (!next.kept) next.bitmap.recycle()
+                    forget(next.key)
                     continue
                 }
-                if (!calm) {
+                // One at a time; the others wait their turn.
+                if (partial != null) {
                     later += next
                     continue
                 }
+                val going = Partial(next.key, allocate(pixels.width, pixels.height), pixels)
+                partial = going
+                if (!uploadRows(going, ::spent)) {
+                    more = true
+                    break
+                }
+                continue
             }
-            inFlight -= next.key
-            wanted.remove(next.key)
+            forget(next.key)
             if (next.skipped) continue
             val bitmap = next.bitmap
             if (bitmap == null) {
@@ -221,14 +267,58 @@ class ShelfArtCache(
             textures[next.key] = upload(bitmap)
             if (!next.kept) bitmap.recycle()
             trim()
-            if (SystemClock.uptimeMillis() - start >= budgetMillis) {
-                more = decoded.isNotEmpty()
-                break
-            }
         }
-        // Back in line for a calm frame.
         decoded.addAll(later)
-        return more || later.isNotEmpty()
+        return more || later.isNotEmpty() || partial != null
+    }
+
+    /** Not in flight any more: done with, or dropped (then asked for again if wanted again). */
+    private fun forget(key: String) {
+        inFlight -= key
+        wanted.remove(key)
+    }
+
+    /**
+     * Uploads bands of [going]'s rows until all of it is up or the time is [spent]. Once all is up
+     * its texture is finished (mipmaps) and put in use; returns whether it is.
+     */
+    private fun uploadRows(going: Partial, spent: () -> Boolean): Boolean {
+        val pixels = going.pixels
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, going.texture)
+        // Rows kept with some room after them (rarely) are read as such.
+        val padded = pixels.rowBytes != pixels.width * 4
+        if (padded) GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, pixels.rowBytes / 4)
+        try {
+            while (going.row < pixels.height) {
+                val rows = minOf(BAND_ROWS, pixels.height - going.row)
+                pixels.bytes.position(going.row * pixels.rowBytes)
+                GLES30.glTexSubImage2D(
+                    GLES30.GL_TEXTURE_2D, 0, 0, going.row, pixels.width, rows,
+                    GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels.bytes,
+                )
+                going.row += rows
+                if (going.row < pixels.height && spent()) return false
+            }
+        } finally {
+            if (padded) GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+        }
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        textures.remove(going.key)?.let { GLES30.glDeleteTextures(1, intArrayOf(it), 0) }
+        textures[going.key] = going.texture
+        forget(going.key)
+        partial = null
+        trim()
+        return true
+    }
+
+    /** A texture of that size with nothing in it yet, set up as [upload] sets them up. */
+    private fun allocate(width: Int, height: Int): Int {
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
+        setUp()
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+        return ids[0]
     }
 
     /** Keeps the most recently used textures; sharp covers are big, so only a few of them. */
@@ -245,13 +335,40 @@ class ShelfArtCache(
         val ids = IntArray(1)
         GLES30.glGenTextures(1, ids, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
+        setUp()
+        GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        return ids[0]
+    }
+
+    /** Filtering and edges of the texture bound now. */
+    private fun setUp() {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
-        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-        return ids[0]
+    }
+
+    /** The bytes of [bitmap] (recycled), as GL takes them; off the render thread. Null if they cannot be had. */
+    private fun pixelsOf(bitmap: Bitmap): Pixels? {
+        var argb: Bitmap? = null
+        try {
+            argb = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            if (argb == null) return null
+            val bytes = ByteBuffer.allocateDirect(argb.rowBytes * argb.height).order(ByteOrder.nativeOrder())
+            argb.copyPixelsToBuffer(bytes)
+            bytes.rewind()
+            return Pixels(argb.width, argb.height, argb.rowBytes, bytes)
+        } catch (e: Exception) {
+            Log.w(TAG, "No bytes of a picture", e)
+            return null
+        } catch (e: OutOfMemoryError) {
+            Log.w(TAG, "No room for the bytes of a picture", e)
+            return null
+        } finally {
+            if (argb != null && argb !== bitmap) argb.recycle()
+            bitmap.recycle()
+        }
     }
 
     private companion object {
@@ -261,5 +378,8 @@ class ShelfArtCache(
 
         /** A picture not asked for in that long is no longer on screen. */
         const val STALE_MILLIS = 400L
+
+        /** Rows of a big picture uploaded at a time (about half a megabyte of a sharp cover). */
+        const val BAND_ROWS = 128
     }
 }

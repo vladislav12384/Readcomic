@@ -96,9 +96,6 @@ class Unboxing(private val host: Host) {
     /** Whether there is a box on screen at all. */
     val present: Boolean get() = stage != Stage.ABSENT
 
-    /** The box or a comic of it is on its way somewhere (coming in, opening, lifting, going). */
-    val moving: Boolean get() = stage in MOVING
-
     // region Box pose
 
     private enum class Spot { ABOVE, PEEK, PRESENT, LOW, HIDDEN, BELOW }
@@ -930,10 +927,6 @@ class Unboxing(private val host: Host) {
     }
 
     companion object {
-        private val MOVING = setOf(
-            Stage.ARRIVING, Stage.RISING, Stage.OPENING, Stage.LIFTING, Stage.RELEASING,
-            Stage.PLACING, Stage.RETURNING, Stage.CLOSING,
-        )
         private val X = Vec3(1f, 0f, 0f)
         private val Y = Vec3(0f, 1f, 0f)
         private val ONE = Vec3(1f, 1f, 1f)

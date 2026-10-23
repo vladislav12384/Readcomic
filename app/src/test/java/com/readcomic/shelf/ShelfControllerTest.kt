@@ -408,19 +408,30 @@ class ShelfControllerTest {
     }
 
     @Test
-    fun bigPicturesWaitWhileAComicFliesToTheHandOrBack() {
+    fun theReflectionOfATakenComicFadesInsteadOfGoingAtOnce() {
         val c = controller()
         c.settle()
-        assertTrue(c.frame().calm)
+        fun mirrored() = c.frame().comics.single { it.id == "c2" }
+        assertEquals(1f, mirrored().mirror, 0f)
         c.take("c2")
-        repeat(6) { c.step(1f / 60f) }
-        assertFalse("on its way to the hand", c.frame().calm)
+        // Lifted off a little: still mirrored, less.
+        var seen = false
+        repeat(30) {
+            c.step(1f / 60f)
+            val m = mirrored()
+            if (m.mirror > 0.05f && m.mirror < 0.95f) {
+                seen = true
+                assertFalse(m.standsOn.isNaN())
+            }
+        }
+        assertTrue("it faded over several frames", seen)
         c.settle()
-        assertTrue("in hand", c.frame().calm)
+        // In the hand: no reflection at all.
+        assertEquals(0f, mirrored().mirror, 0f)
+        assertTrue(mirrored().standsOn.isNaN())
         c.putBack()
-        repeat(6) { c.step(1f / 60f) }
-        assertFalse("on its way back", c.frame().calm)
         c.settle()
-        assertTrue("back on its shelf", c.frame().calm)
+        assertEquals(1f, mirrored().mirror, 0f)
+        assertFalse(mirrored().standsOn.isNaN())
     }
 }

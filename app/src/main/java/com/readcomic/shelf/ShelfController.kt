@@ -105,6 +105,8 @@ class ComicDraw(
     val drawnBack: Boolean = false,
     /** Height of the shelf it stands on, for its reflection; NaN when it is not standing still on one. */
     val standsOn: Float = Float.NaN,
+    /** How much of its reflection there is: less and less as it is lifted off its shelf into the hand. */
+    val mirror: Float = 1f,
 )
 
 /** The paper label saying [text], under a comic. */
@@ -145,11 +147,6 @@ class ShelfFrame(
     /** Where the comics stand across a shelf: the width of a place and the x of one of its sides. */
     val cellWidth: Float = 0f,
     val cellOrigin: Float = 0f,
-    /**
-     * Nothing is on its way: no comic flying to the hand or back, no box moving. Big pictures
-     * wait for such a frame to be uploaded, as one takes a frame of its own.
-     */
-    val calm: Boolean = true,
 )
 
 /**
@@ -587,6 +584,12 @@ class ShelfController(private val density: Float) {
         return (Vec3.lerp(move.from, pose.first, e) + Vec3(0f, 0.004f, 0.015f) * sin(PI.toFloat() * e)) to pose.second
     }
 
+    /** 0 to 1 smoothly as [x] goes from 0 to 1. */
+    private fun smooth(x: Float): Float {
+        val t = x.coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
     private fun easedHold(): Float {
         val t = hold.x.coerceIn(0f, 1f)
         return t * t * (3f - 2f * t)
@@ -680,9 +683,13 @@ class ShelfController(private val density: Float) {
             val faded = found != null && item.id !in found
             val shine = appearing[item.id]?.let { (it / APPEAR_SHINE).coerceAtMost(1f) } ?: -1f
             val still = !isHeld && item.id !in moves
+            // Taken into the hand, or put back, the comic's reflection fades over the first part of
+            // the way instead of going all at once.
+            val mirror = if (isHeld) 1f - smooth(easedHold() / MIRROR_FADE) else 1f
             val draw = ComicDraw(
                 item.id, model, size, item.pageCount, ComicShape.binding(item.pageCount), ribbon, isHeld, faded, shine, item.drawnBack,
-                standsOn = if (still) rowBase(row) else Float.NaN,
+                standsOn = if (still || (isHeld && mirror > 0f)) rowBase(row) else Float.NaN,
+                mirror = mirror,
             )
             if (isHeld) held = draw else comics += draw
             if (!showcase) labels += LabelDraw(
@@ -723,7 +730,6 @@ class ShelfController(private val density: Float) {
             lightsTime = lightsTime,
             rowHeight = rowHeight,
             unbox = unbox,
-            calm = (heldId == null || (holding && hold.isAt(1f, 0f, 0.01f, 0.05f))) && !unboxing.moving,
             glows = glows,
             cellWidth = slotWidth,
             cellOrigin = cellOrigin,
@@ -1138,6 +1144,9 @@ class ShelfController(private val density: Float) {
         private const val SEARCH_FADE = 0.25f
         private const val FOCUS_RATE = 7f
         private const val HOLD_OMEGA = 9f
+
+        /** How far on its way to the hand (eased) the comic's reflection is gone. */
+        private const val MIRROR_FADE = 0.45f
 
         /** Air between the comic in hand and the edges of the room it has, in parts of the screen's height. */
         private const val HAND_MARGIN = 0.025f
