@@ -115,12 +115,13 @@ float shadowAt(vec3 n) {
     if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
     float bias = 0.0005 + 0.0015 * (1.0 - max(dot(n, uLightDir), 0.0));
     // The comics and their bookmarks only take the shadows of the comics: the shelf above would
-    // lay a dark band over the tops of the covers.
-    bool comic = uMaterial == 0 || uMaterial == 4;
+    // lay a dark band over the tops of the covers. So does the back of a display case, lit by
+    // its own strips: no shadow of the shelf above lies across it.
+    bool comicsOnly = uMaterial == 0 || uMaterial == 4 || (uStyle >= 3 && uMaterial == 2);
     float sum = 0.0;
     for (int i = 0; i < 8; i++) {
         vec3 c = vec3(p.xy + POISSON[i] * uShadowTexel * 2.5, p.z - bias);
-        sum += comic ? texture(uComicShadow, c) : texture(uShadow, c);
+        sum += comicsOnly ? texture(uComicShadow, c) : texture(uShadow, c);
     }
     return sum / 8.0;
 }
