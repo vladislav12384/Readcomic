@@ -174,7 +174,7 @@ vec4 mirrorImage() {
     // More of a mirror the flatter it is seen (Fresnel), fading with the distance from the shelf.
     float grazing = 1.0 - abs(normalize(uEye - q).y);
     float strength = 0.46 * mix(0.65, 1.1, grazing);
-    return vec4(color, strength * exp(-(uMirrorY - vWorld.y) / 0.12) * uMirrorFade);
+    return vec4(color, strength * exp(-(uMirrorY - vWorld.y) / 0.12));
 }
 
 #endif
@@ -340,14 +340,12 @@ vec3 ribbon(vec3 v) {
     float edge = 1.0 - 0.25 * smoothstep(0.38, 0.5, abs(vUV.x - 0.5));
     vec3 base = vec3(0.36, 0.012, 0.03) * threads * edge;
     vec3 color = base * irradiance(n, 1.0);
-    vec3 studio = normalize(vec3(-0.45, 0.50, 0.75));
-    vec3 light = uHeld >= 1.0 ? studio : (uHeld > 0.0 ? normalize(mix(uLightDir, studio, uHeld)) : uLightDir);
+    vec3 light = uHeld > 0.5 ? normalize(vec3(-0.45, 0.50, 0.75)) : uLightDir;
     vec3 h = normalize(light + v);
     float th = dot(t, h);
     float sheen = pow(sqrt(max(1.0 - th * th, 0.0)), 70.0) * max(dot(n, light), 0.0);
     float soft = pow(sqrt(max(1.0 - th * th, 0.0)), 8.0) * 0.12;
-    // In the studio there are no shadows: 1 there (shadowAt knows).
-    float lit = shadowAt(n);
+    float lit = uHeld > 0.5 ? 1.0 : shadowAt(n);
     return color + (vec3(1.0, 0.55, 0.5) * sheen * 0.9 + vec3(0.6, 0.12, 0.12) * soft) * lit;
 }
 
