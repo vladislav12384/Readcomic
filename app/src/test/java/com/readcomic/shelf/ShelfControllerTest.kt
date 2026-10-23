@@ -177,6 +177,50 @@ class ShelfControllerTest {
             a.first.z < b.second.z - margin && b.first.z < a.second.z - margin
 
     @Test
+    fun aDisplayShowsFourAcrossUprightWithoutLabelsOrNamePlate() {
+        val plain = controller()
+        assertEquals(2, plain.columns)
+        assertTrue(plain.frame().labels.isNotEmpty())
+        assertTrue(plain.frame().plaque != null)
+
+        val display = controller().apply { showcase = true }
+        assertEquals(4, display.columns)
+        val frame = display.frame()
+        assertTrue(frame.labels.isEmpty())
+        assertNull(frame.plaque)
+        // Standing nearly upright: the cover faces the room.
+        val comic = frame.comics.first()
+        val normal = (Mat4.transformPoint(comic.model, Vec3(0f, 0f, 1f)) - Mat4.transformPoint(comic.model, Vec3.ZERO)).normalized()
+        assertTrue("upright, z=${normal.z}", normal.z > 0.99f)
+        // Back to the plain bookcase: as it was.
+        display.showcase = false
+        assertEquals(2, display.columns)
+    }
+
+    @Test
+    fun aGlassFrameIsSeenWholeAndKeepsClearOfTheComics() {
+        val c = controller().apply {
+            showcase = true
+            framed = true
+        }
+        val frame = c.frame()
+        assertEquals(2, frame.posts.size)
+        // On screen, with the wall showing beyond it.
+        for (post in frame.posts) {
+            val ndc = Mat4.transformPoint(frame.viewProj, Mat4.transformPoint(post, Vec3(0f, 0f, 0.5f)))
+            assertTrue("frame off screen, x=${ndc.x}", abs(ndc.x) < 0.98f)
+        }
+        for (comic in frame.comics) {
+            val box = bounds(comic.model)
+            for (post in frame.posts) assertTrue("${comic.id} in the frame", !overlap(box, bounds(post)))
+        }
+        // The shelves end in the frame.
+        val shelf = bounds(frame.planks.first())
+        val left = bounds(frame.posts.minBy { it[12] })
+        assertTrue(shelf.first.x >= left.second.x - 0.001f)
+    }
+
+    @Test
     fun aDisplayCaseHasPanelsBetweenItsCellsAndNoSigns() {
         val series = List(9) { ShelfItem("c$it", 0.65f, 24 + it * 20, inProgress = false, series = "Saga") }
         val plain = controller().apply { setItems(series) }

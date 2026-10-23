@@ -49,12 +49,15 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -116,11 +119,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -426,6 +431,8 @@ private fun ShelfLibrary(
 
     BoxWithConstraints(Modifier.fillMaxSize().background(ShelfRoom)) {
         val landscape = maxWidth > maxHeight
+        // Where panels open: under the corner buttons, or under the header of a display.
+        val underHeader = if (shelfStyle.showcase) 84.dp else 64.dp
 
         AndroidView(
             factory = { ctx ->
@@ -486,7 +493,33 @@ private fun ShelfLibrary(
         )
 
         AnimatedVisibility(
-            visible = held == null && !searching && !unpacking,
+            visible = shelfStyle.showcase && held == null && !searching && !unpacking,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            ShowcaseHeader(
+                count = shelved.size + boxed.size,
+                style = shelfStyle,
+                busy = busy,
+                onMenu = {
+                    ordering = false
+                    picking = !picking
+                },
+                onSearch = {
+                    picking = false
+                    ordering = false
+                    searching = true
+                },
+                onShowGrid = onShowGrid,
+                onOrder = {
+                    picking = false
+                    ordering = !ordering
+                },
+            )
+        }
+        AnimatedVisibility(
+            visible = !shelfStyle.showcase && held == null && !searching && !unpacking,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopEnd),
@@ -520,7 +553,7 @@ private fun ShelfLibrary(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .windowInsetsPadding(SafeInsets)
-                .padding(start = 12.dp, end = 12.dp, top = 64.dp)
+                .padding(start = 12.dp, end = 12.dp, top = underHeader)
                 .widthIn(max = 520.dp)
                 .fillMaxWidth(),
         ) {
@@ -720,7 +753,7 @@ private fun ShelfLibrary(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .windowInsetsPadding(SafeInsets)
-                .padding(top = 64.dp, end = 12.dp),
+                .padding(top = underHeader, end = 12.dp),
         ) {
             OrderPicker(selected = order) {
                 onOrderChange(it)
@@ -754,10 +787,11 @@ private fun ShelfLibrary(
             visible = picking && held == null,
             enter = fadeIn() + slideInVertically { -it / 3 },
             exit = fadeOut() + slideOutVertically { -it / 3 },
+            // In a display the settings open from the menu button on the left.
             modifier = Modifier
-                .align(Alignment.TopEnd)
+                .align(if (shelfStyle.showcase) Alignment.TopStart else Alignment.TopEnd)
                 .windowInsetsPadding(SafeInsets)
-                .padding(top = 64.dp, end = 12.dp),
+                .padding(top = underHeader, start = 12.dp, end = 12.dp),
         ) {
             ThemePicker(
                 selected = theme,
@@ -826,14 +860,24 @@ private fun ShelfToolbar(
 }
 
 @Composable
-private fun RoundButton(onClick: () -> Unit, description: String, glass: Boolean = false, content: @Composable () -> Unit) {
+private fun RoundButton(
+    onClick: () -> Unit,
+    description: String,
+    glass: Boolean = false,
+    /** A rim of all colours, as on a soap bubble (the glass shelves). */
+    iridescent: Boolean = false,
+    /** Ringed with light, as the button of the view one is in. */
+    accent: Boolean = false,
+    size: Dp = 44.dp,
+    content: @Composable () -> Unit,
+) {
     val look = if (glass) {
         // Dark glass with a cold rim, as the display case and the glass shelves are lit.
         Modifier
-            .shadow(8.dp, CircleShape, ambientColor = GlassGlow, spotColor = GlassGlow)
+            .shadow(if (accent) 12.dp else 8.dp, CircleShape, ambientColor = GlassGlow, spotColor = GlassGlow)
             .clip(CircleShape)
             .background(GlassFill)
-            .border(1.dp, GlassRim, CircleShape)
+            .border(if (accent) 1.5.dp else 1.dp, if (accent) GlassAccent else if (iridescent) GlassIris else GlassRim, CircleShape)
     } else {
         Modifier
             .shadow(6.dp, CircleShape)
@@ -843,7 +887,7 @@ private fun RoundButton(onClick: () -> Unit, description: String, glass: Boolean
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(44.dp)
+            .size(size)
             .then(look)
             .clickable(onClickLabel = description, onClick = onClick)
             .semantics { contentDescription = description },
@@ -856,6 +900,100 @@ private fun RoundButton(onClick: () -> Unit, description: String, glass: Boolean
 private val GlassFill = Brush.verticalGradient(listOf(Color(0xA6233554), Color(0xD90A111F)))
 private val GlassRim = Brush.linearGradient(listOf(Color(0xCCA9D4FF), Color(0x334A6A9A), Color(0x99A9D4FF)))
 private val GlassGlow = Color(0xFF3B82F6)
+private val GlassIris = Brush.linearGradient(listOf(Color(0xDDB8E4FF), Color(0x88FF9CE8), Color(0x339FD0FF), Color(0x99FFF3B0), Color(0xCCB8E4FF)))
+private val GlassAccent = Brush.linearGradient(listOf(Color(0xFF7CC4FF), Color(0xFF2F7BFF), Color(0xFF9AD6FF)))
+private val GlassBar = Brush.verticalGradient(listOf(Color(0x8C1C2C48), Color(0xB30A1222)))
+
+/**
+ * The header of a display (the display case, the glass shelves): the collection named in the
+ * middle, the settings on the left, search, the plain grid and the order on the right.
+ */
+@Composable
+private fun ShowcaseHeader(
+    count: Int,
+    style: ShelfStyle,
+    busy: Boolean,
+    onMenu: () -> Unit,
+    onSearch: () -> Unit,
+    onShowGrid: () -> Unit,
+    onOrder: () -> Unit,
+) {
+    val iris = style.framed
+    val bar = if (style.framed) {
+        // The glass shelves have their header on a bar of glass.
+        Modifier
+            .clip(RoundedCornerShape(32.dp))
+            .background(GlassBar)
+            .border(1.dp, GlassIris, RoundedCornerShape(32.dp))
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+    } else {
+        Modifier.padding(vertical = 4.dp)
+    }
+    Column(
+        Modifier
+            .windowInsetsPadding(SafeInsets)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .widthIn(max = 640.dp)
+            .fillMaxWidth(),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().then(bar)) {
+            RoundButton(onClick = onMenu, description = "Настройки", glass = true, iridescent = iris, size = 42.dp) {
+                Icon(Icons.Filled.Menu, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).padding(horizontal = 6.dp)) {
+                // As large as fits between the buttons, down to small screens.
+                BasicText(
+                    "КОЛЛЕКЦИЯ",
+                    style = TextStyle(color = ShowcaseInk, fontWeight = FontWeight.Medium, letterSpacing = 1.5.sp),
+                    maxLines = 1,
+                    autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = 19.sp),
+                )
+                Text(
+                    comicsCount(count).uppercase(),
+                    color = ShowcaseInk.copy(alpha = 0.55f),
+                    fontSize = 11.sp,
+                    letterSpacing = 1.5.sp,
+                    maxLines = 1,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RoundButton(onClick = onSearch, description = "Поиск", glass = true, iridescent = iris, size = 42.dp) {
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
+                }
+                RoundButton(onClick = onShowGrid, description = "Сеткой", glass = true, iridescent = iris, accent = true, size = 42.dp) {
+                    Icon(GridIcon, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(20.dp))
+                }
+                RoundButton(onClick = onOrder, description = "Порядок", glass = true, iridescent = iris, size = 42.dp) {
+                    Icon(MoreHorizIcon, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
+                }
+            }
+        }
+        if (busy) {
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                Modifier.align(Alignment.CenterHorizontally).width(98.dp).clip(RoundedCornerShape(50)),
+                color = ShowcaseInk,
+                trackColor = Color.Black.copy(alpha = 0.3f),
+            )
+        }
+    }
+}
+
+private val ShowcaseInk = Color(0xFFEFF4FF)
+
+/** Three dots in a row: more. */
+private val MoreHorizIcon: ImageVector by lazy {
+    ImageVector.Builder("MoreHoriz", 24.dp, 24.dp, 24f, 24f).apply {
+        path(fill = SolidColor(Color.Black)) {
+            for (x in listOf(5f, 12f, 19f)) {
+                moveTo(x + 2f, 12f)
+                arcTo(2f, 2f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = x - 2f, y1 = 12f)
+                arcTo(2f, 2f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = x + 2f, y1 = 12f)
+                close()
+            }
+        }
+    }.build()
+}
 
 /** The swatch on the wall button when the wall is not painted (display case, glass). */
 private val GlassSwatch = Color(0xFF13203A)
