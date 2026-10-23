@@ -186,7 +186,9 @@ vec3 irradiance(vec3 n, float occlusion) {
 // its crossbars, a narrow studio softbox on the right, a glowing ceiling, a warm room and a dark
 // floor. [blur] softens every edge, for less polished surfaces.
 vec3 environment(vec3 r, float blur) {
-    if (uStyle >= 3) {
+    // The comic in hand mirrors the bright room whatever the bookcase, so that its gloss shows as
+    // it is turned; the rest of a display mirrors its own dark blue room.
+    if (uStyle >= 3 && uHeld < 0.5) {
         // A display mirrors a dark blue room: the long light strips above, a soft panel to the left.
         vec3 dark = mix(vec3(0.004, 0.006, 0.012), vec3(0.035, 0.05, 0.09), smoothstep(-0.4, 0.6, r.y));
         if (r.z < 0.05) return dark;
