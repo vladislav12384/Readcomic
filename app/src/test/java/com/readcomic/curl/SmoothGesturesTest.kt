@@ -14,6 +14,8 @@ class SmoothGesturesTest {
         setViewSize(1080, 2280)
         setReadingMode(ReadingMode.SINGLE)
         setPages(FloatArray(10) { 0.65f }, startImage = 0)
+        // A fixed step, so that the page is well past the screen both ways and can be moved about.
+        doubleTapZoom = PageTurnController.DoubleTapZoom.THREE
         doubleTap(540f, 1140f)
         var t = 0f
         while (step(1f / 60f) && t < 2f) t += 1f / 60f
@@ -95,7 +97,7 @@ class SmoothGesturesTest {
             assertEquals(fx, contentX * c.scale + c.offsetX, 0.01f)
             assertEquals(fy, contentY * c.scale + c.offsetY, 0.01f)
         }
-        // 2.5 times the zoom of the start would be 7.5: past the maximum the pinch gives way.
+        // Three times the zoom of the start would be 9: past the maximum the pinch gives way.
         assertTrue(c.scale > PageTurnController.MAX_SCALE && c.scale < PageTurnController.MAX_SCALE * 1.3f)
     }
 

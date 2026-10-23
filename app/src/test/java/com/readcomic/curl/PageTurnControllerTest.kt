@@ -203,7 +203,9 @@ class PageTurnControllerTest {
         val c = controller(ReadingMode.SINGLE)
         c.doubleTap(540f, 1140f)
         c.settle()
-        assertEquals(PageTurnController.DOUBLE_TAP_SCALE, c.scale, 0.001f)
+        // Upright, the page stood across the width: now it reaches the top and the bottom too.
+        val page = c.singleRect(0)
+        assertEquals(2280f / page.height, c.scale, 0.001f)
         assertTrue(c.isZoomed)
         assertFalse("no page turning while zoomed", c.beginDrag(900f, 1000f, 700f, 1000f))
 
@@ -452,4 +454,48 @@ class PageTurnControllerTest {
     }
 
     // endregion
+
+    @Test
+    fun doubleTapOnASpreadFillsTheScreenWithThePageTapped() {
+        // A phone held upright showing a spread: a page fills the width at twice the size, but only
+        // filling the height too leaves no table above and below it.
+        val c = controller(ReadingMode.SPREAD, aspects = FloatArray(10) { 0.65f })
+        c.turnForward()
+        c.settle()
+        val right = c.rightSlot()
+        c.doubleTap(right.left + right.width / 2f, 1140f)
+        c.settle()
+        val scale = c.scale
+        assertEquals(2280f / right.height, scale, 0.001f)
+        assertTrue("the page covers the screen from top to bottom", right.top * scale + c.offsetY <= 0.5f)
+        assertTrue(right.bottom * scale + c.offsetY >= 2280f - 0.5f)
+        // Only the page tapped is in view.
+        assertTrue(right.left * scale + c.offsetX <= 0.5f)
+        assertTrue(right.right * scale + c.offsetX >= 1080f - 0.5f)
+    }
+
+    @Test
+    fun doubleTapSidewaysFillsTheWidth() {
+        val c = controller(ReadingMode.SINGLE, width = 2280, height = 1080)
+        c.doubleTap(1140f, 540f)
+        c.settle()
+        val page = c.singleRect(0)
+        assertEquals(2280f / page.width, c.scale, 0.001f)
+    }
+
+    @Test
+    fun doubleTapCanZoomByAFixedStep() {
+        val c = controller(ReadingMode.SINGLE)
+        c.doubleTapZoom = PageTurnController.DoubleTapZoom.THREE
+        c.doubleTap(540f, 1140f)
+        c.settle()
+        assertEquals(3f, c.scale, 0.001f)
+    }
+
+    @Test
+    fun pinchZoomsUpToEightTimes() {
+        val c = controller(ReadingMode.SINGLE)
+        c.scaleBy(20f, 540f, 1140f)
+        assertEquals(8f, c.scale, 0.001f)
+    }
 }

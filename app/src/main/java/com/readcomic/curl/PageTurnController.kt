@@ -65,6 +65,12 @@ class PageTurnController(private val density: Float) {
 
     enum class ReadingMode { AUTO, SPREAD, SINGLE }
 
+    /**
+     * How far a double tap zooms in: [FILL] until the page tapped fills the screen (no table
+     * left above and below it, or at its sides), or by a fixed [scale].
+     */
+    enum class DoubleTapZoom(val scale: Float) { FILL(0f), TWO(2f), THREE(3f), FOUR(4f) }
+
     private enum class Part { FULL, LEFT, RIGHT, BLANK }
 
     private class Page(val image: Int, val part: Part)
@@ -271,6 +277,9 @@ class PageTurnController(private val density: Float) {
         readingMode = mode
         updateLayout()
     }
+
+    /** How far a double tap zooms in. */
+    var doubleTapZoom = DoubleTapZoom.FILL
 
     /**
      * @param imageAspects width / height of every page image, 0 where unknown.
@@ -1134,12 +1143,43 @@ class PageTurnController(private val density: Float) {
         if (arrival != null) return
         if (isZoomed) {
             animateZoomTo(1f, 0f, 0f)
-        } else {
-            finishTurnNow()
-            // In a spread, zoom so that one page fills the width; a single page gets a fixed step.
-            val target = if (isSpread) (viewWidth / rightSlot().width).coerceIn(1.8f, MAX_SCALE) else DOUBLE_TAP_SCALE
-            animateZoomTo(target, x - x * target, y - y * target)
+            return
         }
+        finishTurnNow()
+        val page = tappedPage(x)
+        val target = doubleTapScale(page)
+        // Around the point tapped, and only on the page tapped: of a spread the other page stays out
+        // of view where this one is wide enough to cover the screen.
+        val ox = if (page.width * target > viewWidth) {
+            (x - x * target).coerceIn(viewWidth - page.right * target, -page.left * target)
+        } else {
+            viewWidth / 2f - (page.left + page.width / 2f) * target
+        }
+        val oy = if (page.height * target > viewHeight) {
+            (y - y * target).coerceIn(viewHeight - page.bottom * target, -page.top * target)
+        } else {
+            viewHeight / 2f - (page.top + page.height / 2f) * target
+        }
+        animateZoomTo(target, ox, oy)
+    }
+
+    /** The page under [x]: of a spread the left or the right one (the one there is, at a cover). */
+    private fun tappedPage(x: Float): PageRect {
+        val content = contentRect()
+        if (!isSpread || content.width <= rightSlot().width * 1.5f) return content
+        return if (x < spineX) leftSlot() else rightSlot()
+    }
+
+    /**
+     * How far a double tap zooms in on [page]: until it fills the screen (it reaches the edges it
+     * did not reach yet: above and below it on a phone held upright, at its sides on one held
+     * sideways), at least by [MIN_DOUBLE_TAP] so that the tap is seen to work; or by the
+     * reader's fixed step.
+     */
+    private fun doubleTapScale(page: PageRect): Float {
+        val fixed = doubleTapZoom.scale
+        val target = if (fixed > 0f) fixed else max(max(viewWidth / page.width, viewHeight / page.height), MIN_DOUBLE_TAP)
+        return target.coerceIn(1f, MAX_SCALE)
     }
 
     fun resetZoom() {
@@ -1306,8 +1346,10 @@ class PageTurnController(private val density: Float) {
     }
 
     companion object {
-        const val MAX_SCALE = 5f
-        const val DOUBLE_TAP_SCALE = 2.5f
+        const val MAX_SCALE = 8f
+
+        /** A double tap zooms in at least that far, even on a page that nearly fills the screen. */
+        const val MIN_DOUBLE_TAP = 1.2f
         private const val DEFAULT_ASPECT = 0.65f
 
         /** Pages on either side of the current one that get a small preview texture. */

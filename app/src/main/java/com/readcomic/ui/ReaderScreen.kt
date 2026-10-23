@@ -94,6 +94,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.readcomic.curl.PageCurlView
 import com.readcomic.curl.PageLoader
+import com.readcomic.curl.PageTurnController.DoubleTapZoom
 import com.readcomic.curl.PageTurnController.ReadingMode
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicOpener
@@ -120,11 +121,13 @@ fun ReaderScreen(
     table: ReadingTable,
     night: NightSettings,
     readingMode: ReadingMode,
+    doubleTapZoom: DoubleTapZoom,
     orientation: OrientationLock,
     pageAspects: suspend (ComicSource, onProgress: (Float) -> Unit) -> FloatArray,
     onTableChange: (ReadingTable) -> Unit,
     onNightChange: (NightSettings) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
+    onDoubleTapZoomChange: (DoubleTapZoom) -> Unit,
     onOrientationChange: (OrientationLock) -> Unit,
     onPageChanged: (first: Int, last: Int) -> Unit,
     onBack: () -> Unit,
@@ -199,6 +202,9 @@ fun ReaderScreen(
     LaunchedEffect(curlView, readingMode) {
         curlView?.setReadingMode(readingMode)
     }
+    LaunchedEffect(curlView, doubleTapZoom) {
+        curlView?.setDoubleTapZoom(doubleTapZoom)
+    }
 
     Box(Modifier.fillMaxSize().background(tint)) {
         val opened = source
@@ -235,6 +241,7 @@ fun ReaderScreen(
                                 }
                             }
                             setReadingMode(readingMode)
+                            setDoubleTapZoom(doubleTapZoom)
                             setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, shapes, entry.currentPage, closed = true)
                             curlView = this
                         }
@@ -346,10 +353,12 @@ fun ReaderScreen(
                 table = table,
                 night = night,
                 readingMode = readingMode,
+                doubleTapZoom = doubleTapZoom,
                 orientation = orientation,
                 onTableChange = onTableChange,
                 onNightChange = onNightChange,
                 onReadingModeChange = onReadingModeChange,
+                onDoubleTapZoomChange = onDoubleTapZoomChange,
                 onOrientationChange = onOrientationChange,
             )
         }
@@ -466,10 +475,12 @@ private fun SettingsPanel(
     table: ReadingTable,
     night: NightSettings,
     readingMode: ReadingMode,
+    doubleTapZoom: DoubleTapZoom,
     orientation: OrientationLock,
     onTableChange: (ReadingTable) -> Unit,
     onNightChange: (NightSettings) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
+    onDoubleTapZoomChange: (DoubleTapZoom) -> Unit,
     onOrientationChange: (OrientationLock) -> Unit,
 ) {
     Column(
@@ -508,6 +519,21 @@ private fun SettingsPanel(
                 ReadingMode.AUTO -> "Горизонтально — разворот, вертикально — одна страница"
                 ReadingMode.SPREAD -> "Всегда две страницы, как в открытой книге"
                 ReadingMode.SINGLE -> "Всегда одна страница, широкие развороты делятся пополам"
+            },
+            color = Color.White.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(start = 72.dp, end = 20.dp, bottom = 6.dp),
+        )
+        SettingsRow("Зум") {
+            ModeChip("По экрану", doubleTapZoom == DoubleTapZoom.FILL) { onDoubleTapZoomChange(DoubleTapZoom.FILL) }
+            ModeChip("2×", doubleTapZoom == DoubleTapZoom.TWO) { onDoubleTapZoomChange(DoubleTapZoom.TWO) }
+            ModeChip("3×", doubleTapZoom == DoubleTapZoom.THREE) { onDoubleTapZoomChange(DoubleTapZoom.THREE) }
+            ModeChip("4×", doubleTapZoom == DoubleTapZoom.FOUR) { onDoubleTapZoomChange(DoubleTapZoom.FOUR) }
+        }
+        Text(
+            when (doubleTapZoom) {
+                DoubleTapZoom.FILL -> "Двойной тап — страница на весь экран, без полос стола"
+                else -> "Двойной тап — приближение в ${doubleTapZoom.scale.toInt()} раза"
             },
             color = Color.White.copy(alpha = 0.5f),
             style = MaterialTheme.typography.bodySmall,

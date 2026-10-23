@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.readcomic.curl.PageTurnController.DoubleTapZoom
 import com.readcomic.curl.PageTurnController.ReadingMode
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.ComicSource
@@ -68,6 +69,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         runCatching { ReadingMode.valueOf(prefs.getString(KEY_READING_MODE, null) ?: "") }.getOrDefault(ReadingMode.SPREAD),
     )
     val readingMode: StateFlow<ReadingMode> = _readingMode.asStateFlow()
+
+    /** How far a double tap zooms in while reading: until the page fills the screen, unless set otherwise. */
+    private val _doubleTapZoom = MutableStateFlow(
+        runCatching { DoubleTapZoom.valueOf(prefs.getString(KEY_DOUBLE_TAP, null) ?: "") }.getOrDefault(DoubleTapZoom.FILL),
+    )
+    val doubleTapZoom: StateFlow<DoubleTapZoom> = _doubleTapZoom.asStateFlow()
 
     private val _orientation = MutableStateFlow(
         runCatching { OrientationLock.valueOf(prefs.getString(KEY_ORIENTATION, null) ?: "") }.getOrDefault(OrientationLock.SYSTEM),
@@ -364,6 +371,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putString(KEY_READING_MODE, mode.name) }
     }
 
+    fun setDoubleTapZoom(zoom: DoubleTapZoom) {
+        _doubleTapZoom.value = zoom
+        prefs.edit { putString(KEY_DOUBLE_TAP, zoom.name) }
+    }
+
     fun setShelfTheme(index: Int) {
         _shelfTheme.value = index
         prefs.edit { putInt(KEY_SHELF_THEME, index) }
@@ -414,6 +426,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_NIGHT_WARMTH = "night_warmth"
         private const val KEY_NIGHT_BRIGHTNESS = "night_brightness"
         private const val KEY_READING_MODE = "reading_mode"
+        private const val KEY_DOUBLE_TAP = "double_tap_zoom"
         private const val KEY_ORIENTATION = "orientation"
         private const val KEY_SHELF_MODE = "shelf_mode"
         private const val KEY_SHELF_THEME = "shelf_theme"

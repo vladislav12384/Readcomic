@@ -107,6 +107,8 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     fun setReadingMode(mode: PageTurnController.ReadingMode) = onGl { controller.setReadingMode(mode) }
 
+    fun setDoubleTapZoom(zoom: PageTurnController.DoubleTapZoom) = onGl { controller.doubleTapZoom = zoom }
+
     fun turnNext() = onGl { controller.turnForward() }
 
     fun turnPrevious() = onGl { controller.turnBackward() }

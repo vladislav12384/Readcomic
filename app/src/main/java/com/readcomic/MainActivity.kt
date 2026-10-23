@@ -165,6 +165,7 @@ private fun App(viewModel: LibraryViewModel) {
     val table by viewModel.table.collectAsStateWithLifecycle()
     val night by viewModel.night.collectAsStateWithLifecycle()
     val readingMode by viewModel.readingMode.collectAsStateWithLifecycle()
+    val doubleTapZoom by viewModel.doubleTapZoom.collectAsStateWithLifecycle()
     val orientation by viewModel.orientation.collectAsStateWithLifecycle()
     val shelfMode by viewModel.shelfMode.collectAsStateWithLifecycle()
     val shelfTheme by viewModel.shelfTheme.collectAsStateWithLifecycle()
@@ -292,11 +293,13 @@ private fun App(viewModel: LibraryViewModel) {
                     table = table,
                     night = night,
                     readingMode = readingMode,
+                    doubleTapZoom = doubleTapZoom,
                     orientation = orientation,
                     pageAspects = { source, onProgress -> viewModel.pageAspects(entry, source, onProgress) },
                     onTableChange = viewModel::setTable,
                     onNightChange = viewModel::setNight,
                     onReadingModeChange = viewModel::setReadingMode,
+                    onDoubleTapZoomChange = viewModel::setDoubleTapZoom,
                     onOrientationChange = viewModel::setOrientation,
                     onPageChanged = { first, last -> viewModel.updateProgress(entry.id, first, last) },
                     onBack = { openId = null },
