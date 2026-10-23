@@ -51,8 +51,8 @@ uniform vec2 uTapeCut;        // the tape is cut open from..to along its length 
 uniform float uAlpha;         // fading things: their opacity
 uniform int uStyle;           // the bookcase: 0 oak and painted boards, 1 light (white lacquer, birch ply,
                               // plaster), 2 comic shop (white steel, coloured price rails, pegboard),
-                              // 3 display case (dark blue cells, cold light), 4 glass shelves
-uniform vec2 uCells;          // cells of the display case: their width, the x of one of their walls
+                              // 3 display case (dark blue, cold light over every comic)
+uniform vec2 uCells;          // places of the comics across a shelf: their width, the x of one of their sides
 uniform float uMirror;        // 1 while drawing the comics mirrored in the shelf tops
 uniform float uMirrorY;       // the shelf top they are mirrored in
 
@@ -136,7 +136,7 @@ float stripOn(float bay) {
     return t * t * (3.0 - 2.0 * t);
 }
 
-// The shelf lights: warm, or a cold white in the display case and behind the glass.
+// The shelf lights: warm, or a cold white in the display case.
 vec3 stripColor() {
     return uStyle >= 3 ? vec3(0.80, 0.92, 1.12) : STRIP;
 }

@@ -375,7 +375,7 @@ private fun ShelfLibrary(
         }
     }
 
-    LaunchedEffect(view, placed, aspects, shelfStyle.cells) {
+    LaunchedEffect(view, placed, aspects) {
         val shelf = view ?: return@LaunchedEffect
         val known = aspects
         val items = placed.map { place ->
@@ -385,8 +385,7 @@ private fun ShelfLibrary(
                 aspect = known[entry.id] ?: DEFAULT_ASPECT,
                 pageCount = entry.pageCount,
                 inProgress = entry.currentPage > 0 && !entry.isFinished,
-                // In the cells of a display case there are no series signs: the label says it all.
-                label = if (shelfStyle.cells) entry.title else place.label,
+                label = place.label,
                 series = place.series,
                 drawnBack = entry.drawnBack,
             )
@@ -903,20 +902,18 @@ private fun RoundButton(
     onClick: () -> Unit,
     description: String,
     glass: Boolean = false,
-    /** A rim of all colours, as on a soap bubble (the glass shelves). */
-    iridescent: Boolean = false,
     /** Ringed with light, as the button of the view one is in. */
     accent: Boolean = false,
     size: Dp = 44.dp,
     content: @Composable () -> Unit,
 ) {
     val look = if (glass) {
-        // Dark glass with a cold rim, as the display case and the glass shelves are lit.
+        // Dark glass with a cold rim, as the display case is lit.
         Modifier
             .shadow(if (accent) 12.dp else 8.dp, CircleShape, ambientColor = GlassGlow, spotColor = GlassGlow)
             .clip(CircleShape)
             .background(GlassFill)
-            .border(if (accent) 1.5.dp else 1.dp, if (accent) GlassAccent else if (iridescent) GlassIris else GlassRim, CircleShape)
+            .border(if (accent) 1.5.dp else 1.dp, if (accent) GlassAccent else GlassRim, CircleShape)
     } else {
         Modifier
             .shadow(6.dp, CircleShape)
@@ -935,17 +932,15 @@ private fun RoundButton(
     }
 }
 
-/** The glass of the buttons over the display case and the glass shelves. */
+/** The glass of the buttons over the display case. */
 private val GlassFill = Brush.verticalGradient(listOf(Color(0xA6233554), Color(0xD90A111F)))
 private val GlassRim = Brush.linearGradient(listOf(Color(0xCCA9D4FF), Color(0x334A6A9A), Color(0x99A9D4FF)))
 private val GlassGlow = Color(0xFF3B82F6)
-private val GlassIris = Brush.linearGradient(listOf(Color(0xDDB8E4FF), Color(0x88FF9CE8), Color(0x339FD0FF), Color(0x99FFF3B0), Color(0xCCB8E4FF)))
 private val GlassAccent = Brush.linearGradient(listOf(Color(0xFF7CC4FF), Color(0xFF2F7BFF), Color(0xFF9AD6FF)))
-private val GlassBar = Brush.verticalGradient(listOf(Color(0x8C1C2C48), Color(0xB30A1222)))
 
 /**
- * The header of a display (the display case, the glass shelves): the collection named in the
- * middle, the settings on the left, search, the plain grid and the order on the right.
+ * The header of the display case: the collection named in the middle, the settings and search
+ * on the left, the plain grid and the order on the right.
  */
 @Composable
 private fun ShowcaseHeader(
@@ -959,17 +954,6 @@ private fun ShowcaseHeader(
     /** Where the header ends, in pixels from the top of the screen. */
     onBottom: (Float) -> Unit,
 ) {
-    val iris = style.framed
-    val bar = if (style.framed) {
-        // The glass shelves have their header on a bar of glass.
-        Modifier
-            .clip(RoundedCornerShape(32.dp))
-            .background(GlassBar)
-            .border(1.dp, GlassIris, RoundedCornerShape(32.dp))
-            .padding(horizontal = 8.dp, vertical = 8.dp)
-    } else {
-        Modifier.padding(vertical = 4.dp)
-    }
     Column(
         Modifier
             .windowInsetsPadding(SafeInsets)
@@ -979,13 +963,13 @@ private fun ShowcaseHeader(
             .onGloballyPositioned { onBottom(it.boundsInRoot().bottom) },
     ) {
         // Two buttons either side, so that the name stands right in the middle.
-        BoxWithConstraints(Modifier.fillMaxWidth().then(bar)) {
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             val side = 42.dp * 2 + 8.dp
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.CenterStart)) {
-                RoundButton(onClick = onMenu, description = "Настройки", glass = true, iridescent = iris, size = 42.dp) {
+                RoundButton(onClick = onMenu, description = "Настройки", glass = true, size = 42.dp) {
                     Icon(Icons.Filled.Menu, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
                 }
-                RoundButton(onClick = onSearch, description = "Поиск", glass = true, iridescent = iris, size = 42.dp) {
+                RoundButton(onClick = onSearch, description = "Поиск", glass = true, size = 42.dp) {
                     Icon(Icons.Filled.Search, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
                 }
             }
@@ -1010,10 +994,10 @@ private fun ShowcaseHeader(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.CenterEnd)) {
-                RoundButton(onClick = onShowGrid, description = "Сеткой", glass = true, iridescent = iris, accent = true, size = 42.dp) {
+                RoundButton(onClick = onShowGrid, description = "Сеткой", glass = true, accent = true, size = 42.dp) {
                     Icon(GridIcon, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(20.dp))
                 }
-                RoundButton(onClick = onOrder, description = "Порядок", glass = true, iridescent = iris, size = 42.dp) {
+                RoundButton(onClick = onOrder, description = "Порядок", glass = true, size = 42.dp) {
                     Icon(MoreHorizIcon, contentDescription = null, tint = ShowcaseInk, modifier = Modifier.size(22.dp))
                 }
             }
@@ -1045,7 +1029,7 @@ private val MoreHorizIcon: ImageVector by lazy {
     }.build()
 }
 
-/** The swatch on the wall button when the wall is not painted (display case, glass). */
+/** The swatch on the wall button when the wall is not painted (the display case). */
 private val GlassSwatch = Color(0xFF13203A)
 
 @Composable
@@ -1561,10 +1545,11 @@ private fun GridLibraryContent(
         query = ""
     }
 
-    val patterned = style == GridStyle.VINTAGE || style == GridStyle.COMIC
+    // The page under the grid is drawn by gridBackground: a soft gradient in every look.
+    val (groundTop, _, _) = GridPalette.ground(style)
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection).gridBackground(style),
-        containerColor = if (patterned) Color.Transparent else MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             Column {
                 TopAppBar(
@@ -1575,18 +1560,18 @@ private fun GridLibraryContent(
                             titleContentColor = Color.White,
                             actionIconContentColor = Color.White,
                         )
-                        GridStyle.VINTAGE -> TopAppBarDefaults.topAppBarColors(
+                        // Over the page itself; once the covers scroll under it, a veil of the page's top colour.
+                        else -> TopAppBarDefaults.topAppBarColors(
                             containerColor = Color.Transparent,
-                            scrolledContainerColor = MaterialTheme.colorScheme.background,
+                            scrolledContainerColor = groundTop.copy(alpha = 0.94f),
                         )
-                        else -> TopAppBarDefaults.topAppBarColors()
                     },
                     title = {
                         Column {
                             when (style) {
-                                GridStyle.VINTAGE -> Text("Readcomic", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)
+                                GridStyle.VINTAGE -> Text("Readcomic", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic, fontSize = 24.sp)
                                 GridStyle.COMIC -> Text("READCOMIC", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic, letterSpacing = 1.sp)
-                                else -> Text("Readcomic", fontWeight = FontWeight.Bold)
+                                else -> Text("Readcomic", fontWeight = FontWeight.SemiBold, letterSpacing = 0.3.sp)
                             }
                             Text(
                                 "Библиотека · ${comics.size}",
@@ -1685,8 +1670,8 @@ private fun GridLibraryContent(
                     top = padding.calculateTopPadding() + 8.dp,
                     bottom = padding.calculateBottomPadding() + 88.dp,
                 ),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(26.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 items(sorted, key = { it.id }) { entry ->
@@ -1732,25 +1717,22 @@ private fun ComicCard(entry: ComicEntry, coverFile: File, look: GridLook, onClic
     }
     Column(Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         if (look.byShape) {
-            IssueCover(
-                cover = cover,
-                pageCount = entry.pageCount,
-                title = entry.title,
-                style = style,
-                progress = if (entry.currentPage > 0) entry.progress else null,
-                progressColor = MaterialTheme.colorScheme.primary,
-                blankColor = MaterialTheme.colorScheme.surfaceVariant,
-                blankInk = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            GridPalette.ShapedCover(entry, cover, style)
         } else {
-            FlatCover(entry, cover, style)
+            GridPalette.Cover(entry, cover, style, Modifier.fillMaxWidth().aspectRatio(GridPalette.TILE_ASPECT))
         }
-        Spacer(Modifier.height(8.dp))
+        if (entry.currentPage > 0) GridPalette.Progress(entry.progress, style)
+        Spacer(Modifier.height(if (entry.currentPage > 0) 7.dp else 10.dp))
         Text(
             if (style == GridStyle.COMIC) entry.title.uppercase() else entry.title,
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = if (style == GridStyle.VINTAGE) FontFamily.Serif else null,
-            fontWeight = if (style == GridStyle.COMIC) FontWeight.Black else null,
+            fontWeight = when (style) {
+                GridStyle.COMIC -> FontWeight.Black
+                GridStyle.VINTAGE -> FontWeight.SemiBold
+                else -> FontWeight.Medium
+            },
+            lineHeight = 18.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1764,67 +1746,8 @@ private fun ComicCard(entry: ComicEntry, coverFile: File, look: GridLook, onClic
             fontFamily = if (style == GridStyle.VINTAGE) FontFamily.Serif else null,
             fontStyle = if (style == GridStyle.VINTAGE) FontStyle.Italic else null,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp),
         )
-    }
-}
-
-/** The cover as a tile of the grid, all of one shape (the cover cut to fit). */
-@Composable
-private fun FlatCover(entry: ComicEntry, cover: ImageBitmap?, style: GridStyle) {
-    val shape = RoundedCornerShape(if (style == GridStyle.COMIC) 2.dp else 4.dp)
-    val tile = Modifier
-        .fillMaxWidth()
-        .aspectRatio(0.66f)
-    val framed = when (style) {
-        // Inked like a panel: a thick black frame and a hard black shadow.
-        GridStyle.COMIC -> tile
-            .drawBehind { drawRect(Color(0xFF111111), topLeft = Offset(4.dp.toPx(), 4.dp.toPx()), size = size) }
-            .border(2.5.dp, Color(0xFF111111), shape)
-            .clip(shape)
-        GridStyle.VINTAGE -> tile.shadow(6.dp, shape).clip(shape).border(1.dp, Color(0x663E2C1C), shape)
-        GridStyle.LIGHT -> tile.shadow(7.dp, shape).clip(shape)
-        GridStyle.DARK -> tile.shadow(10.dp, shape).clip(shape)
-    }
-    Box(framed.background(MaterialTheme.colorScheme.surfaceVariant)) {
-        val image = cover
-        if (image != null) {
-            Image(
-                image,
-                contentDescription = entry.title,
-                contentScale = ContentScale.Crop,
-                colorFilter = if (style == GridStyle.VINTAGE) GridPalette.Sepia else null,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Text(
-                entry.title.take(1).uppercase(),
-                style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.Center),
-            )
-        }
-        // Spine shading so the cover reads like a physical comic.
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        0f to Color.Black.copy(alpha = 0.35f),
-                        0.06f to Color.Transparent,
-                        0.9f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.12f),
-                    ),
-                ),
-        )
-        if (entry.currentPage > 0) {
-            LinearProgressIndicator(
-                progress = { entry.progress },
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
-                trackColor = Color.Black.copy(alpha = 0.4f),
-                drawStopIndicator = {},
-                gapSize = 0.dp,
-            )
-        }
     }
 }
 
@@ -1853,7 +1776,7 @@ private fun GridViewMenu(expanded: Boolean, look: GridLook, onDismiss: () -> Uni
                 Column {
                     Text("По форме выпуска")
                     Text(
-                        "Свои пропорции и толщина",
+                        "Свои пропорции, на одной линии",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -2,47 +2,47 @@ package com.readcomic.ui
 
 import android.graphics.Canvas
 import android.graphics.Paint
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageShader
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.graphics.createBitmap
-import com.readcomic.shelf.Binding
-import com.readcomic.shelf.ComicShape
-import com.readcomic.shelf.ShelfController
+import com.readcomic.data.ComicEntry
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -57,62 +57,62 @@ enum class GridStyle(val label: String) {
 /** The look of the plain grid, and what to call when the reader changes it. */
 class GridLook(
     val style: GridStyle = GridStyle.DARK,
-    /** Covers in the shapes of the issues: their own proportions, and their thickness seen a little from aside. */
+    /** Covers in the shapes of the issues: their own proportions, standing on one line. */
     val byShape: Boolean = false,
     val onStyleChange: (GridStyle) -> Unit = {},
     val onByShapeChange: (Boolean) -> Unit = {},
 )
 
-/** Colours of the grid in each look; the dark one is the app's own. */
+/** Colours of the grid in each look; the dark one keeps the app's own scheme. */
 internal object GridPalette {
     private val Light = lightColorScheme(
-        primary = Color(0xFF9A5A1C),
+        primary = Color(0xFFA0632A),
         onPrimary = Color.White,
-        primaryContainer = Color(0xFFF2D5AE),
+        primaryContainer = Color(0xFFF3DDBF),
         onPrimaryContainer = Color(0xFF3A2200),
         secondary = Color(0xFF7A6150),
         background = Color(0xFFF6F1E8),
         onBackground = Color(0xFF2A231D),
         surface = Color(0xFFF6F1E8),
         onSurface = Color(0xFF2A231D),
-        surfaceVariant = Color(0xFFE6DCCD),
-        onSurfaceVariant = Color(0xFF6B5E52),
-        surfaceContainer = Color(0xFFFFFBF5),
-        surfaceContainerHigh = Color(0xFFFFFBF5),
+        surfaceVariant = Color(0xFFE9E1D4),
+        onSurfaceVariant = Color(0xFF75685C),
+        surfaceContainer = Color(0xFFFFFCF7),
+        surfaceContainerHigh = Color(0xFFFFFCF7),
     )
 
     private val Vintage = lightColorScheme(
         primary = Color(0xFF7A2E1A),
-        onPrimary = Color(0xFFF3E9D2),
-        primaryContainer = Color(0xFF6B4A2E),
-        onPrimaryContainer = Color(0xFFF3E9D2),
+        onPrimary = Color(0xFFF5ECD8),
+        primaryContainer = Color(0xFF5E4029),
+        onPrimaryContainer = Color(0xFFF5ECD8),
         secondary = Color(0xFF6E5640),
-        background = Color(0xFFE9DDC2),
-        onBackground = Color(0xFF3E2C1C),
-        surface = Color(0xFFE9DDC2),
-        onSurface = Color(0xFF3E2C1C),
-        surfaceVariant = Color(0xFFD8C7A3),
-        onSurfaceVariant = Color(0xFF6E5640),
-        surfaceContainer = Color(0xFFF1E7D0),
-        surfaceContainerHigh = Color(0xFFF1E7D0),
+        background = Color(0xFFEBDFC4),
+        onBackground = Color(0xFF3B2A1B),
+        surface = Color(0xFFEBDFC4),
+        onSurface = Color(0xFF3B2A1B),
+        surfaceVariant = Color(0xFFDCCBA8),
+        onSurfaceVariant = Color(0xFF735A43),
+        surfaceContainer = Color(0xFFF4EBD8),
+        surfaceContainerHigh = Color(0xFFF4EBD8),
         outline = Color(0xFF8A7154),
     )
 
     private val Comic = lightColorScheme(
-        primary = Color(0xFFE2302A),
+        primary = Color(0xFFD8352A),
         onPrimary = Color.White,
-        primaryContainer = Color(0xFF151515),
-        onPrimaryContainer = Color(0xFFFFD43B),
+        primaryContainer = Color(0xFF161616),
+        onPrimaryContainer = Color(0xFFFFD84D),
         secondary = Color(0xFF1F4FB8),
-        background = Color(0xFFFFD43B),
-        onBackground = Color(0xFF111111),
-        surface = Color(0xFFFFD43B),
-        onSurface = Color(0xFF111111),
-        surfaceVariant = Color(0xFFFFF1B0),
-        onSurfaceVariant = Color(0xFF3A3220),
-        surfaceContainer = Color(0xFFFFFBEA),
-        surfaceContainerHigh = Color(0xFFFFFBEA),
-        outline = Color(0xFF111111),
+        background = Color(0xFFFFDB66),
+        onBackground = Color(0xFF141414),
+        surface = Color(0xFFFFDB66),
+        onSurface = Color(0xFF141414),
+        surfaceVariant = Color(0xFFFFF0B8),
+        onSurfaceVariant = Color(0xFF4A3F22),
+        surfaceContainer = Color(0xFFFFFAE6),
+        surfaceContainerHigh = Color(0xFFFFFAE6),
+        outline = Color(0xFF141414),
     )
 
     /** The colour scheme of [style]; null keeps the app's dark one. */
@@ -123,13 +123,21 @@ internal object GridPalette {
         GridStyle.COMIC -> Comic
     }
 
-    /** The bar along the top in the comic look: red, as on the covers of old comics. */
-    val ComicBar = Color(0xFFE2302A)
+    /** The background, top to bottom, and the soft light at its top. */
+    fun ground(style: GridStyle): Triple<Color, Color, Color> = when (style) {
+        // Deep warm charcoal, a faint amber light from above (the colour of the buttons).
+        GridStyle.DARK -> Triple(Color(0xFF1D1915), Color(0xFF0D0B0A), Color(0x1CFFB55A))
+        GridStyle.LIGHT -> Triple(Color(0xFFFCF9F4), Color(0xFFEEE7DB), Color(0x99FFFFFF))
+        GridStyle.VINTAGE -> Triple(Color(0xFFF1E7D1), Color(0xFFDFCFAD), Color(0x66FFF8E6))
+        GridStyle.COMIC -> Triple(Color(0xFFFFE58C), Color(0xFFFFCF45), Color(0x66FFFFFF))
+    }
 
-    /** Covers on yellowed paper look printed long ago. */
+    /** The bar along the top in the comic look: red, as on the covers of old comics. */
+    val ComicBar = Color(0xFFD8352A)
+
+    /** Covers on yellowed paper look printed long ago, a little. */
     val Sepia: ColorFilter by lazy {
-        // Two thirds the picture itself, one third its sepia print.
-        val keep = 0.65f
+        val keep = 0.78f
         val tone = 1f - keep
         ColorFilter.colorMatrix(
             ColorMatrix(
@@ -142,6 +150,106 @@ internal object GridPalette {
             ),
         )
     }
+
+    private val Ink = Color(0xFF141414)
+    private val Mat = Color(0xFFF8F1E0)
+    private val PrintLine = Color(0x996E5640)
+
+    /**
+     * A cover as a tile of the grid in [style], as big as [modifier] makes it (the picture cut to
+     * fill it): square-cornered as a printed comic, lifted off the page by a soft shadow, with a
+     * fine light along its edge; on a paper mat in the vintage look, inked and with a hard
+     * shadow in the comic one.
+     */
+    @Composable
+    fun Cover(entry: ComicEntry, cover: ImageBitmap?, style: GridStyle, modifier: Modifier) {
+        val shape = RectangleShape
+        val lifted = when (style) {
+            GridStyle.DARK -> modifier.shadow(14.dp, shape, ambientColor = Color.Black, spotColor = Color.Black)
+            GridStyle.LIGHT -> modifier.shadow(10.dp, shape, ambientColor = Color(0xFF6B5440), spotColor = Color(0xFF6B5440))
+            // A print pasted on a mat, the mat on the page.
+            GridStyle.VINTAGE -> modifier
+                .shadow(5.dp, shape, ambientColor = Color(0xFF5A4028), spotColor = Color(0xFF5A4028))
+                .background(Mat, shape)
+                .padding(5.dp)
+                .border(0.75.dp, PrintLine)
+                .padding(1.5.dp)
+            // Inked: a black outline and a hard black shadow, as a panel of a comic.
+            GridStyle.COMIC -> modifier
+                .drawBehind { drawRect(Ink, topLeft = Offset(3.dp.toPx(), 3.dp.toPx()), size = size) }
+                .border(2.dp, Ink, shape)
+                .padding(2.dp)
+        }
+        Box(lifted.clip(shape).background(MaterialTheme.colorScheme.surfaceVariant)) {
+            if (cover != null) {
+                Image(
+                    cover,
+                    contentDescription = entry.title,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = if (style == GridStyle.VINTAGE) Sepia else null,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text(
+                    entry.title.take(1).uppercase(),
+                    style = MaterialTheme.typography.displayMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+            // The fold of the spine, softly, so the cover reads as a bound comic.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            0f to Color.Black.copy(alpha = 0.22f),
+                            0.05f to Color.Transparent,
+                            0.92f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.08f),
+                        ),
+                    ),
+            )
+            if (style == GridStyle.DARK || style == GridStyle.LIGHT) {
+                // A fine light along the top edge, as glossy card catches it.
+                val rim = if (style == GridStyle.DARK) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.5f)
+                Box(Modifier.fillMaxSize().border(1.dp, Brush.verticalGradient(listOf(rim, Color.Transparent), endY = 220f), shape))
+            }
+        }
+    }
+
+    /** The cover in its own proportions, standing on the bottom of a tile of the grid. */
+    @Composable
+    fun ShapedCover(entry: ComicEntry, cover: ImageBitmap?, style: GridStyle) {
+        BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(TILE_ASPECT), contentAlignment = Alignment.BottomCenter) {
+            val aspect = cover?.let { it.width.toFloat() / it.height }?.coerceIn(0.3f, 3f) ?: TILE_ASPECT
+            val width = if (aspect < TILE_ASPECT) maxHeight * aspect else maxWidth
+            val height = if (aspect < TILE_ASPECT) maxHeight else maxWidth / aspect
+            Cover(entry, cover, style, Modifier.size(width, height))
+        }
+    }
+
+    /** How far the comic has been read: a slim line under its cover. */
+    @Composable
+    fun Progress(progress: Float, style: GridStyle) {
+        val track = when (style) {
+            GridStyle.DARK -> Color.White.copy(alpha = 0.10f)
+            GridStyle.COMIC -> Color(0x33141414)
+            else -> Color(0x1F3B2A1B)
+        }
+        Box(
+            Modifier
+                .padding(top = 7.dp)
+                .fillMaxWidth()
+                .height(3.dp)
+                .clip(RoundedCornerShape(50))
+                .background(track),
+        ) {
+            Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary))
+        }
+    }
+
+    const val TILE_ASPECT = 0.66f
 }
 
 /** The theme of the grid in [style]: the app's own when dark. */
@@ -152,8 +260,9 @@ internal fun GridTheme(style: GridStyle, content: @Composable () -> Unit) {
 }
 
 /**
- * Behind the grid: yellowed newsprint with its fibres and darker edges in the vintage look, a
- * halftone screen of dots in the comic one; nothing in the others.
+ * Behind the grid: a soft gradient from top to bottom with a little light at the top in every
+ * look; fine fibres of old paper and darker edges in the vintage one, a light halftone screen
+ * fading down the page in the comic one.
  */
 @Composable
 internal fun Modifier.gridBackground(style: GridStyle): Modifier {
@@ -164,282 +273,72 @@ internal fun Modifier.gridBackground(style: GridStyle): Modifier {
             GridStyle.COMIC -> dotsTile(density)
             else -> null
         }
-    } ?: return this
-    val base = GridPalette.colors(style)?.background ?: Color.Black
-    val brush = remember(tile) { ShaderBrush(ImageShader(tile, TileMode.Repeated, TileMode.Repeated)) }
+    }
+    val pattern = remember(tile) { tile?.let { ShaderBrush(ImageShader(it, TileMode.Repeated, TileMode.Repeated)) } }
+    val (top, bottom, light) = GridPalette.ground(style)
     return drawBehind {
-        drawRect(base)
-        drawRect(brush)
+        drawRect(Brush.verticalGradient(listOf(top, bottom)))
+        drawRect(
+            Brush.radialGradient(
+                0f to light,
+                1f to Color.Transparent,
+                center = Offset(size.width * 0.5f, -size.height * 0.05f),
+                radius = max(size.width, size.height) * 0.7f,
+            ),
+        )
+        if (pattern != null) {
+            if (style == GridStyle.COMIC) {
+                // The dots are strongest at the top and fade out down the page.
+                drawRect(pattern, alpha = 0.55f)
+                drawRect(Brush.verticalGradient(0f to Color.Transparent, 0.75f to bottom.copy(alpha = 0.85f), 1f to bottom))
+            } else {
+                drawRect(pattern)
+            }
+        }
         if (style == GridStyle.VINTAGE) {
             drawRect(
                 Brush.radialGradient(
-                    0.55f to Color.Transparent,
-                    1f to Color(0x40553A1E),
+                    0.6f to Color.Transparent,
+                    1f to Color(0x33553A1E),
                     center = Offset(size.width / 2f, size.height / 2f),
                     radius = max(size.width, size.height) * 0.75f,
                 ),
             )
-        } else {
-            // The dots fade towards the bottom, under the comics.
-            drawRect(Brush.verticalGradient(0f to Color.Transparent, 1f to base.copy(alpha = 0.55f)))
         }
     }
 }
 
 /** A tile of halftone dots, staggered as a print screen is. */
 private fun dotsTile(density: Float): ImageBitmap {
-    val pitch = (9f * density).roundToInt().coerceAtLeast(6)
+    val pitch = (7f * density).roundToInt().coerceAtLeast(5)
     val bitmap = createBitmap(pitch * 2, pitch * 2)
     val canvas = Canvas(bitmap)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(110, 236, 128, 0) }
-    val r = pitch * 0.27f
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(120, 240, 142, 20) }
+    val r = pitch * 0.22f
     val p = pitch.toFloat()
     for ((x, y) in listOf(0f to 0f, 2 * p to 0f, 0f to 2 * p, 2 * p to 2 * p, p to p)) canvas.drawCircle(x, y, r, paint)
     return bitmap.asImageBitmap()
 }
 
-/** A tile of newsprint: specks and short fibres, faint. */
+/** A tile of old paper: faint specks and short fibres, barely there. */
 private fun grainTile(density: Float): ImageBitmap {
-    val size = (96f * density).roundToInt().coerceIn(96, 512)
+    val size = (128f * density).roundToInt().coerceIn(128, 512)
     val bitmap = createBitmap(size, size)
     val canvas = Canvas(bitmap)
     val random = Random(7)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    repeat(size * size / 90) {
-        paint.color = android.graphics.Color.argb(random.nextInt(10, 34), 90, 62, 30)
-        canvas.drawCircle(random.nextFloat() * size, random.nextFloat() * size, density * (0.3f + random.nextFloat() * 0.6f), paint)
+    repeat(size * size / 260) {
+        paint.color = android.graphics.Color.argb(random.nextInt(6, 18), 90, 62, 30)
+        canvas.drawCircle(random.nextFloat() * size, random.nextFloat() * size, density * (0.25f + random.nextFloat() * 0.4f), paint)
     }
-    paint.strokeWidth = density * 0.5f
-    repeat(size / 6) {
-        paint.color = android.graphics.Color.argb(random.nextInt(14, 30), 110, 80, 45)
+    paint.strokeWidth = density * 0.4f
+    repeat(size / 10) {
+        paint.color = android.graphics.Color.argb(random.nextInt(8, 18), 110, 80, 45)
         val x = random.nextFloat() * size
         val y = random.nextFloat() * size
-        val length = density * (3f + random.nextFloat() * 6f)
+        val length = density * (3f + random.nextFloat() * 5f)
         val angle = random.nextFloat() * 6.283f
         canvas.drawLine(x, y, x + kotlin.math.cos(angle) * length, y + kotlin.math.sin(angle) * length, paint)
     }
     return bitmap.asImageBitmap()
-}
-
-/**
- * The geometry of an issue drawn in its own shape: the front cover in its own proportions
- * standing on the bottom of the cell, and its thickness seen a little from above and the right
- * (the fore-edge and the top of the pages), as thick as the comic is for its height.
- */
-internal class IssueLayout(
-    val left: Float,
-    val top: Float,
-    val width: Float,
-    val height: Float,
-    /** How far the back of the comic shows to the right of and above the front. */
-    val depthX: Float,
-    val depthY: Float,
-) {
-    val right get() = left + width
-    val bottom get() = top + height
-
-    companion object {
-        /** Depth drawn per unit of thickness: a cabinet view, turned 45 degrees. */
-        private const val OBLIQUE = 0.55f * 0.7071f
-
-        /**
-         * Fits a cover of [aspect] (width / height) of a comic [thickness] meters thick into a
-         * [cellWidth] x [cellHeight] cell; at least [minDepth] of thickness shows.
-         */
-        fun fit(cellWidth: Float, cellHeight: Float, aspect: Float, thickness: Float, minDepth: Float): IssueLayout {
-            val a = aspect.coerceIn(0.3f, 3f)
-            val depth = max(minDepth, cellHeight * thickness / ShelfController.COMIC_HEIGHT * OBLIQUE)
-            val width = min(cellWidth - depth, (cellHeight - depth) * a)
-            val height = width / a
-            return IssueLayout((cellWidth - width - depth) / 2f, cellHeight - height, width, height, depth, depth)
-        }
-    }
-}
-
-/** The cover of an issue in its own shape (see [IssueLayout]), with the look's finish. */
-@Composable
-internal fun IssueCover(
-    cover: ImageBitmap?,
-    pageCount: Int,
-    title: String,
-    style: GridStyle,
-    /** Reading progress 0..1, null when not started. */
-    progress: Float?,
-    progressColor: Color,
-    blankColor: Color,
-    blankInk: Color,
-    modifier: Modifier = Modifier,
-) {
-    val binding = ComicShape.binding(pageCount)
-    val thickness = ComicShape.thickness(pageCount)
-    // The edges of the boards or of the cover wrapped round the pages: the cover's own colour.
-    val edge = remember(cover) { cover?.let(::edgeColor) ?: Color(0xFF5A4A3E) }
-    val measurer = rememberTextMeasurer()
-    val initial = title.take(1).uppercase()
-    Canvas(modifier.fillMaxWidth().aspectRatio(0.66f)) {
-        val aspect = cover?.let { it.width.toFloat() / it.height } ?: 0.66f
-        val box = IssueLayout.fit(size.width, size.height, aspect, thickness, minDepth = 2.dp.toPx())
-        val dx = box.depthX
-        val dy = box.depthY
-        val pages = when (style) {
-            GridStyle.VINTAGE -> Color(0xFFE2D2AE)
-            else -> Color(0xFFEFE8D8)
-        }
-        val ink = Color(0xFF111111)
-
-        // What it stands on: a soft shadow, or in the comic look a hard black one.
-        val outline = Path().apply {
-            moveTo(box.left, box.top)
-            lineTo(box.left + dx, box.top - dy)
-            lineTo(box.right + dx, box.top - dy)
-            lineTo(box.right + dx, box.bottom - dy)
-            lineTo(box.right, box.bottom)
-            lineTo(box.left, box.bottom)
-            close()
-        }
-        if (style == GridStyle.COMIC) {
-            val shift = 4.dp.toPx()
-            translateBy(shift, shift) { drawPath(outline, ink) }
-        } else {
-            val dark = style == GridStyle.DARK
-            drawOval(
-                Brush.radialGradient(
-                    0f to Color.Black.copy(alpha = if (dark) 0.55f else 0.28f),
-                    1f to Color.Transparent,
-                    center = Offset(box.left + (box.width + dx) / 2f, box.bottom - dy / 2f),
-                    radius = (box.width + dx) * 0.62f,
-                ),
-                topLeft = Offset(box.left - box.width * 0.1f, box.bottom - dy - 4.dp.toPx()),
-                size = Size((box.width + dx) * 1.2f, dy + 10.dp.toPx()),
-            )
-        }
-
-        // The fore-edge: the sheets one behind another, between the two covers.
-        val side = Path().apply {
-            moveTo(box.right, box.top)
-            lineTo(box.right + dx, box.top - dy)
-            lineTo(box.right + dx, box.bottom - dy)
-            lineTo(box.right, box.bottom)
-            close()
-        }
-        val topFace = Path().apply {
-            moveTo(box.left, box.top)
-            lineTo(box.left + dx, box.top - dy)
-            lineTo(box.right + dx, box.top - dy)
-            lineTo(box.right, box.top)
-            close()
-        }
-        drawPath(side, lerpColor(pages, Color.Black, 0.18f))
-        drawPath(topFace, lerpColor(pages, Color.White, 0.08f))
-        val sheets = (dx / 2.5f).toInt().coerceIn(0, 14)
-        for (i in 1..sheets) {
-            val f = i / (sheets + 1f)
-            drawLine(Color.Black.copy(alpha = 0.10f), Offset(box.right + dx * f, box.top - dy * f), Offset(box.right + dx * f, box.bottom - dy * f), 1f)
-            drawLine(Color.Black.copy(alpha = 0.07f), Offset(box.left + dx * f, box.top - dy * f), Offset(box.right + dx * f, box.top - dy * f), 1f)
-        }
-        // The covers at the front and back of the block: boards on a hardcover, a thin line otherwise.
-        val board = if (binding == Binding.HARDCOVER) (ComicShape.BOARD / thickness).coerceIn(0.06f, 0.2f) else 0f
-        for (f in listOf(0f, 1f - board)) {
-            if (board > 0f) {
-                val a = f
-                val b = f + board
-                drawPath(
-                    Path().apply {
-                        moveTo(box.right + dx * a, box.top - dy * a)
-                        lineTo(box.right + dx * b, box.top - dy * b)
-                        lineTo(box.right + dx * b, box.bottom - dy * b)
-                        lineTo(box.right + dx * a, box.bottom - dy * a)
-                        close()
-                    },
-                    lerpColor(edge, Color.Black, 0.25f),
-                )
-                drawPath(
-                    Path().apply {
-                        moveTo(box.left + dx * a, box.top - dy * a)
-                        lineTo(box.left + dx * b, box.top - dy * b)
-                        lineTo(box.right + dx * b, box.top - dy * b)
-                        lineTo(box.right + dx * a, box.top - dy * a)
-                        close()
-                    },
-                    lerpColor(edge, Color.White, 0.05f),
-                )
-            }
-        }
-        if (board == 0f && dx > 3.dp.toPx()) {
-            drawLine(edge, Offset(box.right + dx, box.top - dy), Offset(box.right + dx, box.bottom - dy), 1.5f)
-            drawLine(edge, Offset(box.left + dx, box.top - dy), Offset(box.right + dx, box.top - dy), 1.5f)
-        }
-
-        // The front cover.
-        if (cover != null) {
-            drawImage(
-                cover,
-                srcOffset = IntOffset.Zero,
-                srcSize = IntSize(cover.width, cover.height),
-                dstOffset = IntOffset(box.left.roundToInt(), box.top.roundToInt()),
-                dstSize = IntSize(box.width.roundToInt().coerceAtLeast(1), box.height.roundToInt().coerceAtLeast(1)),
-                colorFilter = if (style == GridStyle.VINTAGE) GridPalette.Sepia else null,
-            )
-        } else {
-            drawRect(blankColor, Offset(box.left, box.top), Size(box.width, box.height))
-            val text = measurer.measure(initial, TextStyle(fontSize = 34.sp, fontWeight = FontWeight.Bold, color = blankInk))
-            drawText(text, topLeft = Offset(box.left + (box.width - text.size.width) / 2f, box.top + (box.height - text.size.height) / 2f))
-        }
-        clipRect(box.left, box.top, box.right, box.bottom) {
-            // Shading along the spine, so the cover reads as a bound comic.
-            drawRect(
-                Brush.horizontalGradient(
-                    0f to Color.Black.copy(alpha = 0.35f),
-                    0.06f to Color.Transparent,
-                    0.9f to Color.Transparent,
-                    1f to Color.Black.copy(alpha = 0.12f),
-                    startX = box.left,
-                    endX = box.right,
-                ),
-            )
-            if (progress != null) {
-                val bar = 3.dp.toPx()
-                drawRect(Color.Black.copy(alpha = 0.4f), Offset(box.left, box.bottom - bar), Size(box.width, bar))
-                drawRect(progressColor, Offset(box.left, box.bottom - bar), Size(box.width * progress.coerceIn(0f, 1f), bar))
-            }
-        }
-        if (style == GridStyle.COMIC) {
-            val stroke = Stroke(width = 2.dp.toPx())
-            drawPath(side, ink, style = stroke)
-            drawPath(topFace, ink, style = stroke)
-            drawRect(ink, Offset(box.left, box.top), Size(box.width, box.height), style = stroke)
-        } else if (style == GridStyle.VINTAGE) {
-            drawRect(Color(0x663E2C1C), Offset(box.left, box.top), Size(box.width, box.height), style = Stroke(width = 1.dp.toPx()))
-        }
-    }
-}
-
-private inline fun DrawScope.translateBy(x: Float, y: Float, block: DrawScope.() -> Unit) {
-    drawContext.transform.translate(x, y)
-    block()
-    drawContext.transform.translate(-x, -y)
-}
-
-private fun lerpColor(a: Color, b: Color, t: Float) = androidx.compose.ui.graphics.lerp(a, b, t)
-
-/** The average colour of the right edge of a cover: what its boards or its wrap look like from aside. */
-private fun edgeColor(image: ImageBitmap): Color {
-    val h = image.height
-    if (image.width < 2 || h < 1) return Color(0xFF5A4A3E)
-    val map = image.toPixelMap(startX = image.width - 2, startY = 0, width = 1, height = h)
-    var r = 0f
-    var g = 0f
-    var b = 0f
-    val step = max(1, h / 64)
-    var n = 0
-    var y = 0
-    while (y < h) {
-        val c = map[0, y]
-        r += c.red
-        g += c.green
-        b += c.blue
-        n++
-        y += step
-    }
-    return Color(r / n, g / n, b / n)
 }

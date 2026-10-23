@@ -27,10 +27,8 @@ enum class ShelfSize(val label: String, val scale: Float) {
  * The look of the bookcase; the comics on it are the same in all of them.
  *
  * @param shader what the shaders call it (uStyle); kept when the list is reordered
- * @param cells every comic stands in a cell of its own, between upright panels
  * @param showcase laid out as a display: four comics across at least, standing upright, no
  *   paper labels or name plate (the screen's own header names the collection)
- * @param framed a glass frame round the bookcase, the shelves only as wide as it
  * @param mirrors the shelves are glossy enough to mirror the comics standing on them
  * @param paint the wall takes the paint chosen for it
  * @param glass the buttons over the shelves are of glass, to match
@@ -38,9 +36,7 @@ enum class ShelfSize(val label: String, val scale: Float) {
 enum class ShelfStyle(
     val label: String,
     val shader: Int,
-    val cells: Boolean = false,
     val showcase: Boolean = false,
-    val framed: Boolean = false,
     val mirrors: Boolean = false,
     val paint: Boolean = true,
     val glass: Boolean = false,
@@ -50,9 +46,6 @@ enum class ShelfStyle(
 
     /** A dark blue display case: a pool of cold light over every comic, glossy shelves with lit edges. */
     VITRINE("Витрина", 3, showcase = true, mirrors = true, paint = false, glass = true),
-
-    /** Thick glass shelves with bright edges that mirror the comics, before a deep blue wall. */
-    GLASS("Стекло", 4, showcase = true, framed = true, mirrors = true, paint = false, glass = true),
 
     /** White lacquered shelves with birch plywood edges, a plastered wall in a light shade of the paint. */
     LIGHT("Светлая", 1),
@@ -134,13 +127,9 @@ class ShelfFrame(
     val rowHeight: Float,
     /** The box of new comics, when there is one. */
     val unbox: UnboxDraw? = null,
-    /** Upright panels between the cells of a display case (boxes). */
-    val dividers: List<FloatArray> = emptyList(),
-    /** The uprights of a glass frame round the bookcase (boxes). */
-    val posts: List<FloatArray> = emptyList(),
     /** The glow of the light strips under the shelves of a display, seen from in front (quads). */
     val glows: List<FloatArray> = emptyList(),
-    /** Cells of a display case: their width and the x of one of their walls. */
+    /** Where the comics stand across a shelf: the width of a place and the x of one of its sides. */
     val cellWidth: Float = 0f,
     val cellOrigin: Float = 0f,
 )
@@ -212,22 +201,8 @@ class ShelfController(private val density: Float) {
     private val shownRoom = FloatArray(4)
 
     /** The UI takes [left], [top], [right] and [bottom] pixels from the edges of the view. */
-    /**
-     * Every comic stands in a cell of its own, between upright panels: comics moving to another
-     * place come out of their cells first, and series have no signs (the panels would cut them).
-     */
-    var cells = false
-
     /** Laid out as a display: comics standing upright, without paper labels, name plate or series signs. */
     var showcase = false
-        set(value) {
-            if (field == value) return
-            field = value
-            if (sized) setViewSize(viewWidth.toInt(), viewHeight.toInt())
-        }
-
-    /** A glass frame round the bookcase: the shelves end in its uprights instead of running off the screen. */
-    var framed = false
         set(value) {
             if (field == value) return
             field = value
@@ -443,7 +418,7 @@ class ShelfController(private val density: Float) {
         val visibleWidth = 2f * minDistance * tanHalf * aspect
         columns = max(columnsWanted, floor((visibleWidth - 0.06f) / slotWidth).toInt().coerceIn(2, 8))
         // A glass frame is seen whole, with a little of the wall on either side.
-        val shelfWidth = columns * slotWidth + if (framed) 2f * (FRAME_INSET + POST_WIDTH) + 0.07f else 0.04f
+        val shelfWidth = columns * slotWidth + 0.04f
         distance = max(minDistance, shelfWidth / 2f / (tanHalf * aspect)) + PLANK_DEPTH
         handFill = if (aspect > 1f) 0.66f else 0.52f
         updateHeaderDrop()
@@ -578,16 +553,6 @@ class ShelfController(private val density: Float) {
             // To another shelf: off the end of its own, in from the other end of the next one,
             // never across the others.
             val out = (visibleHalfWidth + slotWidth * 0.7f) * if (move.forward) 1f else -1f
-            if (cells) {
-                // Out of its cell, along in front of the panels, into the other cell.
-                val leaving = move.t < 0.5f
-                val u = if (leaving) move.t * 2f else (1f - move.t) * 2f
-                val forward = smooth(u * 3f)
-                val side = smooth((u - 0.33f) / 0.67f)
-                val start = if (leaving) move.from else pose.first
-                val end = if (leaving) out else -out
-                return Vec3(start.x + (end - start.x) * side, start.y, start.z + CELL_OUT * forward) to pose.second
-            }
             return if (move.t < 0.5f) {
                 val u = move.t * 2f
                 val e = u * u
@@ -600,19 +565,8 @@ class ShelfController(private val density: Float) {
             }
         }
         val e = move.t * move.t * (3f - 2f * move.t)
-        // Along the shelf it slides, lifted a hair (out of its cell first, in a display case).
-        if (cells) {
-            val out = smooth(move.t * 4f) * smooth((1f - move.t) * 4f)
-            val along = smooth((move.t - 0.25f) / 0.5f)
-            return (Vec3.lerp(move.from, pose.first, along) + Vec3(0f, 0.004f, CELL_OUT) * out) to pose.second
-        }
+        // Along the shelf it slides, lifted a hair.
         return (Vec3.lerp(move.from, pose.first, e) + Vec3(0f, 0.004f, 0.015f) * sin(PI.toFloat() * e)) to pose.second
-    }
-
-    /** 0 to 1 for [x] from 0 to 1, eased at both ends (and held outside). */
-    private fun smooth(x: Float): Float {
-        val t = x.coerceIn(0f, 1f)
-        return t * t * (3f - 2f * t)
     }
 
     private fun easedHold(): Float {
@@ -644,8 +598,7 @@ class ShelfController(private val density: Float) {
         // Every shelf on screen, including empty ones below the collection.
         val topRow = max(0, floor(-(cameraY + halfH * 1.3f) / rowHeight).toInt())
         val bottomRow = ceil(-(cameraY - halfH * 1.3f) / rowHeight).toInt() + 1
-        // In a glass frame the shelves are as wide as the comics on them, plus a little.
-        val shelfWidth = if (framed) columns * slotWidth + 2f * FRAME_INSET else halfW * 2.6f
+        val shelfWidth = halfW * 2.6f
         val planks = (topRow..bottomRow).map { row ->
             Mat4.compose(
                 Vec3(0f, rowBase(row) - PLANK_THICKNESS / 2f, PLANK_DEPTH / 2f),
@@ -653,27 +606,13 @@ class ShelfController(private val density: Float) {
                 Vec3(shelfWidth, PLANK_THICKNESS, PLANK_DEPTH),
             )
         }
-        val posts = if (!framed) {
-            emptyList()
-        } else {
-            // From above the top board to below the lowest shelf on screen.
-            val top = if (topRow == 0) corniceBottom + CORNICE_HEIGHT else rowBase(topRow - 1)
-            val bottom = rowBase(bottomRow) - PLANK_THICKNESS - rowHeight
-            listOf(-1f, 1f).map { side ->
-                Mat4.compose(
-                    Vec3(side * (shelfWidth + POST_WIDTH) / 2f, (top + bottom) / 2f, (PLANK_DEPTH + CORNICE_OVERHANG) / 2f),
-                    Quat.IDENTITY,
-                    Vec3(POST_WIDTH, top - bottom, PLANK_DEPTH + CORNICE_OVERHANG),
-                )
-            }
-        }
 
         // The top board with the name plate, above the first shelf.
         val cornice = if (topRow == 0) {
             Mat4.compose(
                 Vec3(0f, corniceBottom + CORNICE_HEIGHT / 2f, (PLANK_DEPTH + CORNICE_OVERHANG) / 2f),
                 Quat.IDENTITY,
-                Vec3(if (framed) shelfWidth + 2f * POST_WIDTH else halfW * 2.6f, CORNICE_HEIGHT, PLANK_DEPTH + CORNICE_OVERHANG),
+                Vec3(halfW * 2.6f, CORNICE_HEIGHT, PLANK_DEPTH + CORNICE_OVERHANG),
             )
         } else {
             null
@@ -697,25 +636,7 @@ class ShelfController(private val density: Float) {
             }
         }
 
-        // A display case: upright panels between the cells, across the whole width on screen.
         val cellOrigin = slotX(0) - slotWidth / 2f
-        val dividers = if (!cells) {
-            emptyList()
-        } else {
-            val first = floor((-halfW * 1.3f - cellOrigin) / slotWidth).toInt()
-            val last = ceil((halfW * 1.3f - cellOrigin) / slotWidth).toInt()
-            (topRow..bottomRow).flatMap { row ->
-                val floorY = rowBase(row)
-                val ceiling = if (row == 0) corniceBottom else rowBase(row - 1) - PLANK_THICKNESS
-                (first..last).map { k ->
-                    Mat4.compose(
-                        Vec3(cellOrigin + k * slotWidth, (floorY + ceiling) / 2f, DIVIDER_DEPTH / 2f),
-                        Quat.IDENTITY,
-                        Vec3(DIVIDER_THICKNESS, ceiling - floorY, DIVIDER_DEPTH),
-                    )
-                }
-            }
-        }
 
         val comics = ArrayList<ComicDraw>()
         val labels = ArrayList<LabelDraw>()
@@ -729,7 +650,7 @@ class ShelfController(private val density: Float) {
             // A series gets a sign above the first of it in every row it stands on.
             val series = item.series
             val previous = items.getOrNull(index - 1)
-            if (!cells && !showcase && series != null && (index % columns == 0 || previous?.series != series)) {
+            if (!showcase && series != null && (index % columns == 0 || previous?.series != series)) {
                 var span = 1
                 while (span < columns - index % columns && items.getOrNull(index + span)?.series == series) span++
                 signs += SignDraw(series, span, signModel(row, index % columns, span))
@@ -784,8 +705,6 @@ class ShelfController(private val density: Float) {
             lightsTime = lightsTime,
             rowHeight = rowHeight,
             unbox = unbox,
-            dividers = dividers,
-            posts = posts,
             glows = glows,
             cellWidth = slotWidth,
             cellOrigin = cellOrigin,
@@ -1178,9 +1097,6 @@ class ShelfController(private val density: Float) {
         const val CORNICE_HEIGHT = 0.075f
         const val CORNICE_OVERHANG = 0.012f
 
-        /** The upright panels of a display case: thickness, and how far they reach from the wall. */
-        const val DIVIDER_THICKNESS = 0.007f
-        const val DIVIDER_DEPTH = PLANK_DEPTH - 0.008f
 
         /** How far the glow of a light strip reaches above and below it. */
         private const val GLOW_HEIGHT = 0.08f
@@ -1191,12 +1107,7 @@ class ShelfController(private val density: Float) {
         /** Within this of the top of the scroll counts as at the top. */
         private const val TOP_SLACK = 0.002f
 
-        /** A glass frame: the width of its uprights, and the room between them and the comics beside them. */
-        const val POST_WIDTH = 0.028f
-        private const val FRAME_INSET = 0.012f
 
-        /** How far a comic comes out of its cell to move to another place. */
-        private const val CELL_OUT = 0.15f
         const val PLAQUE_WIDTH = 0.26f
         const val PLAQUE_HEIGHT = 0.042f
         const val LIGHTS_DONE = 3f

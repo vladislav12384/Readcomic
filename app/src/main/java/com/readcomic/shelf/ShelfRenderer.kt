@@ -205,8 +205,6 @@ class ShelfRenderer(
         }
         frame.planks.forEach(::cast)
         frame.cornice?.let(::cast)
-        frame.dividers.forEach(::cast)
-        frame.posts.forEach(::cast)
         castComics(frame)
         GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -251,10 +249,6 @@ class ShelfRenderer(
             draw(quad, sign.model, MATERIAL_PLAQUE, frame.dim, label = art[signKey(sign)])
         }
         if (mirrors) renderReflections(frame)
-        // After the reflections, which are drawn without a depth test: an upright in front of
-        // a shelf top covers what that shelf mirrors.
-        frame.dividers.forEach { draw(box, it, MATERIAL_DIVIDER, frame.dim) }
-        frame.posts.forEach { draw(box, it, MATERIAL_POST, frame.dim) }
         for (comic in frame.comics) {
             val dim = when {
                 comic.held -> 0f
@@ -808,8 +802,6 @@ class ShelfRenderer(
         const val MATERIAL_PAPER = 8
         const val MATERIAL_STRIP = 9
         const val MATERIAL_STAR = 10
-        const val MATERIAL_DIVIDER = 11
-        const val MATERIAL_POST = 12
         const val MATERIAL_GLOW = 13
 
         /** Frames drawn before the program of the box of new comics is built. */
