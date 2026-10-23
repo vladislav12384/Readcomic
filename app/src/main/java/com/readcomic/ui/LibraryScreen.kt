@@ -43,8 +43,10 @@ import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -118,6 +120,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.CoverAspects
 import com.readcomic.shelf.ShelfItem
+import com.readcomic.update.AppUpdater
 import com.readcomic.shelf.ShelfSize
 import com.readcomic.shelf.ShelfView
 import com.readcomic.shelf.UnboxPhase
@@ -162,7 +165,10 @@ fun LibraryScreen(
     onHandHintShown: () -> Unit = {},
     /** The library has been read: an empty one is shown as empty only then. */
     loaded: Boolean = true,
+    /** A newer build of the app, and looking for one. */
+    updates: UpdateUi = UpdateUi(),
 ) {
+    UpdateInstallEffect(updates)
     var toRemove by remember { mutableStateOf<ComicEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf<ComicEntry?>(null) }
@@ -195,6 +201,7 @@ fun LibraryScreen(
             unboxing = unboxing,
             handHint = handHint,
             onHandHintShown = onHandHintShown,
+            updates = updates,
         )
     } else {
         GridLibrary(
@@ -209,6 +216,7 @@ fun LibraryScreen(
             onRemove = { toRemove = it },
             order = order,
             onOrderChange = onOrderChange,
+            updates = updates,
         )
     }
 
@@ -278,6 +286,7 @@ private fun ShelfLibrary(
     unboxing: UnboxSettings,
     handHint: Boolean,
     onHandHintShown: () -> Unit,
+    updates: UpdateUi,
 ) {
     val context = LocalContext.current
     // New comics wait in their box until unwrapped; only the others stand on the shelves.
@@ -476,6 +485,21 @@ private fun ShelfLibrary(
                 },
                 onShowGrid = onShowGrid,
             )
+        }
+
+        // A newer build of the app, under the corner buttons.
+        AnimatedVisibility(
+            visible = updates.shown && held == null && !searching && !unpacking && !picking && !ordering,
+            enter = fadeIn() + slideInVertically { -it / 3 },
+            exit = fadeOut() + slideOutVertically { -it / 3 },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(SafeInsets)
+                .padding(start = 12.dp, end = 12.dp, top = 64.dp)
+                .widthIn(max = 520.dp)
+                .fillMaxWidth(),
+        ) {
+            UpdateBanner(updates)
         }
 
         // Not while the library is still being read: it is not empty, only not here yet.
@@ -697,7 +721,7 @@ private fun ShelfLibrary(
                 .windowInsetsPadding(SafeInsets)
                 .padding(top = 64.dp, end = 12.dp),
         ) {
-            ThemePicker(selected = theme, onSelect = onThemeChange, size = shelfSize, onSizeChange = onShelfSizeChange, unboxing = unboxing)
+            ThemePicker(selected = theme, onSelect = onThemeChange, size = shelfSize, onSizeChange = onShelfSizeChange, unboxing = unboxing, updates = updates)
         }
 
         SnackbarHost(
@@ -769,14 +793,22 @@ private fun RoundButton(onClick: () -> Unit, description: String, content: @Comp
 }
 
 @Composable
-private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit, size: ShelfSize, onSizeChange: (ShelfSize) -> Unit, unboxing: UnboxSettings) {
+private fun ThemePicker(
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    size: ShelfSize,
+    onSizeChange: (ShelfSize) -> Unit,
+    unboxing: UnboxSettings,
+    updates: UpdateUi,
+) {
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = Color(0xF21B1713),
         contentColor = ShelfInk,
         shadowElevation = 12.dp,
     ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+        // Scrolls when the screen is low (a phone on its side).
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 14.dp)) {
             Text("Стена", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -824,6 +856,22 @@ private fun ThemePicker(selected: Int, onSelect: (Int) -> Unit, size: ShelfSize,
             Text("Новые комиксы", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             SettingSwitch("Приходят в коробке, распаковывать самому", unboxing.wrapNew, unboxing.onWrapNewChange)
             SettingSwitch("Звук распаковки", unboxing.sound, unboxing.onSoundChange)
+            Spacer(Modifier.height(16.dp))
+            Text("Обновления", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
+            SettingSwitch("Проверять раз в день", updates.enabled, updates.onEnabledChange)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.widthIn(max = 300.dp)) {
+                Text(
+                    "Сборка ${updates.currentBuild}" + if (updates.preview) " · β" else "",
+                    fontFamily = FontFamily.Serif,
+                    fontStyle = FontStyle.Italic,
+                    fontSize = 15.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                val checking = updates.state == AppUpdater.State.Checking
+                TextButton(onClick = updates.onCheckNow, enabled = !checking) {
+                    Text(if (checking) "Проверяю…" else "Проверить сейчас", color = ShelfInk.copy(alpha = if (checking) 0.5f else 1f))
+                }
+            }
         }
     }
 }
@@ -1167,6 +1215,7 @@ private fun GridLibrary(
     onRemove: (ComicEntry) -> Unit,
     order: ShelfOrder,
     onOrderChange: (ShelfOrder) -> Unit,
+    updates: UpdateUi,
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var searching by remember { mutableStateOf(false) }
@@ -1237,6 +1286,9 @@ private fun GridLibrary(
                         shape = RoundedCornerShape(50),
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
                     )
+                }
+                AnimatedVisibility(visible = updates.shown) {
+                    UpdateBanner(updates, Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp))
                 }
             }
         },

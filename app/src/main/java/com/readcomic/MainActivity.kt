@@ -55,6 +55,7 @@ import com.readcomic.ui.ReadcomicTheme
 import com.readcomic.ui.ReaderScreen
 import com.readcomic.ui.ScreenSaver
 import com.readcomic.ui.UnboxSettings
+import com.readcomic.ui.UpdateUi
 import com.readcomic.ui.VolumeKeyHost
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -174,6 +175,8 @@ private fun App(viewModel: LibraryViewModel) {
     val wrapNew by viewModel.wrapNew.collectAsStateWithLifecycle()
     val unboxSound by viewModel.unboxSound.collectAsStateWithLifecycle()
     val boxHintDone by viewModel.boxHintDone.collectAsStateWithLifecycle()
+    val update by viewModel.update.collectAsStateWithLifecycle()
+    val updateCheck by viewModel.updateCheck.collectAsStateWithLifecycle()
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     MessagesEffect(viewModel.messages, snackbar)
@@ -346,6 +349,19 @@ private fun App(viewModel: LibraryViewModel) {
                     onHintSeen = viewModel::boxHintSeen,
                     onUnwrap = viewModel::unwrap,
                     onUnwrapAll = viewModel::unwrapAll,
+                ),
+                updates = UpdateUi(
+                    state = update,
+                    enabled = updateCheck,
+                    currentBuild = viewModel.currentBuild,
+                    preview = viewModel.isPreview,
+                    onEnabledChange = viewModel::setUpdateCheck,
+                    onCheckNow = viewModel::checkForUpdate,
+                    onDownload = viewModel::downloadUpdate,
+                    onCancel = viewModel::cancelUpdate,
+                    onPutOff = viewModel::putOffUpdate,
+                    onInstall = viewModel::installUpdate,
+                    canInstall = viewModel::canInstallUpdates,
                 ),
             )
         }

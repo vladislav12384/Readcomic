@@ -4,6 +4,11 @@
     <!-- The page curl is rendered with OpenGL ES 3.0. -->
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
 
+    <!-- Only to look for a newer build on GitHub and download it, when the reader allows it. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- To hand a downloaded update to Android's installer (which asks the reader first). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -44,5 +49,16 @@
                 <data android:mimeType="application/x-tar" />
             </intent-filter>
         </activity>
+
+        <!-- Gives Android's installer the downloaded update. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
     </application>
 </manifest>

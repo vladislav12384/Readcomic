@@ -23,6 +23,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The commit before too: to tell whether this one wrote new release notes.
+          fetch-depth: 2
 
       - uses: actions/setup-java@v5
         with:
@@ -37,22 +40,35 @@ jobs:
         if: ${{ contains(github.event.head_commit.message, '[preview]') }}
         run: ./gradlew --no-daemon testDebugUnitTest assembleRelease -PversionCode=${{ github.run_number }} -Ppreview=true
 
+      # What is new: .github/whatsnew.md, when this commit wrote it. It goes first, above a rule;
+      # the app shows that part when it offers the update.
+      - name: Release notes
+        run: |
+          : > whatsnew-part.md
+          if [ -s .github/whatsnew.md ] && ! git diff --quiet HEAD~1 HEAD -- .github/whatsnew.md 2>/dev/null; then
+            { cat .github/whatsnew.md; printf '\n\n---\n\n'; } > whatsnew-part.md
+          fi
+
       - name: Publish the preview
         if: ${{ contains(github.event.head_commit.message, '[preview]') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/release/app-release.apk Readcomic-preview.apk
+          { cat whatsnew-part.md; cat <<'EOF'
+          Пробная сборка, не основная.
+
+          **Readcomic-preview.apk** ставится отдельным приложением «Readcomic β» рядом с основным и ничего в нём не меняет (у пробной своя библиотека).
+
+          © vladislav12384, https://github.com/vladislav12384/Readcomic — лицензия CC BY-NC-SA 4.0: только некоммерческое использование, с указанием автора и ссылки (см. NOTICE.md).
+          EOF
+          echo; echo "Коммит: ${{ github.sha }}"; } > notes.md
           gh release create "preview-${{ github.run_number }}" Readcomic-preview.apk \
             --target "${{ github.sha }}" \
             --title "Readcomic β ${{ github.run_number }} — пробная сборка" \
             --prerelease \
             --latest=false \
-            --notes "Пробная сборка из коммита ${{ github.sha }}, не основная.
-
-          **Readcomic-preview.apk** ставится отдельным приложением «Readcomic β» рядом с основным и ничего в нём не меняет (у пробной своя библиотека).
-
-          © vladislav12384, https://github.com/vladislav12384/Readcomic — лицензия CC BY-NC-SA 4.0: только некоммерческое использование, с указанием автора и ссылки (см. NOTICE.md)."
+            --notes-file notes.md
 
       - name: Publish release
         if: ${{ !contains(github.event.head_commit.message, '[preview]') }}
@@ -61,15 +77,17 @@ jobs:
         run: |
           cp app/build/outputs/apk/release/app-release.apk Readcomic.apk
           cp app/build/outputs/apk/debug/app-debug.apk Readcomic-debug.apk
+          { cat whatsnew-part.md; cat <<'EOF'
+          **Readcomic.apk** — обычная версия, её и ставить.
+          **Readcomic-debug.apk** — отладочная, на случай если обычная не запустится.
+
+          Обе подписаны одним ключом, каждая новая сборка ставится поверх старой. Приложение умеет обновляться само: настройки полки → «Обновления».
+
+          © vladislav12384, https://github.com/vladislav12384/Readcomic — лицензия CC BY-NC-SA 4.0: только некоммерческое использование, с указанием автора и ссылки (см. NOTICE.md).
+          EOF
+          echo; echo "Коммит: ${{ github.sha }}"; } > notes.md
           gh release create "build-${{ github.run_number }}" Readcomic.apk Readcomic-debug.apk \
             --target "${{ github.sha }}" \
             --title "Readcomic 0.2.${{ github.run_number }}" \
             --latest \
-            --notes "Сборка из коммита ${{ github.sha }}.
-
-          **Readcomic.apk** — обычная версия, её и ставить.
-          **Readcomic-debug.apk** — отладочная, на случай если обычная не запустится.
-
-          Обе подписаны одним ключом, каждая новая сборка ставится поверх старой.
-
-          © vladislav12384, https://github.com/vladislav12384/Readcomic — лицензия CC BY-NC-SA 4.0: только некоммерческое использование, с указанием автора и ссылки (см. NOTICE.md)."
+            --notes-file notes.md

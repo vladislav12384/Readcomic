@@ -1,6 +1,7 @@
 package com.readcomic.ui
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
@@ -13,6 +14,7 @@ import com.readcomic.data.ScanInterval
 import com.readcomic.data.ScanReport
 import com.readcomic.data.WatchedFolder
 import com.readcomic.shelf.ShelfSize
+import com.readcomic.update.AppUpdater
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -116,7 +118,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val _handHint = MutableStateFlow(prefs.getInt(KEY_HAND_HINTS, 0) < HAND_HINTS)
     val handHint: StateFlow<Boolean> = _handHint.asStateFlow()
 
+    private val updater = AppUpdater.get(application)
+
+    /** A newer build of the app: offered, downloading, ready to install. */
+    val update: StateFlow<AppUpdater.State> = updater.state
+
+    /** Whether the app looks for updates by itself, once a day. */
+    val updateCheck: StateFlow<Boolean> = updater.enabled
+    val currentBuild: Long get() = updater.currentBuild
+    val isPreview: Boolean get() = updater.preview
+
     init {
+        updater.checkIfDue()
         // New comics may have appeared in the watched folders while the app was closed.
         viewModelScope.launch {
             library.awaitReady()
@@ -207,6 +220,34 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun pageAspects(entry: ComicEntry, source: ComicSource, onProgress: (Float) -> Unit): FloatArray =
         library.pageAspects(entry, source, onProgress)
+
+    // region Updates
+
+    fun setUpdateCheck(enabled: Boolean) = updater.setEnabled(enabled)
+
+    /** Looks for an update now, and says what came of it. */
+    fun checkForUpdate() {
+        viewModelScope.launch {
+            when (updater.check(manual = true)) {
+                AppUpdater.CheckResult.UP_TO_DATE -> _messages.tryEmit("Это последняя версия — сборка ${updater.currentBuild}")
+                AppUpdater.CheckResult.FAILED -> _messages.tryEmit("Не получилось проверить обновления: нет связи с GitHub")
+                AppUpdater.CheckResult.AVAILABLE -> Unit
+            }
+        }
+    }
+
+    fun downloadUpdate() = updater.download()
+
+    fun cancelUpdate() = updater.cancel()
+
+    fun putOffUpdate() = updater.putOff()
+
+    /** Hands the downloaded update to Android's installer, from [context] (the activity on screen). */
+    fun installUpdate(context: Context) = updater.install(context)
+
+    fun canInstallUpdates() = updater.canInstall()
+
+    // endregion
 
     // region Watched folders
 
