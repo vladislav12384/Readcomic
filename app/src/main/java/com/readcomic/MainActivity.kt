@@ -177,6 +177,7 @@ private fun App(viewModel: LibraryViewModel) {
     val caseLight by viewModel.caseLight.collectAsStateWithLifecycle()
     val gridStyle by viewModel.gridStyle.collectAsStateWithLifecycle()
     val gridByShape by viewModel.gridByShape.collectAsStateWithLifecycle()
+    val gridColumns by viewModel.gridColumns.collectAsStateWithLifecycle()
     val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
     val wrapNew by viewModel.wrapNew.collectAsStateWithLifecycle()
     val unboxSound by viewModel.unboxSound.collectAsStateWithLifecycle()
@@ -344,6 +345,8 @@ private fun App(viewModel: LibraryViewModel) {
                     byShape = gridByShape,
                     onStyleChange = viewModel::setGridStyle,
                     onByShapeChange = viewModel::setGridByShape,
+                    columns = gridColumns,
+                    onColumnsChange = viewModel::setGridColumns,
                 ),
                 onSetSeries = viewModel::setSeries,
                 onDrawnBackChange = viewModel::setDrawnBack,

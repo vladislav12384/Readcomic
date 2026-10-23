@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1672,8 +1673,10 @@ private fun GridLibraryContent(
         } else if (sorted.isEmpty()) {
             if (loaded) EmptyLibrary(Modifier.padding(padding))
         } else {
+            // As many as fit (the grid as it always was), or exactly as many as the reader chose.
+            val across = look.columns
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(112.dp),
+                columns = if (across == 0) GridCells.Adaptive(112.dp) else GridCells.Fixed(across),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
@@ -1681,8 +1684,21 @@ private fun GridLibraryContent(
                     top = padding.calculateTopPadding() + 8.dp,
                     bottom = padding.calculateBottomPadding() + 96.dp,
                 ),
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                verticalArrangement = Arrangement.spacedBy(26.dp),
+                // Closer together when more stand in a row.
+                horizontalArrangement = Arrangement.spacedBy(
+                    when {
+                        across >= 4 -> 10.dp
+                        across == 3 -> 14.dp
+                        else -> 18.dp
+                    },
+                ),
+                verticalArrangement = Arrangement.spacedBy(
+                    when {
+                        across >= 4 -> 18.dp
+                        across == 3 -> 22.dp
+                        else -> 26.dp
+                    },
+                ),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 items(sorted, key = { it.id }) { entry ->
@@ -1793,6 +1809,25 @@ private fun HeaderButton(onClick: () -> Unit, description: String, chrome: GridP
     }
 }
 
+/** One choice of how many in a row: a small round button, filled when chosen. */
+@Composable
+private fun CountChip(label: String, chosen: Boolean, onClick: () -> Unit) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .padding(start = 6.dp)
+            .defaultMinSize(minWidth = 36.dp, minHeight = 36.dp)
+            .clip(CircleShape)
+            .background(if (chosen) ink else Color.Transparent)
+            .border(1.dp, ink.copy(alpha = if (chosen) 1f else 0.3f), CircleShape)
+            .clickable(onClickLabel = if (label.first().isDigit()) "$label в ряд" else label, onClick = onClick)
+            .padding(horizontal = 10.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = if (chosen) MaterialTheme.colorScheme.surfaceContainer else ink, maxLines = 1)
+    }
+}
+
 @Composable
 private fun EmptyLibrary(modifier: Modifier) {
     Column(
@@ -1830,7 +1865,8 @@ private fun ComicCard(entry: ComicEntry, coverFile: File, look: GridLook, onClic
         Spacer(Modifier.height(if (entry.currentPage > 0) 7.dp else 10.dp))
         Text(
             if (style == GridStyle.COMIC) entry.title.uppercase() else entry.title,
-            style = MaterialTheme.typography.bodyMedium,
+            // Four in a row on a phone leave little room: smaller titles.
+            style = if (look.columns >= 4) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
             fontFamily = if (style == GridStyle.VINTAGE) FontFamily.Serif else null,
             fontWeight = when (style) {
                 GridStyle.COMIC -> FontWeight.Black
@@ -1839,7 +1875,7 @@ private fun ComicCard(entry: ComicEntry, coverFile: File, look: GridLook, onClic
             },
             // Its own ink, whatever the page around it: white on the dark look.
             color = MaterialTheme.colorScheme.onBackground,
-            lineHeight = 18.sp,
+            lineHeight = if (look.columns >= 4) 16.sp else 18.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1892,6 +1928,16 @@ private fun GridViewMenu(expanded: Boolean, look: GridLook, updates: UpdateUi, o
             trailingIcon = { Switch(checked = look.byShape, onCheckedChange = null, modifier = Modifier.padding(start = 12.dp)) },
             onClick = { look.onByShapeChange(!look.byShape) },
         )
+        // How many in a row: as many as fit (as always), or exactly 2, 3 or 4.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        ) {
+            Text("В ряд", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).padding(end = 12.dp))
+            listOf(0, 2, 3, 4).forEach { count ->
+                CountChip(if (count == 0) "Авто" else "$count", count == look.columns) { look.onColumnsChange(count) }
+            }
+        }
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
         Text(
             "Обновления",

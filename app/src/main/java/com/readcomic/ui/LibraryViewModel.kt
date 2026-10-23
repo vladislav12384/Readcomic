@@ -96,8 +96,13 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         runCatching { GridStyle.valueOf(prefs.getString(KEY_GRID_STYLE, null) ?: "") }.getOrDefault(GridStyle.DARK),
     )
     val gridStyle: StateFlow<GridStyle> = _gridStyle.asStateFlow()
-    private val _gridByShape = MutableStateFlow(prefs.getBoolean(KEY_GRID_SHAPE, false))
+    // Covers in the shapes of the issues unless the reader turned it off.
+    private val _gridByShape = MutableStateFlow(prefs.getBoolean(KEY_GRID_SHAPE, true))
     val gridByShape: StateFlow<Boolean> = _gridByShape.asStateFlow()
+
+    /** How many covers a row of the grid holds: 0 as many as fit (as always), or exactly 2, 3 or 4. */
+    private val _gridColumns = MutableStateFlow(gridColumnsOf(prefs.getInt(KEY_GRID_COLUMNS, 0)))
+    val gridColumns: StateFlow<Int> = _gridColumns.asStateFlow()
 
     /** The look of the bookcase. */
     private val _shelfStyle = MutableStateFlow(
@@ -219,6 +224,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         _gridByShape.value = enabled
         prefs.edit { putBoolean(KEY_GRID_SHAPE, enabled) }
     }
+
+    fun setGridColumns(columns: Int) {
+        _gridColumns.value = gridColumnsOf(columns)
+        prefs.edit { putInt(KEY_GRID_COLUMNS, _gridColumns.value) }
+    }
+
+    /** 2, 3 or 4 as they are; anything else is as many as fit (0). */
+    private fun gridColumnsOf(columns: Int) = if (columns in 2..4) columns else 0
 
     fun setShelfStyle(style: ShelfStyle) {
         _shelfStyle.value = style
@@ -412,6 +425,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_CASE_LIGHT = "case_light"
         private const val KEY_GRID_STYLE = "grid_style"
         private const val KEY_GRID_SHAPE = "grid_shape"
+        private const val KEY_GRID_COLUMNS = "grid_columns"
         private const val KEY_GROUP_SERIES = "group_series"
         private const val KEY_UNBOX_SOUND = "unbox_sound"
         private const val KEY_BOX_HINT = "box_hint"

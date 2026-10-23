@@ -60,9 +60,12 @@ enum class GridStyle(val label: String) {
 class GridLook(
     val style: GridStyle = GridStyle.DARK,
     /** Covers in the shapes of the issues: their own proportions, standing on one line. */
-    val byShape: Boolean = false,
+    val byShape: Boolean = true,
+    /** How many covers a row holds: 0 as many as fit the screen (as always), or exactly 2, 3 or 4. */
+    val columns: Int = 0,
     val onStyleChange: (GridStyle) -> Unit = {},
     val onByShapeChange: (Boolean) -> Unit = {},
+    val onColumnsChange: (Int) -> Unit = {},
 )
 
 /** Colours of the grid in each look. */
