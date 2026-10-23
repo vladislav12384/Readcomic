@@ -141,6 +141,13 @@ class ShelfView(context: Context) : GLSurfaceView(context) {
         requestFrame()
     }
 
+    /** The look of the bookcase. */
+    fun setStyle(style: ShelfStyle) {
+        renderer.style = style.shader
+        renderer.mirrors = style.mirrors
+        onGl { controller.cells = style.cells }
+    }
+
     /** The shelf lights come on one after another, as when walking into the room. */
     fun switchLightsOn() = onGl { controller.switchLightsOn() }
 

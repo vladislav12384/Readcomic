@@ -159,6 +159,67 @@ class ShelfControllerTest {
         assertEquals("gap above ${ribbonTop - 70f}, below ${cardTop - bottom}", ribbonTop - 70f, cardTop - bottom, 30f)
     }
 
+    /** The box a model (of a unit cube) fills in the world: min and max corners. */
+    private fun bounds(model: FloatArray): Pair<Vec3, Vec3> {
+        var lo = Vec3(Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE)
+        var hi = Vec3(-Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE)
+        for (x in listOf(-0.5f, 0.5f)) for (y in listOf(-0.5f, 0.5f)) for (z in listOf(-0.5f, 0.5f)) {
+            val p = Mat4.transformPoint(model, Vec3(x, y, z))
+            lo = Vec3(minOf(lo.x, p.x), minOf(lo.y, p.y), minOf(lo.z, p.z))
+            hi = Vec3(maxOf(hi.x, p.x), maxOf(hi.y, p.y), maxOf(hi.z, p.z))
+        }
+        return lo to hi
+    }
+
+    private fun overlap(a: Pair<Vec3, Vec3>, b: Pair<Vec3, Vec3>, margin: Float = 0.0005f) =
+        a.first.x < b.second.x - margin && b.first.x < a.second.x - margin &&
+            a.first.y < b.second.y - margin && b.first.y < a.second.y - margin &&
+            a.first.z < b.second.z - margin && b.first.z < a.second.z - margin
+
+    @Test
+    fun aDisplayCaseHasPanelsBetweenItsCellsAndNoSigns() {
+        val series = List(9) { ShelfItem("c$it", 0.65f, 24 + it * 20, inProgress = false, series = "Saga") }
+        val plain = controller().apply { setItems(series) }
+        assertTrue(plain.frame().dividers.isEmpty())
+        assertTrue(plain.frame().signs.isNotEmpty())
+
+        val case = controller().apply {
+            cells = true
+            setItems(series)
+        }
+        val frame = case.frame()
+        assertTrue(frame.dividers.isNotEmpty())
+        assertTrue("no signs for the panels to cut", frame.signs.isEmpty())
+        // Panels stand on the cell walls, never in a comic.
+        for (comic in frame.comics) {
+            val box = bounds(comic.model)
+            for (panel in frame.dividers) assertTrue("${comic.id} in a panel", !overlap(box, bounds(panel)))
+        }
+        // Comics standing still are mirrored in the shelf they stand on.
+        assertTrue(frame.comics.all { !it.standsOn.isNaN() })
+    }
+
+    @Test
+    fun inADisplayCaseComicsChangingPlacesComeOutOfTheirCellsFirst() {
+        val c = controller().apply { cells = true }
+        c.settle()
+        // Every comic to another place: along the shelf and to other shelves.
+        c.setItems(items.reversed())
+        var t = 0f
+        var moving = true
+        while (moving && t < 5f) {
+            moving = c.step(1f / 60f)
+            t += 1f / 60f
+            val frame = c.frame()
+            val panels = frame.dividers.map(::bounds)
+            for (comic in frame.comics) {
+                val box = bounds(comic.model)
+                for (panel in panels) assertTrue("${comic.id} through a panel at ${"%.2f".format(t)} s", !overlap(box, panel))
+            }
+        }
+        assertTrue("moves did not finish", t < 5f)
+    }
+
     @Test
     fun showBackTurnsTheComicInHandToItsBackAndKeepsItThere() {
         val c = controller()

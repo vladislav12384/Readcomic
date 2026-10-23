@@ -14,6 +14,7 @@ import com.readcomic.data.ScanInterval
 import com.readcomic.data.ScanReport
 import com.readcomic.data.WatchedFolder
 import com.readcomic.shelf.ShelfSize
+import com.readcomic.shelf.ShelfStyle
 import com.readcomic.update.AppUpdater
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,6 +88,20 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         runCatching { ShelfOrder.valueOf(prefs.getString(KEY_SHELF_ORDER, null) ?: "") }.getOrDefault(ShelfOrder.TITLE),
     )
     val shelfOrder: StateFlow<ShelfOrder> = _shelfOrder.asStateFlow()
+
+    /** How the plain grid looks, and whether its covers take the shapes of the issues. */
+    private val _gridStyle = MutableStateFlow(
+        runCatching { GridStyle.valueOf(prefs.getString(KEY_GRID_STYLE, null) ?: "") }.getOrDefault(GridStyle.DARK),
+    )
+    val gridStyle: StateFlow<GridStyle> = _gridStyle.asStateFlow()
+    private val _gridByShape = MutableStateFlow(prefs.getBoolean(KEY_GRID_SHAPE, false))
+    val gridByShape: StateFlow<Boolean> = _gridByShape.asStateFlow()
+
+    /** The look of the bookcase. */
+    private val _shelfStyle = MutableStateFlow(
+        runCatching { ShelfStyle.valueOf(prefs.getString(KEY_SHELF_STYLE, null) ?: "") }.getOrDefault(ShelfStyle.WOOD),
+    )
+    val shelfStyle: StateFlow<ShelfStyle> = _shelfStyle.asStateFlow()
 
     /** How large the comics look on the shelves. */
     private val _shelfSize = MutableStateFlow(
@@ -181,6 +196,21 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun setShelfOrder(order: ShelfOrder) {
         _shelfOrder.value = order
         prefs.edit { putString(KEY_SHELF_ORDER, order.name) }
+    }
+
+    fun setGridStyle(style: GridStyle) {
+        _gridStyle.value = style
+        prefs.edit { putString(KEY_GRID_STYLE, style.name) }
+    }
+
+    fun setGridByShape(enabled: Boolean) {
+        _gridByShape.value = enabled
+        prefs.edit { putBoolean(KEY_GRID_SHAPE, enabled) }
+    }
+
+    fun setShelfStyle(style: ShelfStyle) {
+        _shelfStyle.value = style
+        prefs.edit { putString(KEY_SHELF_STYLE, style.name) }
     }
 
     fun setShelfSize(size: ShelfSize) {
@@ -343,6 +373,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_SHELF_HINT = "shelf_hint"
         private const val KEY_SHELF_ORDER = "shelf_order"
         private const val KEY_SHELF_SIZE = "shelf_size"
+        private const val KEY_SHELF_STYLE = "shelf_style"
+        private const val KEY_GRID_STYLE = "grid_style"
+        private const val KEY_GRID_SHAPE = "grid_shape"
         private const val KEY_GROUP_SERIES = "group_series"
         private const val KEY_UNBOX_SOUND = "unbox_sound"
         private const val KEY_BOX_HINT = "box_hint"

@@ -47,6 +47,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.readcomic.shelf.ShelfArtMemory
 import com.readcomic.ui.CoverThumbnails
 import com.readcomic.ui.FolderState
+import com.readcomic.ui.GridLook
 import com.readcomic.ui.LibraryScreen
 import com.readcomic.ui.LibraryViewModel
 import com.readcomic.ui.MessagesEffect
@@ -171,6 +172,9 @@ private fun App(viewModel: LibraryViewModel) {
     val handHint by viewModel.handHint.collectAsStateWithLifecycle()
     val shelfOrder by viewModel.shelfOrder.collectAsStateWithLifecycle()
     val shelfSize by viewModel.shelfSize.collectAsStateWithLifecycle()
+    val shelfStyle by viewModel.shelfStyle.collectAsStateWithLifecycle()
+    val gridStyle by viewModel.gridStyle.collectAsStateWithLifecycle()
+    val gridByShape by viewModel.gridByShape.collectAsStateWithLifecycle()
     val groupSeries by viewModel.groupSeries.collectAsStateWithLifecycle()
     val wrapNew by viewModel.wrapNew.collectAsStateWithLifecycle()
     val unboxSound by viewModel.unboxSound.collectAsStateWithLifecycle()
@@ -332,10 +336,18 @@ private fun App(viewModel: LibraryViewModel) {
                 onRemove = viewModel::remove,
                 order = shelfOrder,
                 onOrderChange = viewModel::setShelfOrder,
+                gridLook = GridLook(
+                    style = gridStyle,
+                    byShape = gridByShape,
+                    onStyleChange = viewModel::setGridStyle,
+                    onByShapeChange = viewModel::setGridByShape,
+                ),
                 onSetSeries = viewModel::setSeries,
                 onDrawnBackChange = viewModel::setDrawnBack,
                 shelfSize = shelfSize,
                 onShelfSizeChange = viewModel::setShelfSize,
+                shelfStyle = shelfStyle,
+                onShelfStyleChange = viewModel::setShelfStyle,
                 onStartOver = { entry ->
                     viewModel.startOver(entry)
                     openId = entry.id

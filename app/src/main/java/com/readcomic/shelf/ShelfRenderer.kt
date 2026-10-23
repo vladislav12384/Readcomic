@@ -78,6 +78,17 @@ class ShelfRenderer(
     @Volatile
     var clearColor = floatArrayOf(0.05f, 0.05f, 0.06f)
 
+    /** The look of the bookcase, as the shaders call it ([ShelfStyle.shader]). */
+    @Volatile
+    var style = 0
+
+    /** The shelves mirror the comics standing on them ([ShelfStyle.mirrors]). */
+    @Volatile
+    var mirrors = false
+
+    /** Where the mirrored comic is put together, so that no frame makes garbage. */
+    private val mirrored = FloatArray(16)
+
     /** Paint of the wall behind the shelves, linear colour. */
     @Volatile
     var wallColor = floatArrayOf(0.14f, 0.19f, 0.25f)
@@ -194,6 +205,7 @@ class ShelfRenderer(
         }
         frame.planks.forEach(::cast)
         frame.cornice?.let(::cast)
+        frame.dividers.forEach(::cast)
         castComics(frame)
         GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -237,6 +249,10 @@ class ShelfRenderer(
         for (sign in frame.signs) {
             draw(quad, sign.model, MATERIAL_PLAQUE, frame.dim, label = art[signKey(sign)])
         }
+        if (mirrors) renderReflections(frame)
+        // After the reflections, which are drawn without a depth test: an upright in front of
+        // a shelf top covers what that shelf mirrors.
+        frame.dividers.forEach { draw(box, it, MATERIAL_DIVIDER, frame.dim) }
         for (comic in frame.comics) {
             val dim = when {
                 comic.held -> 0f
@@ -304,6 +320,9 @@ class ShelfRenderer(
         GLES30.glUniform1f(p["uLightsTime"], frame.lightsTime)
         val wall = wallColor
         GLES30.glUniform3f(p["uWall"], wall[0], wall[1], wall[2])
+        GLES30.glUniform1i(p["uStyle"], style)
+        GLES30.glUniform2f(p["uCells"], frame.cellWidth, frame.cellOrigin)
+        GLES30.glUniform1f(p["uMirror"], 0f)
         GLES30.glUniform1i(p["uCover"], 0)
         GLES30.glUniform1i(p["uBack"], 1)
         GLES30.glUniform1i(p["uLabel"], 2)
@@ -578,6 +597,41 @@ class ShelfRenderer(
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, mesh.count, GLES30.GL_UNSIGNED_SHORT, 0)
     }
 
+    /**
+     * The comics mirrored in the glossy tops of the shelves they stand on: each drawn once more,
+     * upside down under its shelf, cheaply shaded and only where the shelf top is seen (the
+     * shader cuts away the rest), faded with the distance from the shelf. Drawn over the shelves,
+     * under the comics themselves.
+     */
+    private fun renderReflections(frame: ShelfFrame) {
+        val p = program
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        GLES30.glDepthMask(false)
+        GLES30.glUniform1f(p["uMirror"], 1f)
+        for (comic in frame.comics) {
+            val floor = comic.standsOn
+            // Only the tops of shelves below the eye are seen.
+            if (floor.isNaN() || frame.eye.y <= floor) continue
+            // Turned over the shelf top (y = floor): y goes to 2 floor - y.
+            val m = comic.model
+            for (c in 0 until 4) {
+                mirrored[c * 4] = m[c * 4]
+                mirrored[c * 4 + 1] = 2f * floor * m[c * 4 + 3] - m[c * 4 + 1]
+                mirrored[c * 4 + 2] = m[c * 4 + 2]
+                mirrored[c * 4 + 3] = m[c * 4 + 3]
+            }
+            GLES30.glUniform1f(p["uMirrorY"], floor)
+            val dim = if (comic.faded) max(frame.dim, frame.searchDim) else frame.dim
+            draw(meshFor(comic), mirrored, MATERIAL_COMIC, dim, cover = art["cover:${comic.id}"])
+        }
+        GLES30.glUniform1f(p["uMirror"], 0f)
+        GLES30.glDepthMask(true)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+        GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
     /** The back cover of [comic] in hand: its own, or one drawn for it when the reader asked. */
     private fun backKey(comic: ComicDraw) = if (comic.drawnBack) "drawnback:${comic.id}" else "back:${comic.id}"
 
@@ -743,6 +797,7 @@ class ShelfRenderer(
         const val MATERIAL_PAPER = 8
         const val MATERIAL_STRIP = 9
         const val MATERIAL_STAR = 10
+        const val MATERIAL_DIVIDER = 11
 
         /** Frames drawn before the program of the box of new comics is built. */
         const val UNBOX_DELAY_FRAMES = 4

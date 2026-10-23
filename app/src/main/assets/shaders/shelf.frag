@@ -18,7 +18,170 @@ vec3 woodAlbedo(vec3 p) {
     return mix(light, dark, rings * 0.55 + pores * 0.2 + warp * 0.15);
 }
 
+// The light strip itself: a frosted line near the front edge of a shelf's underside.
+vec3 withStrip(vec3 color, vec3 p) {
+    float bay = bayOf(p.y - 0.001);
+    float strip = band(p.z, uPlank.y - 0.02, 0.006, 0.0015);
+    return mix(color, STRIP * 9.0, strip * stripOn(bay));
+}
+
+// Which shelf a point of a board belongs to (0 the top one, the cornice -1).
+float shelfIndex(vec3 p) {
+    return floor(-p.y / uRowHeight + 0.5);
+}
+
+// Light: white lacquered boards whose front edges show the plies of birch plywood.
+vec3 lightShelf(vec3 v) {
+    vec3 n = bevelNormal(0.0025);
+    vec3 p = vWorld;
+    float occlusion = 1.0;
+    if (vFace == 4) occlusion = 1.0 - 0.45 * exp(-p.z / 0.03);
+    if (vFace == 5) occlusion = 0.7;
+    vec3 a = vec3(0.70, 0.68, 0.64) * (0.98 + noise(p.xz * 400.0) * 0.03);
+    if (vFace == 0) {
+        // Plies about 4.5 mm thick, light birch with thin darker glue lines, a faint grain along them.
+        float y = (vLocal.y + 0.5) * boxSize().y / 0.0045;
+        float glue = 1.0 - smoothstep(0.03, 0.09 + fwidth(y), 0.5 - abs(fract(y) - 0.5));
+        float ply = floor(y);
+        float grain = fbm(vec2(p.x * 9.0, ply * 3.1)) * 0.12 + noise(vec2(p.x * 160.0, ply * 7.0)) * 0.05;
+        vec3 birch = mix(vec3(0.56, 0.40, 0.24), vec3(0.62, 0.46, 0.29), hash(vec2(ply, 3.0)));
+        a = mix(birch * (0.92 + grain), vec3(0.30, 0.19, 0.10), glue * 0.55);
+    }
+    vec3 color = a * irradiance(n, occlusion) + sparkle(n, v, 40.0, vFace == 0 ? 0.05 : 0.12);
+    color = coat(color, n, v, vFace == 0 ? 0.15 : 0.35, 0.22);
+    if (vFace == 5) color = withStrip(color, p);
+    return color;
+}
+
+// Comic shop: boards of white powder-coated steel with a price rail along the front, in the
+// colours of print: red, yellow and blue, one after another down the wall.
+vec3 shopShelf(vec3 v) {
+    vec3 n = bevelNormal(0.003);
+    vec3 p = vWorld;
+    float occlusion = 1.0;
+    if (vFace == 4) occlusion = 1.0 - 0.45 * exp(-p.z / 0.03);
+    if (vFace == 5) occlusion = 0.7;
+    // Powder coat: a fine orange-peel ripple in the shine.
+    vec2 peel = vec2(noise(p.xz * 900.0), noise(p.zx * 900.0 + 7.0)) - 0.5;
+    vec3 rippled = normalize(n + vec3(peel.x, 0.0, peel.y) * 0.06);
+    vec3 a = vec3(0.74, 0.75, 0.76);
+    float gloss = 0.4;
+    if (vFace == 0) {
+        float k = mod(shelfIndex(p), 3.0);
+        vec3 rail = k < 0.5 ? vec3(0.80, 0.04, 0.03) : (k < 1.5 ? vec3(0.92, 0.62, 0.01) : vec3(0.02, 0.16, 0.62));
+        // The rail is a plastic channel with white lips above and below it.
+        float h = (vLocal.y + 0.5) * boxSize().y;
+        float lip = 1.0 - smoothstep(0.0025, 0.0035, min(h, boxSize().y - h));
+        a = mix(rail, vec3(0.80), lip);
+        gloss = 0.55;
+        rippled = n;
+    }
+    vec3 color = a * irradiance(n, occlusion) + sparkle(rippled, v, 70.0, 0.3);
+    color = coat(color, rippled, v, gloss, 0.1);
+    if (vFace == 5) color = withStrip(color, p);
+    return color;
+}
+
+// region Display case and glass
+
+const vec3 NAVY = vec3(0.005, 0.007, 0.015);
+const vec3 COLD = vec3(0.55, 0.78, 1.10);
+
+// The dark blue lacquered boards of the display case ([panel]: the uprights between the cells).
+// Their front edges catch the cold light in a fine bright line.
+vec3 caseBoard(vec3 v, bool panel) {
+    vec3 n = bevelNormal(panel ? 0.002 : 0.003);
+    vec3 p = vWorld;
+    vec3 size = boxSize();
+    float occlusion = 1.0;
+    if (vFace == 4) occlusion = 1.0 - 0.5 * exp(-p.z / 0.03);
+    if (vFace == 5) occlusion = 0.6;
+    if (panel && vFace != 0) occlusion = 0.85 - 0.35 * exp(-p.z / 0.03);
+    vec3 a = NAVY * (0.94 + noise(vec2(p.x * 300.0 + p.z * 200.0, p.y * 40.0)) * 0.08);
+    vec3 color = a * irradiance(n, occlusion) + sparkle(n, v, 90.0, 0.3);
+    color = coat(color, n, v, vFace == 4 ? 0.85 : 0.5, 0.05);
+    float lit = stripOn(max(bayOf(p.y), 0.0));
+    if (vFace == 0) {
+        float d = panel ? abs(vLocal.x) * size.x : (0.5 - vLocal.y) * size.y;
+        float line = 1.0 - smoothstep(0.0005, 0.0012 + fwidth(d), d);
+        color += COLD * line * (panel ? 0.5 : 1.4) * (0.3 + 0.7 * lit);
+    }
+    if (vFace == 5) color = withStrip(color, p);
+    return color;
+}
+
+// Thick glass: dark and clear from above, mirroring the room (and the comics, see
+// mirrorImage); light caught in it glows cyan along its cut edges.
+vec3 glassBoard(vec3 v) {
+    vec3 n = bevelNormal(0.006);
+    vec3 p = vWorld;
+    vec3 size = boxSize();
+    vec3 tint = vec3(0.06, 0.16, 0.20);
+    vec3 color;
+    if (vFace == 0) {
+        float h = (vLocal.y + 0.5) * size.y;
+        float rim = exp(-min(h, size.y - h) / 0.0022);
+        color = tint * (irradiance(n, 1.0) * 0.45 + 0.01) + vec3(0.32, 0.62, 0.95) * rim * 1.1;
+        color = coat(color, n, v, 0.6, 0.02) + sparkle(n, v, 160.0, 0.6);
+    } else {
+        float occlusion = vFace == 4 ? 1.0 - 0.45 * exp(-p.z / 0.03) : 0.7;
+        color = tint * 0.1 * irradiance(n, occlusion);
+        if (vFace == 4) color += vec3(0.30, 0.55, 0.85) * exp(-(uPlank.y - p.z) / 0.003) * 0.6;
+        color = coat(color, n, v, 0.55, 0.015) + sparkle(n, v, 200.0, 0.8);
+        if (vFace == 5) color = withStrip(color, p);
+    }
+    return color;
+}
+
+// The back of the display case: dark blue, a seam behind every upright, each cell lit from its top.
+vec3 caseWall(vec3 p, float occlusion, float bay, float ceilingY) {
+    float cell = (p.x - uCells.y) / uCells.x;
+    float f = fract(cell);
+    float edge = min(f, 1.0 - f) * uCells.x;
+    float seam = 1.0 - smoothstep(0.004, 0.006 + fwidth(p.x), edge);
+    float across = 0.5 - 0.5 * cos(f * 2.0 * PI);
+    vec3 a = vec3(0.0042, 0.0058, 0.0115) * (0.92 + 0.08 * fbm(p.xy * vec2(40.0, 4.0)));
+    vec3 color = a * irradiance(vec3(0.0, 0.0, 1.0), occlusion) * (1.0 - 0.6 * seam);
+    if (bay >= 0.0) {
+        // The cell's own light: a bright wash under its top, fading down the wall and to its sides.
+        float below = ceilingY - p.y;
+        float glow = (exp(-below / 0.035) * 0.8 + exp(-below / 0.14) * 0.2) * (0.2 + 0.8 * across) * stripOn(bay);
+        color += COLD * glow * 0.55 * (1.0 - 0.6 * seam);
+    }
+    return color;
+}
+
+// Behind the glass shelves: deep blue, softly uneven, with faint upright lines and a glow under every shelf.
+vec3 glassWall(vec3 p, float occlusion, float bay, float ceilingY) {
+    vec3 a = mix(vec3(0.0035, 0.0055, 0.012), vec3(0.008, 0.013, 0.027), smoothstep(0.35, 0.65, fbm(p.xy * 2.5)));
+    float line = band(fract(p.x / (uCells.x * 0.5)), 0.5, 0.004 / uCells.x, 0.002 / uCells.x);
+    vec3 color = a * irradiance(vec3(0.0, 0.0, 1.0), occlusion) * (1.0 + 0.6 * line);
+    color += vec3(0.25, 0.42, 0.75) * smoothstep(0.66, 0.82, noise(p.xy * 6.0 + 3.0)) * 0.025;
+    if (bay >= 0.0) color += COLD * (exp(-(ceilingY - p.y) / 0.04) * 0.7 + exp(-(ceilingY - p.y) / 0.16) * 0.3) * stripOn(bay) * 0.28;
+    return color;
+}
+
+// A comic mirrored in the glossy shelf it stands on: kept only where the eye sees that shelf's
+// top, shaded cheaply and blurred a little, fading away from the shelf.
+vec4 mirrorImage() {
+    vec3 d = vWorld - uEye;
+    float t = (uMirrorY - uEye.y) / d.y;
+    if (vWorld.y >= uMirrorY || t <= 0.0 || t >= 1.0) discard;
+    vec3 q = uEye + d * t;
+    if (q.z < 0.0 || q.z > uPlank.y) discard;
+    vec3 a = vFace == 0 && uHasCover > 0.5 ? toLinear(textureLod(uCover, vUV, 2.0).rgb) : coverEdgeColor() * 0.7;
+    vec3 color = a * (ambient(vec3(0.0, 1.0, 0.0)) * 0.5 + vec3(0.55));
+    float strength = uStyle == 4 ? 0.42 : 0.26;
+    return vec4(color, strength * exp(-(uMirrorY - vWorld.y) / 0.07));
+}
+
+// endregion
+
 vec3 wood(vec3 v) {
+    if (uStyle == 1) return lightShelf(v);
+    if (uStyle == 2) return shopShelf(v);
+    if (uStyle == 3) return caseBoard(v, false);
+    if (uStyle == 4) return glassBoard(v);
     vec3 n = bevelNormal(0.004);
     vec3 p = vWorld;
     float occlusion = 1.0;
@@ -35,6 +198,28 @@ vec3 wood(vec3 v) {
     return color;
 }
 
+// Light: smooth painted plaster, with the faint unevenness of a trowel.
+vec3 plaster(vec3 p, float occlusion) {
+    float trowel = fbm(p.xy * vec2(6.0, 5.0)) * 0.05 + fbm(p.xy * 60.0) * 0.015;
+    // The paint in a light, chalky shade of itself.
+    vec3 a = mix(uWall, vec3(0.62, 0.59, 0.54), 0.5) * (0.97 + trowel);
+    return a * irradiance(vec3(0.0, 0.0, 1.0), occlusion);
+}
+
+// Comic shop: painted pegboard, holes an inch apart, dark inside with a lit lower rim.
+vec3 pegboard(vec3 p, float occlusion) {
+    vec2 cell = p.xy / 0.0254;
+    vec2 d = (fract(cell) - 0.5) * 0.0254;
+    float r = length(d);
+    float aa = fwidth(r) + 0.0002;
+    float hole = 1.0 - smoothstep(0.0028 - aa, 0.0028 + aa, r);
+    float rim = (1.0 - smoothstep(0.0028, 0.0036 + aa, r)) * (1.0 - hole) * smoothstep(0.0, 0.002, -d.y);
+    float speck = noise(p.xy * 500.0) * 0.04 + fbm(p.xy * 8.0) * 0.04;
+    vec3 a = uWall * (0.96 + speck) * (1.0 + 0.25 * rim);
+    vec3 color = a * irradiance(vec3(0.0, 0.0, 1.0), occlusion);
+    return mix(color, vec3(0.006, 0.005, 0.004), hole);
+}
+
 vec3 wall(vec3 v) {
     vec3 p = vWorld;
     float bay = bayOf(p.y);
@@ -43,6 +228,10 @@ vec3 wall(vec3 v) {
     // Darker in the corners where the shelves meet the wall.
     float occlusion = (1.0 - 0.5 * exp(-(p.y - floorY) / 0.035));
     if (bay >= 0.0) occlusion *= 1.0 - 0.35 * exp(-(ceilingY - p.y) / 0.025);
+    if (uStyle == 1) return plaster(p, occlusion);
+    if (uStyle == 2) return pegboard(p, occlusion);
+    if (uStyle == 3) return caseWall(p, occlusion, bay, ceilingY);
+    if (uStyle == 4) return glassWall(p, occlusion, bay, ceilingY);
     // Painted boards with narrow grooves between them, like the back of a built-in bookcase.
     float board = vWorld.x / 0.085 + 0.5;
     float groove = (0.5 - abs(fract(board) - 0.5)) * 0.085;
@@ -67,6 +256,14 @@ vec3 label(vec3 v) {
     vec2 edge = vec2(0.004, 0.003) / size.xy;
     vec2 inner = (vUV - edge) / (1.0 - 2.0 * edge);
     vec2 border = min(vUV, 1.0 - vUV) * size.xy;
+    if (inner.x > 0.0 && inner.x < 1.0 && inner.y > 0.0 && inner.y < 1.0 && uStyle >= 3) {
+        // A plate of dark glass with the words lit through it.
+        vec3 t = uHasLabel > 0.5 ? texture(uLabel, inner).rgb : vec3(1.0);
+        float ink = 1.0 - smoothstep(0.25, 0.6, luminance(t));
+        vec3 n = normalize(uNormalMatrix * vec3(0.0, 0.0, 1.0));
+        vec3 plate = coat(vec3(0.006, 0.009, 0.016) * irradiance(n, 1.0), n, v, 0.6, 0.03);
+        return mix(plate, vec3(0.62, 0.76, 0.95), ink);
+    }
     if (inner.x > 0.0 && inner.x < 1.0 && inner.y > 0.0 && inner.y < 1.0) {
         vec3 a = uHasLabel > 0.5 ? toLinear(texture(uLabel, inner).rgb) : PAPER;
         // The holder's lip throws a little shadow on the paper.
@@ -79,6 +276,10 @@ vec3 label(vec3 v) {
     vec2 side = vUV.x < edge.x || vUV.x > 1.0 - edge.x ? vec2(sign(vUV.x - 0.5), 0.0) : vec2(0.0, sign(vUV.y - 0.5));
     float tilt = (0.5 - clamp(m / 0.004, 0.0, 1.0)) * 1.4;
     vec3 n = normalize(uNormalMatrix * normalize(vec3(side * tilt, 1.0)));
+    // In the comic shop a price tag holder of glossy black plastic.
+    if (uStyle == 2) return coat(vec3(0.012) * irradiance(n, 1.0), n, v, 0.6, 0.04) + sparkle(n, v, 90.0, 0.4);
+    // A thin rim of cold steel round the glass plate.
+    if (uStyle >= 3) return coat(vec3(0.05, 0.06, 0.08) * irradiance(n, 1.0), n, v, 0.8, 0.02) + sparkle(n, v, 120.0, 0.6);
     return brass(n, v);
 }
 
@@ -94,6 +295,17 @@ vec3 namePlate(vec3 v) {
     vec3 color = brass(n, v) * (0.94 + brushed);
     float ink = uHasLabel > 0.5 ? texture(uLabel, vUV).r : 0.0;
     vec3 enamel = vec3(0.012, 0.010, 0.009) + environment(reflect(-v, n), 0.02) * fresnel(n, v, 0.04);
+    if (uStyle >= 3) {
+        // Dark glass with the letters lit from within, and a cold glint along its rim.
+        vec3 plate = coat(vec3(0.006, 0.009, 0.016) * irradiance(n, 1.0), n, v, 0.7, 0.03);
+        vec3 rim = COLD * (1.0 - smoothstep(0.0, 0.0012, m)) * 0.6;
+        return mix(plate + rim, vec3(0.80, 0.90, 1.05) * 1.3, ink);
+    }
+    if (uStyle == 2) {
+        // A shop sign: yellow enamel, the letters in black, all under a glossy coat.
+        vec3 painted = mix(vec3(0.92, 0.64, 0.02), vec3(0.010), ink) * irradiance(n, 1.0);
+        return coat(painted, n, v, 0.5, 0.03) + sparkle(n, v, 90.0, 0.5);
+    }
     return mix(color, enamel, ink);
 }
 
@@ -127,8 +339,14 @@ void main() {
     vec3 v = normalize(uEye - vWorld);
     vec3 color;
     float alpha = 1.0;
-    if (uMaterial == 0) {
+    if (uMirror > 0.5) {
+        vec4 mirrored = mirrorImage();
+        color = mirrored.rgb;
+        alpha = mirrored.a;
+    } else if (uMaterial == 0) {
         color = comic(v);
+    } else if (uMaterial == 11) {
+        color = uStyle == 3 ? caseBoard(v, true) : wood(v);
     } else if (uMaterial == 1) {
         color = wood(v);
     } else if (uMaterial == 2) {

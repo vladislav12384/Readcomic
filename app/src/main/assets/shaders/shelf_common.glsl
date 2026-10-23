@@ -49,6 +49,12 @@ uniform int uPrintFace;       // cardboard: the face with the print (uLabel), -1
 uniform int uInnerFace;       // cardboard: the face inside the box; tape: the side of the cut seam
 uniform vec2 uTapeCut;        // the tape is cut open from..to along its length (0..1)
 uniform float uAlpha;         // fading things: their opacity
+uniform int uStyle;           // the bookcase: 0 oak and painted boards, 1 light (white lacquer, birch ply,
+                              // plaster), 2 comic shop (white steel, coloured price rails, pegboard),
+                              // 3 display case (dark blue cells, cold light), 4 glass shelves
+uniform vec2 uCells;          // cells of the display case: their width, the x of one of their walls
+uniform float uMirror;        // 1 while drawing the comics mirrored in the shelf tops
+uniform float uMirrorY;       // the shelf top they are mirrored in
 
 out vec4 fragColor;
 
@@ -130,6 +136,11 @@ float stripOn(float bay) {
     return t * t * (3.0 - 2.0 * t);
 }
 
+// The shelf lights: warm, or a cold white in the display case and behind the glass.
+vec3 stripColor() {
+    return uStyle >= 3 ? vec3(0.80, 0.92, 1.12) : STRIP;
+}
+
 // Light from the strip under the shelf above: a line along x near the front edge, shining
 // down and a little towards the wall. Falls off slower than a lamp, like any long light.
 vec3 stripLight(vec3 p, vec3 n) {
@@ -140,10 +151,11 @@ vec3 stripLight(vec3 p, vec3 n) {
     vec3 l = vec3(0.0, d / dist);
     float emit = max(dot(-l.yz, vec2(-0.912, -0.410)), 0.0);
     float e = max(dot(n, l), 0.0) * emit / (dist + 0.10);
-    return STRIP * (e * 0.38 * stripOn(bay));
+    return stripColor() * (e * (uStyle >= 3 ? 0.46 : 0.38) * stripOn(bay));
 }
 
 vec3 ambient(vec3 n) {
+    if (uStyle >= 3) return mix(vec3(0.07, 0.08, 0.10), vec3(0.27, 0.30, 0.35), n.y * 0.5 + 0.5);
     return mix(vec3(0.09, 0.075, 0.06), vec3(0.32, 0.30, 0.27), n.y * 0.5 + 0.5);
 }
 

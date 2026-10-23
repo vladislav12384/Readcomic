@@ -1,6 +1,7 @@
 package com.readcomic.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -24,6 +25,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,6 +52,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
@@ -61,6 +65,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -88,12 +94,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -117,14 +125,16 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
 import com.readcomic.data.ComicEntry
 import com.readcomic.data.CoverAspects
 import com.readcomic.shelf.ShelfItem
-import com.readcomic.update.AppUpdater
 import com.readcomic.shelf.ShelfSize
+import com.readcomic.shelf.ShelfStyle
 import com.readcomic.shelf.ShelfView
 import com.readcomic.shelf.UnboxPhase
 import com.readcomic.shelf.UnboxState
+import com.readcomic.update.AppUpdater
 import java.io.File
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -151,11 +161,16 @@ fun LibraryScreen(
     onRemove: (ComicEntry) -> Unit,
     order: ShelfOrder = ShelfOrder.TITLE,
     onOrderChange: (ShelfOrder) -> Unit = {},
+    /** How the plain grid looks. */
+    gridLook: GridLook = GridLook(),
     onSetSeries: (ComicEntry, String?) -> Unit = { _, _ -> },
     /** A drawn back cover for [ComicEntry] (true), or its own. */
     onDrawnBackChange: (ComicEntry, Boolean) -> Unit = { _, _ -> },
     shelfSize: ShelfSize = ShelfSize.NORMAL,
     onShelfSizeChange: (ShelfSize) -> Unit = {},
+    /** The look of the bookcase. */
+    shelfStyle: ShelfStyle = ShelfStyle.WOOD,
+    onShelfStyleChange: (ShelfStyle) -> Unit = {},
     /** Reading [ComicEntry] again from its first page. */
     onStartOver: (ComicEntry) -> Unit = {},
     /** The box of new comics: what it does, and what the reader does with it. */
@@ -197,6 +212,8 @@ fun LibraryScreen(
             onDrawnBackChange = onDrawnBackChange,
             shelfSize = shelfSize,
             onShelfSizeChange = onShelfSizeChange,
+            shelfStyle = shelfStyle,
+            onShelfStyleChange = onShelfStyleChange,
             onStartOver = onStartOver,
             unboxing = unboxing,
             handHint = handHint,
@@ -217,6 +234,7 @@ fun LibraryScreen(
             order = order,
             onOrderChange = onOrderChange,
             updates = updates,
+            look = gridLook,
         )
     }
 
@@ -282,6 +300,8 @@ private fun ShelfLibrary(
     onDrawnBackChange: (ComicEntry, Boolean) -> Unit,
     shelfSize: ShelfSize,
     onShelfSizeChange: (ShelfSize) -> Unit,
+    shelfStyle: ShelfStyle,
+    onShelfStyleChange: (ShelfStyle) -> Unit,
     onStartOver: (ComicEntry) -> Unit,
     unboxing: UnboxSettings,
     handHint: Boolean,
@@ -338,7 +358,7 @@ private fun ShelfLibrary(
         }
     }
 
-    LaunchedEffect(view, placed, aspects) {
+    LaunchedEffect(view, placed, aspects, shelfStyle.cells) {
         val shelf = view ?: return@LaunchedEffect
         val known = aspects
         val items = placed.map { place ->
@@ -348,7 +368,8 @@ private fun ShelfLibrary(
                 aspect = known[entry.id] ?: DEFAULT_ASPECT,
                 pageCount = entry.pageCount,
                 inProgress = entry.currentPage > 0 && !entry.isFinished,
-                label = place.label,
+                // In the cells of a display case there are no series signs: the label says it all.
+                label = if (shelfStyle.cells) entry.title else place.label,
                 series = place.series,
                 drawnBack = entry.drawnBack,
             )
@@ -375,6 +396,9 @@ private fun ShelfLibrary(
     LaunchedEffect(view, theme) {
         val paint = ShelfThemes[theme]
         view?.setWallColor(paint.red, paint.green, paint.blue)
+    }
+    LaunchedEffect(view, shelfStyle) {
+        view?.setStyle(shelfStyle)
     }
     LaunchedEffect(view, shelfSize) {
         view?.setShelfSize(shelfSize)
@@ -469,6 +493,7 @@ private fun ShelfLibrary(
         ) {
             ShelfToolbar(
                 theme = theme,
+                style = shelfStyle,
                 busy = busy,
                 onSearch = {
                     picking = false
@@ -578,13 +603,26 @@ private fun ShelfLibrary(
                 .windowInsetsPadding(SafeInsets)
                 .padding(20.dp),
         ) {
-            ExtendedFloatingActionButton(
-                onClick = onAdd,
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("Добавить") },
-                containerColor = ShelfInk,
-                contentColor = Color(0xFF3A2A1C),
-            )
+            if (shelfStyle.glass) {
+                ExtendedFloatingActionButton(
+                    onClick = onAdd,
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("Добавить") },
+                    containerColor = Color(0xE00C1424),
+                    contentColor = Color(0xFFE6F0FF),
+                    shape = CircleShape,
+                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 8.dp),
+                    modifier = Modifier.border(1.dp, GlassRim, CircleShape),
+                )
+            } else {
+                ExtendedFloatingActionButton(
+                    onClick = onAdd,
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("Добавить") },
+                    containerColor = ShelfInk,
+                    contentColor = Color(0xFF3A2A1C),
+                )
+            }
         }
 
         // The comic in hand keeps clear of its card and of the status bar: what they take from
@@ -721,7 +759,16 @@ private fun ShelfLibrary(
                 .windowInsetsPadding(SafeInsets)
                 .padding(top = 64.dp, end = 12.dp),
         ) {
-            ThemePicker(selected = theme, onSelect = onThemeChange, size = shelfSize, onSizeChange = onShelfSizeChange, unboxing = unboxing, updates = updates)
+            ThemePicker(
+                selected = theme,
+                onSelect = onThemeChange,
+                style = shelfStyle,
+                onStyleChange = onShelfStyleChange,
+                size = shelfSize,
+                onSizeChange = onShelfSizeChange,
+                unboxing = unboxing,
+                updates = updates,
+            )
         }
 
         SnackbarHost(
@@ -738,30 +785,32 @@ private fun ShelfLibrary(
 @Composable
 private fun ShelfToolbar(
     theme: Int,
+    style: ShelfStyle,
     busy: Boolean,
     onSearch: () -> Unit,
     onOrder: () -> Unit,
     onPickTheme: () -> Unit,
     onShowGrid: () -> Unit,
 ) {
+    val glass = style.glass
     Column(horizontalAlignment = Alignment.End, modifier = Modifier.windowInsetsPadding(SafeInsets).padding(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            RoundButton(onClick = onSearch, description = "Поиск") {
+            RoundButton(onClick = onSearch, description = "Поиск", glass = glass) {
                 Icon(Icons.Filled.Search, contentDescription = null, tint = ShelfInk, modifier = Modifier.size(22.dp))
             }
-            RoundButton(onClick = onOrder, description = "Порядок") {
+            RoundButton(onClick = onOrder, description = "Порядок", glass = glass) {
                 Icon(SortIcon, contentDescription = null, tint = ShelfInk, modifier = Modifier.size(22.dp))
             }
-            RoundButton(onClick = onPickTheme, description = "Цвет стены") {
+            RoundButton(onClick = onPickTheme, description = "Цвет стены", glass = glass) {
                 Box(
                     Modifier
                         .size(22.dp)
                         .clip(CircleShape)
-                        .background(ShelfThemes[theme].swatch)
+                        .background(if (style.paint) ShelfThemes[theme].swatch else GlassSwatch)
                         .border(2.dp, ShelfInk, CircleShape),
                 )
             }
-            RoundButton(onClick = onShowGrid, description = "Сеткой") {
+            RoundButton(onClick = onShowGrid, description = "Сеткой", glass = glass) {
                 Icon(GridIcon, contentDescription = null, tint = ShelfInk, modifier = Modifier.size(22.dp))
             }
         }
@@ -777,14 +826,25 @@ private fun ShelfToolbar(
 }
 
 @Composable
-private fun RoundButton(onClick: () -> Unit, description: String, content: @Composable () -> Unit) {
+private fun RoundButton(onClick: () -> Unit, description: String, glass: Boolean = false, content: @Composable () -> Unit) {
+    val look = if (glass) {
+        // Dark glass with a cold rim, as the display case and the glass shelves are lit.
+        Modifier
+            .shadow(8.dp, CircleShape, ambientColor = GlassGlow, spotColor = GlassGlow)
+            .clip(CircleShape)
+            .background(GlassFill)
+            .border(1.dp, GlassRim, CircleShape)
+    } else {
+        Modifier
+            .shadow(6.dp, CircleShape)
+            .clip(CircleShape)
+            .background(Color(0xB31B1713))
+    }
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(44.dp)
-            .shadow(6.dp, CircleShape)
-            .clip(CircleShape)
-            .background(Color(0xB31B1713))
+            .then(look)
             .clickable(onClickLabel = description, onClick = onClick)
             .semantics { contentDescription = description },
     ) {
@@ -792,10 +852,20 @@ private fun RoundButton(onClick: () -> Unit, description: String, content: @Comp
     }
 }
 
+/** The glass of the buttons over the display case and the glass shelves. */
+private val GlassFill = Brush.verticalGradient(listOf(Color(0xA6233554), Color(0xD90A111F)))
+private val GlassRim = Brush.linearGradient(listOf(Color(0xCCA9D4FF), Color(0x334A6A9A), Color(0x99A9D4FF)))
+private val GlassGlow = Color(0xFF3B82F6)
+
+/** The swatch on the wall button when the wall is not painted (display case, glass). */
+private val GlassSwatch = Color(0xFF13203A)
+
 @Composable
 private fun ThemePicker(
     selected: Int,
     onSelect: (Int) -> Unit,
+    style: ShelfStyle,
+    onStyleChange: (ShelfStyle) -> Unit,
     size: ShelfSize,
     onSizeChange: (ShelfSize) -> Unit,
     unboxing: UnboxSettings,
@@ -809,49 +879,17 @@ private fun ThemePicker(
     ) {
         // Scrolls when the screen is low (a phone on its side).
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 14.dp)) {
-            Text("Стена", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ShelfThemes.forEachIndexed { index, paint ->
-                    val chosen = index == selected
-                    Box(
-                        Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(paint.swatch)
-                            .border(if (chosen) 3.dp else 1.dp, if (chosen) ShelfInk else ShelfInk.copy(alpha = 0.3f), CircleShape)
-                            .clickable(onClickLabel = paint.name) { onSelect(index) },
-                    )
-                }
+            Text("Полки", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
+            Spacer(Modifier.height(8.dp))
+            PillRow(ShelfStyle.entries, style, { it.label }, onStyleChange, wrap = true)
+            if (style.paint) {
+                Spacer(Modifier.height(16.dp))
+                WallPaints(selected, onSelect)
             }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                ShelfThemes[selected].name,
-                fontFamily = FontFamily.Serif,
-                fontStyle = FontStyle.Italic,
-                fontSize = 17.sp,
-            )
             Spacer(Modifier.height(16.dp))
             Text("Комиксы на полках", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ShelfSize.entries.forEach { option ->
-                    val chosen = option == size
-                    Text(
-                        option.label,
-                        fontFamily = FontFamily.Serif,
-                        fontStyle = if (chosen) FontStyle.Italic else FontStyle.Normal,
-                        fontSize = 15.sp,
-                        color = if (chosen) Color(0xFF2A1F17) else ShelfInk,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(if (chosen) ShelfInk else Color.Transparent)
-                            .border(1.dp, ShelfInk.copy(alpha = if (chosen) 1f else 0.35f), CircleShape)
-                            .clickable(onClickLabel = option.label) { onSizeChange(option) }
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
-                }
-            }
+            PillRow(ShelfSize.entries, size, { it.label }, onSizeChange)
             Spacer(Modifier.height(16.dp))
             Text("Новые комиксы", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
             SettingSwitch("Приходят в коробке, распаковывать самому", unboxing.wrapNew, unboxing.onWrapNewChange)
@@ -874,6 +912,66 @@ private fun ThemePicker(
             }
         }
     }
+}
+
+/** The paint of the wall: a swatch for each, the chosen one named under them. */
+@Composable
+private fun WallPaints(selected: Int, onSelect: (Int) -> Unit) {
+    Text("Стена", style = MaterialTheme.typography.labelLarge, color = ShelfInk.copy(alpha = 0.6f))
+    Spacer(Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        ShelfThemes.forEachIndexed { index, paint ->
+            val chosen = index == selected
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(paint.swatch)
+                    .border(if (chosen) 3.dp else 1.dp, if (chosen) ShelfInk else ShelfInk.copy(alpha = 0.3f), CircleShape)
+                    .clickable(onClickLabel = paint.name) { onSelect(index) },
+            )
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    Text(
+        ShelfThemes[selected].name,
+        fontFamily = FontFamily.Serif,
+        fontStyle = FontStyle.Italic,
+        fontSize = 17.sp,
+    )
+}
+
+/** Round-ended choices in a row (or several, [wrap]ping), the [selected] one filled. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun <T> PillRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit, wrap: Boolean = false) {
+    if (wrap) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.widthIn(max = 300.dp)) {
+            options.forEach { Pill(label(it), it == selected) { onSelect(it) } }
+        }
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { Pill(label(it), it == selected) { onSelect(it) } }
+        }
+    }
+}
+
+@Composable
+private fun Pill(text: String, chosen: Boolean, onClick: () -> Unit) {
+    Text(
+        text,
+        fontFamily = FontFamily.Serif,
+        fontStyle = if (chosen) FontStyle.Italic else FontStyle.Normal,
+        fontSize = 15.sp,
+        color = if (chosen) Color(0xFF2A1F17) else ShelfInk,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(if (chosen) ShelfInk else Color.Transparent)
+            .border(1.dp, ShelfInk.copy(alpha = if (chosen) 1f else 0.35f), CircleShape)
+            .clickable(onClickLabel = text, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
 }
 
 @Composable
@@ -1216,11 +1314,51 @@ private fun GridLibrary(
     order: ShelfOrder,
     onOrderChange: (ShelfOrder) -> Unit,
     updates: UpdateUi,
+    look: GridLook,
 ) {
+    GridTheme(look.style) {
+        GridLibraryContent(
+            comics = comics,
+            loaded = loaded,
+            busy = busy,
+            snackbar = snackbar,
+            coverFile = coverFile,
+            onShowShelves = onShowShelves,
+            onAdd = onAdd,
+            onOpen = onOpen,
+            onRemove = onRemove,
+            order = order,
+            onOrderChange = onOrderChange,
+            updates = updates,
+            look = look,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GridLibraryContent(
+    comics: List<ComicEntry>,
+    loaded: Boolean,
+    busy: Boolean,
+    snackbar: SnackbarHostState,
+    coverFile: (ComicEntry) -> File,
+    onShowShelves: () -> Unit,
+    onAdd: () -> Unit,
+    onOpen: (ComicEntry) -> Unit,
+    onRemove: (ComicEntry) -> Unit,
+    order: ShelfOrder,
+    onOrderChange: (ShelfOrder) -> Unit,
+    updates: UpdateUi,
+    look: GridLook,
+) {
+    val style = look.style
+    SystemBarsFor(style)
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var ordering by remember { mutableStateOf(false) }
+    var viewing by remember { mutableStateOf(false) }
     val sorted = remember(comics, order, query) {
         CollectionOrder.arrange(comics, order).map { it.entry }.filter(CollectionOrder.matcher(query))
     }
@@ -1229,18 +1367,38 @@ private fun GridLibrary(
         query = ""
     }
 
+    val patterned = style == GridStyle.VINTAGE || style == GridStyle.COMIC
     Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection).gridBackground(style),
+        containerColor = if (patterned) Color.Transparent else MaterialTheme.colorScheme.background,
         topBar = {
             Column {
                 TopAppBar(
+                    colors = when (style) {
+                        GridStyle.COMIC -> TopAppBarDefaults.topAppBarColors(
+                            containerColor = GridPalette.ComicBar,
+                            scrolledContainerColor = GridPalette.ComicBar,
+                            titleContentColor = Color.White,
+                            actionIconContentColor = Color.White,
+                        )
+                        GridStyle.VINTAGE -> TopAppBarDefaults.topAppBarColors(
+                            containerColor = Color.Transparent,
+                            scrolledContainerColor = MaterialTheme.colorScheme.background,
+                        )
+                        else -> TopAppBarDefaults.topAppBarColors()
+                    },
                     title = {
                         Column {
-                            Text("Readcomic", fontWeight = FontWeight.Bold)
+                            when (style) {
+                                GridStyle.VINTAGE -> Text("Readcomic", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)
+                                GridStyle.COMIC -> Text("READCOMIC", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic, letterSpacing = 1.sp)
+                                else -> Text("Readcomic", fontWeight = FontWeight.Bold)
+                            }
                             Text(
                                 "Библиотека · ${comics.size}",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontFamily = if (style == GridStyle.VINTAGE) FontFamily.Serif else null,
+                                color = if (style == GridStyle.COMIC) Color.White.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     },
@@ -1264,12 +1422,25 @@ private fun GridLibrary(
                                 }
                             }
                         }
+                        Box {
+                            IconButton(onClick = { viewing = true }) {
+                                Icon(Icons.Filled.MoreVert, contentDescription = "Вид")
+                            }
+                            GridViewMenu(expanded = viewing, look = look, onDismiss = { viewing = false })
+                        }
                         IconButton(onClick = onShowShelves) {
                             Icon(ShelfIcon, contentDescription = "На полках")
                         }
                     },
                     scrollBehavior = scrollBehavior,
                 )
+                if (style == GridStyle.VINTAGE) {
+                    // A double rule under the masthead, as in an old magazine.
+                    val rule = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(rule))
+                    Spacer(Modifier.height(2.dp))
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(2.dp).background(rule))
+                }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 AnimatedVisibility(visible = searching) {
                     OutlinedTextField(
@@ -1328,6 +1499,7 @@ private fun GridLibrary(
                     ComicCard(
                         entry = entry,
                         coverFile = coverFile(entry),
+                        look = look,
                         onClick = { onOpen(entry) },
                         onLongClick = { onRemove(entry) },
                     )
@@ -1356,59 +1528,35 @@ private fun EmptyLibrary(modifier: Modifier) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ComicCard(entry: ComicEntry, coverFile: File, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun ComicCard(entry: ComicEntry, coverFile: File, look: GridLook, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val style = look.style
+    // In the shape of the issue the front cover alone is wanted (a wraparound one is cut in half).
+    val frontOnly = look.byShape
     // Seen before: there at once; else read in the background (and kept for scrolling back).
-    val cover by produceState(CoverThumbnails.cached(coverFile, frontOnly = false), coverFile, entry.pageCount) {
-        value = withContext(Dispatchers.IO) { CoverThumbnails.load(coverFile, frontOnly = false) }
+    val cover by produceState(CoverThumbnails.cached(coverFile, frontOnly), coverFile, entry.pageCount, frontOnly) {
+        value = withContext(Dispatchers.IO) { CoverThumbnails.load(coverFile, frontOnly) }
     }
-    val shape = RoundedCornerShape(4.dp)
     Column(Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.66f)
-                .shadow(10.dp, shape)
-                .clip(shape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            val image = cover
-            if (image != null) {
-                Image(image, contentDescription = entry.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            } else {
-                Text(
-                    entry.title.take(1).uppercase(),
-                    style = MaterialTheme.typography.displayMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-            }
-            // Spine shading so the cover reads like a physical comic.
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.horizontalGradient(
-                            0f to Color.Black.copy(alpha = 0.35f),
-                            0.06f to Color.Transparent,
-                            0.9f to Color.Transparent,
-                            1f to Color.Black.copy(alpha = 0.12f),
-                        ),
-                    ),
+        if (look.byShape) {
+            IssueCover(
+                cover = cover,
+                pageCount = entry.pageCount,
+                title = entry.title,
+                style = style,
+                progress = if (entry.currentPage > 0) entry.progress else null,
+                progressColor = MaterialTheme.colorScheme.primary,
+                blankColor = MaterialTheme.colorScheme.surfaceVariant,
+                blankInk = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (entry.currentPage > 0) {
-                LinearProgressIndicator(
-                    progress = { entry.progress },
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
-                    trackColor = Color.Black.copy(alpha = 0.4f),
-                    drawStopIndicator = {},
-                    gapSize = 0.dp,
-                )
-            }
+        } else {
+            FlatCover(entry, cover, style)
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            entry.title,
+            if (style == GridStyle.COMIC) entry.title.uppercase() else entry.title,
             style = MaterialTheme.typography.bodyMedium,
+            fontFamily = if (style == GridStyle.VINTAGE) FontFamily.Serif else null,
+            fontWeight = if (style == GridStyle.COMIC) FontWeight.Black else null,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1419,8 +1567,128 @@ private fun ComicCard(entry: ComicEntry, coverFile: File, onClick: () -> Unit, o
                 else -> "${entry.pageCount} стр."
             },
             style = MaterialTheme.typography.labelSmall,
+            fontFamily = if (style == GridStyle.VINTAGE) FontFamily.Serif else null,
+            fontStyle = if (style == GridStyle.VINTAGE) FontStyle.Italic else null,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** The cover as a tile of the grid, all of one shape (the cover cut to fit). */
+@Composable
+private fun FlatCover(entry: ComicEntry, cover: ImageBitmap?, style: GridStyle) {
+    val shape = RoundedCornerShape(if (style == GridStyle.COMIC) 2.dp else 4.dp)
+    val tile = Modifier
+        .fillMaxWidth()
+        .aspectRatio(0.66f)
+    val framed = when (style) {
+        // Inked like a panel: a thick black frame and a hard black shadow.
+        GridStyle.COMIC -> tile
+            .drawBehind { drawRect(Color(0xFF111111), topLeft = Offset(4.dp.toPx(), 4.dp.toPx()), size = size) }
+            .border(2.5.dp, Color(0xFF111111), shape)
+            .clip(shape)
+        GridStyle.VINTAGE -> tile.shadow(6.dp, shape).clip(shape).border(1.dp, Color(0x663E2C1C), shape)
+        GridStyle.LIGHT -> tile.shadow(7.dp, shape).clip(shape)
+        GridStyle.DARK -> tile.shadow(10.dp, shape).clip(shape)
+    }
+    Box(framed.background(MaterialTheme.colorScheme.surfaceVariant)) {
+        val image = cover
+        if (image != null) {
+            Image(
+                image,
+                contentDescription = entry.title,
+                contentScale = ContentScale.Crop,
+                colorFilter = if (style == GridStyle.VINTAGE) GridPalette.Sepia else null,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text(
+                entry.title.take(1).uppercase(),
+                style = MaterialTheme.typography.displayMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+        // Spine shading so the cover reads like a physical comic.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        0f to Color.Black.copy(alpha = 0.35f),
+                        0.06f to Color.Transparent,
+                        0.9f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.12f),
+                    ),
+                ),
+        )
+        if (entry.currentPage > 0) {
+            LinearProgressIndicator(
+                progress = { entry.progress },
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
+                trackColor = Color.Black.copy(alpha = 0.4f),
+                drawStopIndicator = {},
+                gapSize = 0.dp,
+            )
+        }
+    }
+}
+
+/** The look of the grid: its colours and the covers in the shapes of the issues. */
+@Composable
+private fun GridViewMenu(expanded: Boolean, look: GridLook, onDismiss: () -> Unit) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        Text(
+            "Оформление",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        GridStyle.entries.forEach { option ->
+            DropdownMenuItem(
+                text = { Text(option.label, fontWeight = if (option == look.style) FontWeight.Bold else FontWeight.Normal) },
+                leadingIcon = {
+                    if (option == look.style) Icon(Icons.Filled.Check, contentDescription = null) else Spacer(Modifier.size(24.dp))
+                },
+                onClick = { look.onStyleChange(option) },
+            )
+        }
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text("По форме выпуска")
+                    Text(
+                        "Свои пропорции и толщина",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            trailingIcon = { Switch(checked = look.byShape, onCheckedChange = null, modifier = Modifier.padding(start = 12.dp)) },
+            onClick = { look.onByShapeChange(!look.byShape) },
+        )
+    }
+}
+
+/** Dark icons on the status and navigation bars over a light grid; back to light ones when it goes. */
+@Composable
+private fun SystemBarsFor(style: GridStyle) {
+    // The dark look leaves the bars as the rest of the app has them.
+    if (style == GridStyle.DARK) return
+    val activity = LocalActivity.current ?: return
+    // The comic look has a red bar under the status bar: its icons stay light.
+    val lightStatus = style != GridStyle.COMIC
+    DisposableEffect(activity, lightStatus) {
+        val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+        val status = controller.isAppearanceLightStatusBars
+        val navigation = controller.isAppearanceLightNavigationBars
+        controller.isAppearanceLightStatusBars = lightStatus
+        controller.isAppearanceLightNavigationBars = true
+        onDispose {
+            controller.isAppearanceLightStatusBars = status
+            controller.isAppearanceLightNavigationBars = navigation
+        }
     }
 }
 
