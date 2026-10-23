@@ -172,13 +172,26 @@ vec3 irradiance(vec3 n, float occlusion) {
     vec3 key = vec3(1.0, 0.94, 0.86) * max(dot(n, uLightDir), 0.0) * shadowAt(n) * 0.6;
     // The room light comes up together with the first shelf lights.
     float room = 0.45 + 0.55 * smoothstep(0.0, 0.9, uLightsTime);
-    return (ambient(n) + key) * occlusion * room + stripLight(vWorld, n);
+    vec3 light = (ambient(n) + key) * occlusion * room + stripLight(vWorld, n);
+    // A display lights its comics from in front too, softly, as a shop window does.
+    if (uStyle >= 3 && uMaterial == 0) light += vec3(0.15, 0.17, 0.21) * max(dot(n, normalize(vec3(0.0, 0.35, 1.0))), 0.0) * room;
+    return light;
 }
 
 // The room in front of the shelves as mirrored by shiny things: a tall window on the left with
 // its crossbars, a narrow studio softbox on the right, a glowing ceiling, a warm room and a dark
 // floor. [blur] softens every edge, for less polished surfaces.
 vec3 environment(vec3 r, float blur) {
+    if (uStyle >= 3) {
+        // A display mirrors a dark blue room: the long light strips above, a soft panel to the left.
+        vec3 dark = mix(vec3(0.004, 0.006, 0.012), vec3(0.035, 0.05, 0.09), smoothstep(-0.4, 0.6, r.y));
+        if (r.z < 0.05) return dark;
+        vec2 q = r.xy / r.z;
+        float s = 0.012 + blur;
+        float strip = band(q.y, 0.9, 0.05, s + 0.02);
+        float panel = band(q.x, -0.75, 0.25, s + 0.05) * band(q.y, 0.3, 0.5, s + 0.05);
+        return dark + vec3(1.5, 1.8, 2.3) * strip * 0.6 + vec3(0.45, 0.6, 0.9) * panel * 0.3;
+    }
     vec3 room = mix(vec3(0.03, 0.025, 0.02), vec3(0.30, 0.27, 0.23), smoothstep(-0.45, 0.55, r.y));
     if (r.z < 0.05) return room * 0.8;
     vec2 q = r.xy / r.z;

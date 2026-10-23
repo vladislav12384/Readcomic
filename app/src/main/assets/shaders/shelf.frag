@@ -106,6 +106,13 @@ vec3 caseBoard(vec3 v, bool panel) {
         float d = panel ? abs(vLocal.x) * size.x : (0.5 - vLocal.y) * size.y;
         float line = 1.0 - smoothstep(0.0005, 0.0012 + fwidth(d), d);
         color += COLD * line * (panel ? 0.5 : 1.4) * (0.3 + 0.7 * lit);
+        if (!panel) {
+            // Along the bottom of the edge the light strip itself shows, bright, and lights the edge a little.
+            float b = (vLocal.y + 0.5) * size.y;
+            float led = 1.0 - smoothstep(0.0008, 0.0022 + fwidth(b), b);
+            float below = stripOn(max(bayOf(p.y - 0.02), 0.0));
+            color += COLD * (led * 2.6 + exp(-b / 0.008) * 0.12) * below;
+        }
     }
     if (vFace == 5) color = withStrip(color, p);
     return color;
@@ -123,6 +130,8 @@ vec3 glassBoard(vec3 v) {
         float h = (vLocal.y + 0.5) * size.y;
         float rim = exp(-min(h, size.y - h) / 0.0022);
         color = tint * (irradiance(n, 1.0) * 0.45 + 0.01) + vec3(0.32, 0.62, 0.95) * rim * 1.1;
+        // Light runs through the glass from the strip under it: the edge glows more towards its bottom.
+        color += COLD * smoothstep(0.2, 1.0, 1.0 - vLocal.y - 0.5) * 0.10 * stripOn(max(bayOf(p.y - 0.02), 0.0));
         color = coat(color, n, v, 0.6, 0.02) + sparkle(n, v, 160.0, 0.6);
     } else {
         float occlusion = vFace == 4 ? 1.0 - 0.45 * exp(-p.z / 0.03) : 0.7;
@@ -153,18 +162,20 @@ vec3 glassPost(vec3 v) {
 
 // The back of the display case: dark blue, a seam behind every upright, each cell lit from its top.
 vec3 caseWall(vec3 p, float occlusion, float bay, float ceilingY) {
-    float cell = (p.x - uCells.y) / uCells.x;
-    float f = fract(cell);
-    float edge = min(f, 1.0 - f) * uCells.x;
-    float seam = 1.0 - smoothstep(0.004, 0.006 + fwidth(p.x), edge);
-    float across = 0.5 - 0.5 * cos(f * 2.0 * PI);
-    vec3 a = vec3(0.0030, 0.0055, 0.0150) * (0.92 + 0.08 * fbm(p.xy * vec2(40.0, 4.0)));
-    vec3 color = a * irradiance(vec3(0.0, 0.0, 1.0), occlusion) * (1.0 - 0.6 * seam);
+    // Across a cell, 0 to 1; the comic stands in its middle.
+    float f = fract((p.x - uCells.y) / uCells.x);
+    float dx = (f - 0.5) * uCells.x;
+    float below = max(ceilingY - p.y, 0.0);
+    // Deep blue, darker towards the bottom of every cell, with a fine brushed grain.
+    float depth = bay >= 0.0 ? clamp(below / (uRowHeight - uPlank.x), 0.0, 1.0) : 0.5;
+    vec3 a = vec3(0.0032, 0.0058, 0.0160) * (1.1 - 0.45 * depth) * (0.94 + 0.06 * fbm(p.xy * vec2(60.0, 3.0)));
+    vec3 color = a * irradiance(vec3(0.0, 0.0, 1.0), occlusion);
     if (bay >= 0.0) {
-        // The cell's own light: a bright wash under its top, fading down the wall and to its sides.
-        float below = ceilingY - p.y;
-        float glow = (exp(-below / 0.035) * 0.8 + exp(-below / 0.14) * 0.2) * (0.2 + 0.8 * across) * stripOn(bay);
-        color += COLD * glow * 0.75 * (1.0 - 0.6 * seam);
+        // The light of the cell: a bright wash just under the strip, and a cone over the comic
+        // that widens and fades as it goes down the wall.
+        float wash = exp(-below / 0.02) * (0.4 + 0.6 * exp(-dx * dx / 0.003));
+        float cone = exp(-below / 0.13) * exp(-dx * dx / (0.0012 + below * 0.014));
+        color += COLD * (wash * 0.42 + cone * 0.28) * stripOn(bay);
     }
     return color;
 }
@@ -172,11 +183,22 @@ vec3 caseWall(vec3 p, float occlusion, float bay, float ceilingY) {
 // Behind the glass shelves: deep blue, softly uneven, with faint upright lines and a glow under every shelf.
 vec3 glassWall(vec3 p, float occlusion, float bay, float ceilingY) {
     vec3 a = mix(vec3(0.0035, 0.0055, 0.012), vec3(0.008, 0.013, 0.027), smoothstep(0.35, 0.65, fbm(p.xy * 2.5)));
-    float line = band(fract(p.x / (uCells.x * 0.5)), 0.5, 0.004 / uCells.x, 0.002 / uCells.x);
-    vec3 color = a * irradiance(vec3(0.0, 0.0, 1.0), occlusion) * (1.0 + 0.6 * line);
+    vec3 color = a * irradiance(vec3(0.0, 0.0, 1.0), occlusion);
     color += vec3(0.25, 0.42, 0.75) * smoothstep(0.66, 0.82, noise(p.xy * 6.0 + 3.0)) * 0.025;
-    if (bay >= 0.0) color += COLD * (exp(-(ceilingY - p.y) / 0.04) * 0.7 + exp(-(ceilingY - p.y) / 0.16) * 0.3) * stripOn(bay) * 0.28;
+    if (bay >= 0.0) color += COLD * (exp(-(ceilingY - p.y) / 0.04) * 0.7 + exp(-(ceilingY - p.y) / 0.16) * 0.3) * stripOn(bay) * 0.18;
     return color;
+}
+
+// The bloom of a shelf's light strip seen from in front: a soft bright band along the shelf's
+// lower edge, over the middle of every comic strongest in the display case. Added to the image.
+vec3 ledGlow() {
+    float y = vLocal.y * boxSize().y;
+    float lit = stripOn(max(bayOf(uModel[3].y - 0.004), 0.0));
+    // Gone by the edges of the quad, so that no edge of it shows.
+    float glow = (exp(-abs(y) / 0.004) * 0.5 + exp(-abs(y) / 0.014) * 0.16) * (1.0 - smoothstep(0.25, 0.5, abs(vLocal.y)));
+    float f = fract((vWorld.x - uCells.y) / uCells.x);
+    float pool = uStyle == 3 ? 0.45 + 0.55 * (0.5 - 0.5 * cos(f * 2.0 * PI)) : 1.0;
+    return COLD * glow * pool * lit;
 }
 
 // A comic mirrored in the glossy shelf it stands on: kept only where the eye sees that shelf's
@@ -187,10 +209,13 @@ vec4 mirrorImage() {
     if (vWorld.y >= uMirrorY || t <= 0.0 || t >= 1.0) discard;
     vec3 q = uEye + d * t;
     if (q.z < 0.0 || q.z > uPlank.y) discard;
-    vec3 a = vFace == 0 && uHasCover > 0.5 ? toLinear(textureLod(uCover, vUV, 2.0).rgb) : coverEdgeColor() * 0.7;
-    vec3 color = a * (ambient(vec3(0.0, 1.0, 0.0)) * 0.5 + vec3(0.55));
-    float strength = uStyle == 4 ? 0.55 : 0.30;
-    return vec4(color, strength * exp(-(uMirrorY - vWorld.y) / 0.07));
+    vec3 a = vFace == 0 && uHasCover > 0.5 ? toLinear(textureLod(uCover, vUV, 0.8).rgb) : coverEdgeColor() * 0.7;
+    // Lit about as the comic itself, a little cooler for the glaze it is seen through.
+    vec3 color = a * (ambient(vec3(0.0, 1.0, 0.0)) * 0.5 + vec3(0.62)) * vec3(0.86, 0.93, 1.05);
+    // More of a mirror the flatter it is seen (Fresnel), fading with the distance from the shelf.
+    float grazing = 1.0 - abs(normalize(uEye - q).y);
+    float strength = (uStyle == 4 ? 0.62 : 0.46) * mix(0.65, 1.1, grazing);
+    return vec4(color, strength * exp(-(uMirrorY - vWorld.y) / 0.12));
 }
 
 // endregion
@@ -367,6 +392,10 @@ void main() {
         color = uStyle == 3 ? caseBoard(v, true) : wood(v);
     } else if (uMaterial == 12) {
         color = uStyle == 4 ? glassPost(v) : wood(v);
+    } else if (uMaterial == 13) {
+        // Added straight to the picture on screen, as bloom is: no tone curve.
+        fragColor = vec4(ledGlow() * (1.0 - uDim), 1.0);
+        return;
     } else if (uMaterial == 1) {
         color = wood(v);
     } else if (uMaterial == 2) {

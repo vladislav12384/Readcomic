@@ -280,6 +280,15 @@ class ShelfRenderer(
                 draw(Mesh(ribbonVao, Ribbon.INDICES.size), identity, MATERIAL_RIBBON, dim)
             }
         }
+        if (frame.glows.isNotEmpty()) {
+            // The light strips' glow is light added on top, behind whatever is in front of it.
+            GLES30.glEnable(GLES30.GL_BLEND)
+            GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+            GLES30.glDepthMask(false)
+            frame.glows.forEach { draw(quad, it, MATERIAL_GLOW, frame.dim) }
+            GLES30.glDepthMask(true)
+            GLES30.glDisable(GLES30.GL_BLEND)
+        }
         frame.unbox?.let { box ->
             // The shelves come first: the box's own program is built a few frames later.
             if (unboxProgram == null && freshFrames < UNBOX_DELAY_FRAMES) {
@@ -801,6 +810,7 @@ class ShelfRenderer(
         const val MATERIAL_STAR = 10
         const val MATERIAL_DIVIDER = 11
         const val MATERIAL_POST = 12
+        const val MATERIAL_GLOW = 13
 
         /** Frames drawn before the program of the box of new comics is built. */
         const val UNBOX_DELAY_FRAMES = 4

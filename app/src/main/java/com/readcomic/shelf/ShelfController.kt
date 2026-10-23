@@ -48,8 +48,8 @@ enum class ShelfStyle(
     /** Oak shelves and painted boards behind them. */
     WOOD("Дерево", 0),
 
-    /** A dark blue display case: a cell for every comic, a cold light along the top of each, glossy shelves. */
-    VITRINE("Витрина", 3, cells = true, showcase = true, mirrors = true, paint = false, glass = true),
+    /** A dark blue display case: a pool of cold light over every comic, glossy shelves with lit edges. */
+    VITRINE("Витрина", 3, showcase = true, mirrors = true, paint = false, glass = true),
 
     /** Thick glass shelves with bright edges that mirror the comics, before a deep blue wall. */
     GLASS("Стекло", 4, showcase = true, framed = true, mirrors = true, paint = false, glass = true),
@@ -138,6 +138,8 @@ class ShelfFrame(
     val dividers: List<FloatArray> = emptyList(),
     /** The uprights of a glass frame round the bookcase (boxes). */
     val posts: List<FloatArray> = emptyList(),
+    /** The glow of the light strips under the shelves of a display, seen from in front (quads). */
+    val glows: List<FloatArray> = emptyList(),
     /** Cells of a display case: their width and the x of one of their walls. */
     val cellWidth: Float = 0f,
     val cellOrigin: Float = 0f,
@@ -467,8 +469,9 @@ class ShelfController(private val density: Float) {
         return (rest - corner) to rotation
     }
 
-    private fun eye() = Vec3(0f, cameraY + 0.06f, distance)
-    private fun target() = Vec3(0f, cameraY - 0.03f, 0f)
+    // A display is seen from a little higher, so that more of its shelves show their glossy tops.
+    private fun eye() = Vec3(0f, cameraY + if (showcase) 0.16f else 0.06f, distance)
+    private fun target() = Vec3(0f, cameraY - if (showcase) 0.05f else 0.03f, 0f)
 
     private fun viewMatrix() = Mat4.lookAt(eye(), target(), Vec3(0f, 1f, 0f))
     // Nothing comes closer than the comic in hand; a far-off near plane keeps depth precise.
@@ -644,6 +647,16 @@ class ShelfController(private val density: Float) {
             )
         }
 
+        // A display: the light strip under every shelf (and under the top board) glows.
+        val glows = if (!showcase) {
+            emptyList()
+        } else {
+            val under = (topRow..bottomRow).map { rowBase(it) - PLANK_THICKNESS } + if (topRow == 0) listOf(corniceBottom) else emptyList()
+            under.map { y ->
+                Mat4.compose(Vec3(0f, y, PLANK_DEPTH + 0.004f), Quat.IDENTITY, Vec3(shelfWidth, GLOW_HEIGHT, 1f))
+            }
+        }
+
         // A display case: upright panels between the cells, across the whole width on screen.
         val cellOrigin = slotX(0) - slotWidth / 2f
         val dividers = if (!cells) {
@@ -733,6 +746,7 @@ class ShelfController(private val density: Float) {
             unbox = unbox,
             dividers = dividers,
             posts = posts,
+            glows = glows,
             cellWidth = slotWidth,
             cellOrigin = cellOrigin,
         )
@@ -1130,6 +1144,9 @@ class ShelfController(private val density: Float) {
 
         /** The header over a display (ShowcaseHeader), dp: the top of the bookcase stays clear of it. */
         private const val SHOWCASE_HEADER_DP = 76f
+
+        /** How far the glow of a light strip reaches above and below it. */
+        private const val GLOW_HEIGHT = 0.08f
 
         /** A comic in a display stands nearly upright, on a little stand. */
         private const val SHOWCASE_LEAN = 0.035f
