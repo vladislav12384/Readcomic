@@ -49,9 +49,14 @@ uniform int uPrintFace;       // cardboard: the face with the print (uLabel), -1
 uniform int uInnerFace;       // cardboard: the face inside the box; tape: the side of the cut seam
 uniform vec2 uTapeCut;        // the tape is cut open from..to along its length (0..1)
 uniform float uAlpha;         // fading things: their opacity
-uniform int uStyle;           // the bookcase: 0 oak and painted boards, 1 light (white lacquer, birch ply,
-                              // plaster), 2 comic shop (white steel, coloured price rails, pegboard),
-                              // 3 display case (dark blue, cold light over every comic)
+// The bookcase: 0 oak and painted boards, 1 light (white lacquer, birch ply, plaster), 2 comic
+// shop (white steel, coloured price rails, pegboard), 3 display case (dark blue, cold light over
+// every comic). The app builds the shaders for the bookcase on screen only (#define STYLE), so
+// the others' code is not compiled at all.
+#ifndef STYLE
+#define STYLE 0
+#endif
+#define uStyle STYLE
 uniform vec2 uCells;          // places of the comics across a shelf: their width, the x of one of their sides
 uniform float uMirror;        // 1 while drawing the comics mirrored in the shelf tops
 uniform float uMirrorY;       // the shelf top they are mirrored in

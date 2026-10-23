@@ -30,6 +30,7 @@ float shelfIndex(vec3 p) {
     return floor(-p.y / uRowHeight + 0.5);
 }
 
+#if STYLE == 1
 // Light: white lacquered boards whose front edges show the plies of birch plywood.
 vec3 lightShelf(vec3 v) {
     vec3 n = bevelNormal(0.0025);
@@ -52,7 +53,9 @@ vec3 lightShelf(vec3 v) {
     if (vFace == 5) color = withStrip(color, p);
     return color;
 }
+#endif
 
+#if STYLE == 2
 // Comic shop: boards of white powder-coated steel with a price rail along the front, in the
 // colours of print: red, yellow and blue, one after another down the wall.
 vec3 shopShelf(vec3 v) {
@@ -81,11 +84,14 @@ vec3 shopShelf(vec3 v) {
     if (vFace == 5) color = withStrip(color, p);
     return color;
 }
+#endif
 
 // region Display case
 
 const vec3 NAVY = vec3(0.005, 0.007, 0.015);
 const vec3 COLD = vec3(0.42, 0.70, 1.25);
+
+#if STYLE == 3
 
 // The dark blue lacquered boards of the display case. Their front edges catch the cold light in
 // a fine line along the top and show the light strip along the bottom; their glossy tops mirror
@@ -171,12 +177,18 @@ vec4 mirrorImage() {
     return vec4(color, strength * exp(-(uMirrorY - vWorld.y) / 0.12));
 }
 
+#endif
+
 // endregion
 
 vec3 wood(vec3 v) {
-    if (uStyle == 1) return lightShelf(v);
-    if (uStyle == 2) return shopShelf(v);
-    if (uStyle == 3) return caseBoard(v);
+#if STYLE == 1
+    return lightShelf(v);
+#elif STYLE == 2
+    return shopShelf(v);
+#elif STYLE == 3
+    return caseBoard(v);
+#else
     vec3 n = bevelNormal(0.004);
     vec3 p = vWorld;
     float occlusion = 1.0;
@@ -191,8 +203,10 @@ vec3 wood(vec3 v) {
         color = mix(color, STRIP * 9.0, strip * stripOn(bay));
     }
     return color;
+#endif
 }
 
+#if STYLE == 1
 // Light: smooth painted plaster, with the faint unevenness of a trowel.
 vec3 plaster(vec3 p, float occlusion) {
     float trowel = fbm(p.xy * vec2(6.0, 5.0)) * 0.05 + fbm(p.xy * 60.0) * 0.015;
@@ -200,7 +214,9 @@ vec3 plaster(vec3 p, float occlusion) {
     vec3 a = mix(uWall, vec3(0.62, 0.59, 0.54), 0.5) * (0.97 + trowel);
     return a * irradiance(vec3(0.0, 0.0, 1.0), occlusion);
 }
+#endif
 
+#if STYLE == 2
 // Comic shop: painted pegboard, holes an inch apart, dark inside with a lit lower rim.
 vec3 pegboard(vec3 p, float occlusion) {
     vec2 cell = p.xy / 0.0254;
@@ -214,6 +230,7 @@ vec3 pegboard(vec3 p, float occlusion) {
     vec3 color = a * irradiance(vec3(0.0, 0.0, 1.0), occlusion);
     return mix(color, vec3(0.006, 0.005, 0.004), hole);
 }
+#endif
 
 vec3 wall(vec3 v) {
     vec3 p = vWorld;
@@ -223,9 +240,13 @@ vec3 wall(vec3 v) {
     // Darker in the corners where the shelves meet the wall.
     float occlusion = (1.0 - 0.5 * exp(-(p.y - floorY) / 0.035));
     if (bay >= 0.0) occlusion *= 1.0 - 0.35 * exp(-(ceilingY - p.y) / 0.025);
-    if (uStyle == 1) return plaster(p, occlusion);
-    if (uStyle == 2) return pegboard(p, occlusion);
-    if (uStyle == 3) return caseWall(p, occlusion, bay, ceilingY);
+#if STYLE == 1
+    return plaster(p, occlusion);
+#elif STYLE == 2
+    return pegboard(p, occlusion);
+#elif STYLE == 3
+    return caseWall(p, occlusion, bay, ceilingY);
+#else
     // Painted boards with narrow grooves between them, like the back of a built-in bookcase.
     float board = vWorld.x / 0.085 + 0.5;
     float groove = (0.5 - abs(fract(board) - 0.5)) * 0.085;
@@ -236,6 +257,7 @@ vec3 wall(vec3 v) {
     vec3 a = uWall * (0.94 + grain) * (1.0 - 0.45 * dark) * (1.0 + 0.25 * lit);
     vec3 n = vec3(0.0, 0.0, 1.0);
     return a * irradiance(n, occlusion);
+#endif
 }
 
 vec3 brass(vec3 n, vec3 v) {
@@ -333,16 +355,20 @@ void main() {
     vec3 v = normalize(uEye - vWorld);
     vec3 color;
     float alpha = 1.0;
+#if STYLE == 3
+    // Only the display case mirrors its comics and has its light strips glow.
     if (uMirror > 0.5) {
         vec4 mirrored = mirrorImage();
         color = mirrored.rgb;
         alpha = mirrored.a;
-    } else if (uMaterial == 0) {
-        color = comic(v);
     } else if (uMaterial == 13) {
         // Added straight to the picture on screen, as bloom is: no tone curve.
         fragColor = vec4(ledGlow() * (1.0 - uDim), 1.0);
         return;
+    } else
+#endif
+    if (uMaterial == 0) {
+        color = comic(v);
     } else if (uMaterial == 1) {
         color = wood(v);
     } else if (uMaterial == 2) {

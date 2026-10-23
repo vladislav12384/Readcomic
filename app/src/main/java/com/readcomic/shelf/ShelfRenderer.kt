@@ -25,12 +25,17 @@ class ShelfRenderer(
 
     private class Mesh(val vao: Int, val count: Int)
 
-    private lateinit var shelfProgram: GlProgram
+    // The shelves' program is built for the bookcase on screen only ("#define STYLE"): the code
+    // of the other bookcases is left out, so it compiles faster. Built on the first frame, and
+    // again only when the bookcase is changed.
+    private var shelfProgram: GlProgram? = null
+    private var shelfProgramStyle = -1
     private lateinit var depthProgram: GlProgram
 
     // The box of new comics is drawn by its own program, built the first time a box is there:
-    // the shelves keep a lighter one.
+    // the shelves keep a lighter one. It too is for the bookcase on screen only.
     private var unboxProgram: GlProgram? = null
+    private var unboxProgramStyle = -1
 
     /** The program being drawn with. */
     private lateinit var program: GlProgram
@@ -78,7 +83,7 @@ class ShelfRenderer(
     @Volatile
     var clearColor = floatArrayOf(0.05f, 0.05f, 0.06f)
 
-    /** The look of the bookcase, as the shaders call it ([ShelfStyle.shader]). */
+    /** The look of the bookcase, as the shaders call it ([ShelfStyle.shader]); its program is built when it is drawn. */
     @Volatile
     var style = 0
 
@@ -113,9 +118,11 @@ class ShelfRenderer(
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
-        shelfProgram = GlProgram.fromAssets(assets, "shelf.vert", "shelf.frag")
-        program = shelfProgram
+        // A new context: the programs of the old one are gone with it.
+        shelfProgram = null
+        shelfProgramStyle = -1
         unboxProgram = null
+        unboxProgramStyle = -1
         depthProgram = GlProgram.fromAssets(assets, "shelf_depth.vert", "shelf_depth.frag")
         comicMeshes.clear()
         box = createMesh(boxVertices(), boxIndices())
@@ -239,7 +246,9 @@ class ShelfRenderer(
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glDepthFunc(GLES30.GL_LEQUAL)
 
-        use(shelfProgram, frame)
+        // The bookcase is read once for the whole frame.
+        val look = style
+        use(shelfProgramFor(look), frame)
         val p = program
         draw(quad, frame.wall, MATERIAL_WALL, frame.dim)
         frame.planks.forEach { draw(box, it, MATERIAL_WOOD, frame.dim) }
@@ -289,12 +298,19 @@ class ShelfRenderer(
         }
         frame.unbox?.let { box ->
             // The shelves come first: the box's own program is built a few frames later.
+            if (unboxProgramStyle != look) {
+                unboxProgram?.delete()
+                unboxProgram = null
+            }
             if (unboxProgram == null && freshFrames < UNBOX_DELAY_FRAMES) {
                 unboxWaiting = true
                 return@let
             }
             unboxWaiting = false
-            val unbox = unboxProgram ?: GlProgram.fromAssets(assets, "shelf.vert", "unbox.frag").also { unboxProgram = it }
+            val unbox = unboxProgram ?: GlProgram.fromAssets(assets, "shelf.vert", "unbox.frag", styleDefine(look)).also {
+                unboxProgram = it
+                unboxProgramStyle = look
+            }
             use(unbox, frame)
             renderUnbox(box)
         }
@@ -307,6 +323,20 @@ class ShelfRenderer(
         }
         GLES30.glBindVertexArray(0)
     }
+
+    /** The shelves' program for the bookcase [style]: the one built already, or a new one in its place. */
+    private fun shelfProgramFor(style: Int): GlProgram {
+        shelfProgram?.let { built ->
+            if (shelfProgramStyle == style) return built
+            built.delete()
+        }
+        return GlProgram.fromAssets(assets, "shelf.vert", "shelf.frag", styleDefine(style)).also {
+            shelfProgram = it
+            shelfProgramStyle = style
+        }
+    }
+
+    private fun styleDefine(style: Int) = "#define STYLE $style"
 
     /** Starts drawing with [next]: everything the frame sets once, and the plain state of the rest. */
     private fun use(next: GlProgram, frame: ShelfFrame) {
@@ -329,7 +359,6 @@ class ShelfRenderer(
         GLES30.glUniform1f(p["uLightsTime"], frame.lightsTime)
         val wall = wallColor
         GLES30.glUniform3f(p["uWall"], wall[0], wall[1], wall[2])
-        GLES30.glUniform1i(p["uStyle"], style)
         GLES30.glUniform1f(p["uGlow"], glow)
         GLES30.glUniform2f(p["uCells"], frame.cellWidth, frame.cellOrigin)
         GLES30.glUniform1f(p["uMirror"], 0f)

@@ -471,6 +471,9 @@ private fun ShelfLibrary(
             factory = { ctx ->
                 ShelfView(ctx).also { shelf ->
                     shelf.setClearColor(ShelfRoom.red, ShelfRoom.green, ShelfRoom.blue)
+                    // Known before the first frame, so that only this bookcase is ever built.
+                    shelf.setStyle(shelfStyle)
+                    shelf.setCaseLight(caseLight)
                     // Walking into the room for the first time: the shelf lights come on.
                     if (initialScroll.isNaN()) shelf.switchLightsOn() else shelf.restoreScroll(initialScroll)
                     shelf.callbacks = object : ShelfView.Callbacks {

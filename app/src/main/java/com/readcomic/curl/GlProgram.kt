@@ -38,16 +38,33 @@ class GlProgram(vertexSource: String, fragmentSource: String) {
 
     fun use() = GLES30.glUseProgram(id)
 
+    fun delete() = GLES30.glDeleteProgram(id)
+
     /** -1 for uniforms the compiler optimised away; GL ignores writes to -1. */
     operator fun get(name: String): Int = uniforms[name] ?: -1
 
     companion object {
         private const val TAG = "GlProgram"
 
-        /** Shaders from the assets; a line "#include name" brings in shaders/name.glsl. */
-        fun fromAssets(assets: AssetManager, vertex: String, fragment: String): GlProgram {
-            fun load(name: String): String = read(assets, name).replace(INCLUDE) { read(assets, "${it.groupValues[1]}.glsl") }
+        /**
+         * Shaders from the assets; a line "#include name" brings in shaders/name.glsl, and
+         * [defines] (lines such as "#define STYLE 3") go in before everything but "#version".
+         */
+        fun fromAssets(assets: AssetManager, vertex: String, fragment: String, defines: String = ""): GlProgram {
+            fun load(name: String): String =
+                withDefines(read(assets, name).replace(INCLUDE) { read(assets, "${it.groupValues[1]}.glsl") }, defines)
             return GlProgram(load(vertex), load(fragment))
+        }
+
+        /** [source] with [defines] put in right after its "#version" line, which must stay the first. */
+        internal fun withDefines(source: String, defines: String): String {
+            if (defines.isEmpty()) return source
+            val end = source.indexOf('\n')
+            return if (source.startsWith("#version") && end >= 0) {
+                source.substring(0, end + 1) + defines + "\n" + source.substring(end + 1)
+            } else {
+                defines + "\n" + source
+            }
         }
 
         private val INCLUDE = Regex("#include\\s+(\\w+)")
