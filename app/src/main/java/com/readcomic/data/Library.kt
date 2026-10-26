@@ -40,6 +40,9 @@ data class ComicEntry(
 ) {
     val progress: Float get() = if (pageCount <= 1) 0f else lastVisiblePage.toFloat() / (pageCount - 1)
     val isFinished: Boolean get() = lastReadAt > 0 && lastVisiblePage >= pageCount - 1
+
+    /** Where reading goes on when it is opened: where it stopped, or from the start once read to the end. */
+    val resumePage: Int get() = if (isFinished) 0 else currentPage
 }
 
 /** The list of comics with reading progress, stored as a small JSON file plus cover thumbnails. */

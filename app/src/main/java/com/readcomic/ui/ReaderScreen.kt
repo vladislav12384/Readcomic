@@ -142,8 +142,10 @@ fun ReaderScreen(
     var aspects by remember(entry.uri) { mutableStateOf<FloatArray?>(null) }
     var preparing by remember(entry.uri) { mutableFloatStateOf(0f) }
     var error by remember(entry.uri) { mutableStateOf<String?>(null) }
-    var page by remember(entry.id) { mutableIntStateOf(entry.currentPage) }
-    var lastPage by remember(entry.id) { mutableIntStateOf(entry.lastVisiblePage) }
+    // Read to the end, it opens at its start again; it stays read until its cover is opened.
+    val startPage = remember(entry.id) { entry.resumePage }
+    var page by remember(entry.id) { mutableIntStateOf(startPage) }
+    var lastPage by remember(entry.id) { mutableIntStateOf(if (entry.isFinished) startPage else entry.lastVisiblePage) }
     // Two layers: the menu (page navigation) and, on demand, the reading settings.
     var overlay by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
@@ -251,7 +253,7 @@ fun ReaderScreen(
                             setReadingMode(readingMode)
                             setDoubleTapZoom(doubleTapZoom)
                             setEdgeSpring(edgeSpring)
-                            setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, shapes, entry.currentPage, closed = true)
+                            setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, shapes, startPage, closed = true)
                             curlView = this
                         }
                     },
