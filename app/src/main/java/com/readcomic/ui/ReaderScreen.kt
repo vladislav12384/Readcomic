@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,6 +56,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -81,6 +83,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -122,12 +125,14 @@ fun ReaderScreen(
     night: NightSettings,
     readingMode: ReadingMode,
     doubleTapZoom: DoubleTapZoom,
+    edgeSpring: Boolean,
     orientation: OrientationLock,
     pageAspects: suspend (ComicSource, onProgress: (Float) -> Unit) -> FloatArray,
     onTableChange: (ReadingTable) -> Unit,
     onNightChange: (NightSettings) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
     onDoubleTapZoomChange: (DoubleTapZoom) -> Unit,
+    onEdgeSpringChange: (Boolean) -> Unit,
     onOrientationChange: (OrientationLock) -> Unit,
     onPageChanged: (first: Int, last: Int) -> Unit,
     onBack: () -> Unit,
@@ -205,6 +210,9 @@ fun ReaderScreen(
     LaunchedEffect(curlView, doubleTapZoom) {
         curlView?.setDoubleTapZoom(doubleTapZoom)
     }
+    LaunchedEffect(curlView, edgeSpring) {
+        curlView?.setEdgeSpring(edgeSpring)
+    }
 
     Box(Modifier.fillMaxSize().background(tint)) {
         val opened = source
@@ -242,6 +250,7 @@ fun ReaderScreen(
                             }
                             setReadingMode(readingMode)
                             setDoubleTapZoom(doubleTapZoom)
+                            setEdgeSpring(edgeSpring)
                             setComic(PageLoader { index, w, h -> opened.loadPage(index, w, h) }, shapes, entry.currentPage, closed = true)
                             curlView = this
                         }
@@ -354,11 +363,13 @@ fun ReaderScreen(
                 night = night,
                 readingMode = readingMode,
                 doubleTapZoom = doubleTapZoom,
+                edgeSpring = edgeSpring,
                 orientation = orientation,
                 onTableChange = onTableChange,
                 onNightChange = onNightChange,
                 onReadingModeChange = onReadingModeChange,
                 onDoubleTapZoomChange = onDoubleTapZoomChange,
+                onEdgeSpringChange = onEdgeSpringChange,
                 onOrientationChange = onOrientationChange,
             )
         }
@@ -476,11 +487,13 @@ private fun SettingsPanel(
     night: NightSettings,
     readingMode: ReadingMode,
     doubleTapZoom: DoubleTapZoom,
+    edgeSpring: Boolean,
     orientation: OrientationLock,
     onTableChange: (ReadingTable) -> Unit,
     onNightChange: (NightSettings) -> Unit,
     onReadingModeChange: (ReadingMode) -> Unit,
     onDoubleTapZoomChange: (DoubleTapZoom) -> Unit,
+    onEdgeSpringChange: (Boolean) -> Unit,
     onOrientationChange: (OrientationLock) -> Unit,
 ) {
     Column(
@@ -539,6 +552,16 @@ private fun SettingsPanel(
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(start = 72.dp, end = 20.dp, bottom = 6.dp),
         )
+        SettingsSwitch(
+            "Пружина у края",
+            if (edgeSpring) {
+                "Приближённая страница чуть уходит за край и возвращается"
+            } else {
+                "Приближённая страница останавливается у края"
+            },
+            edgeSpring,
+            onEdgeSpringChange,
+        )
         SettingsRow("Экран") {
             ModeChip("Как в системе", orientation == OrientationLock.SYSTEM) { onOrientationChange(OrientationLock.SYSTEM) }
             ModeChip("Вертикально", orientation == OrientationLock.PORTRAIT) { onOrientationChange(OrientationLock.PORTRAIT) }
@@ -593,6 +616,25 @@ private fun NightSlider(label: String, value: Float, onChange: (Float) -> Unit) 
             modifier = Modifier.width(52.dp),
         )
         Slider(value = value, onValueChange = onChange, modifier = Modifier.weight(1f))
+    }
+}
+
+/** A setting that is on or off; a touch anywhere on the row turns it over. */
+@Composable
+private fun SettingsSwitch(label: String, caption: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .padding(horizontal = 20.dp, vertical = 6.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Color.White, style = MaterialTheme.typography.labelLarge)
+            Text(caption, color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

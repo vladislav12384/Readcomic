@@ -109,6 +109,8 @@ class PageCurlView(context: Context) : GLSurfaceView(context) {
 
     fun setDoubleTapZoom(zoom: PageTurnController.DoubleTapZoom) = onGl { controller.doubleTapZoom = zoom }
 
+    fun setEdgeSpring(on: Boolean) = onGl { controller.edgeSpring = on }
+
     fun turnNext() = onGl { controller.turnForward() }
 
     fun turnPrevious() = onGl { controller.turnBackward() }

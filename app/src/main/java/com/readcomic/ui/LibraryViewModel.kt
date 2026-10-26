@@ -76,6 +76,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     )
     val doubleTapZoom: StateFlow<DoubleTapZoom> = _doubleTapZoom.asStateFlow()
 
+    /** Whether the zoomed page gives way past its edges and springs back while reading: on unless turned off. */
+    private val _edgeSpring = MutableStateFlow(prefs.getBoolean(KEY_EDGE_SPRING, true))
+    val edgeSpring: StateFlow<Boolean> = _edgeSpring.asStateFlow()
+
     private val _orientation = MutableStateFlow(
         runCatching { OrientationLock.valueOf(prefs.getString(KEY_ORIENTATION, null) ?: "") }.getOrDefault(OrientationLock.SYSTEM),
     )
@@ -376,6 +380,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit { putString(KEY_DOUBLE_TAP, zoom.name) }
     }
 
+    fun setEdgeSpring(on: Boolean) {
+        _edgeSpring.value = on
+        prefs.edit { putBoolean(KEY_EDGE_SPRING, on) }
+    }
+
     fun setShelfTheme(index: Int) {
         _shelfTheme.value = index
         prefs.edit { putInt(KEY_SHELF_THEME, index) }
@@ -427,6 +436,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_NIGHT_BRIGHTNESS = "night_brightness"
         private const val KEY_READING_MODE = "reading_mode"
         private const val KEY_DOUBLE_TAP = "double_tap_zoom"
+        private const val KEY_EDGE_SPRING = "edge_spring"
         private const val KEY_ORIENTATION = "orientation"
         private const val KEY_SHELF_MODE = "shelf_mode"
         private const val KEY_SHELF_THEME = "shelf_theme"

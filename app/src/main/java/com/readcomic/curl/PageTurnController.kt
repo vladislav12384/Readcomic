@@ -251,6 +251,11 @@ class PageTurnController(private val density: Float) {
     private var focusX = 0f
     private var focusY = 0f
 
+    // Without the spring, where the finger may move the page: within its edges, and back towards
+    // them from where a pinch left it.
+    private var holdX = 0f..0f
+    private var holdY = 0f..0f
+
     val isZoomed get() = scale > 1.01f
     val isTurning get() = turn != null
 
@@ -280,6 +285,12 @@ class PageTurnController(private val density: Float) {
 
     /** How far a double tap zooms in. */
     var doubleTapZoom = DoubleTapZoom.FILL
+
+    /**
+     * The zoomed page past its edges: on, it gives way like a rubber band and a thrown page bounces
+     * back softly; off, it stops at the edge.
+     */
+    var edgeSpring = true
 
     /**
      * @param imageAspects width / height of every page image, 0 where unknown.
@@ -1021,12 +1032,24 @@ class PageTurnController(private val density: Float) {
         anchorFingerY = y
         focusX = x
         focusY = y
+        holdX = limitsX(scale).let { min(it.start, offsetX)..max(it.endInclusive, offsetX) }
+        holdY = limitsY(scale).let { min(it.start, offsetY)..max(it.endInclusive, offsetY) }
     }
 
-    /** The finger is at ([x], [y]): the page follows it, giving way softly past the edges. */
+    /** The finger is at ([x], [y]): the page follows it, giving way softly past the edges or stopping at them. */
     fun panTo(x: Float, y: Float) {
-        offsetX = stretch(anchorOffsetX + x - anchorFingerX, limitsX(scale), viewWidth)
-        offsetY = stretch(anchorOffsetY + y - anchorFingerY, limitsY(scale), viewHeight)
+        val rawX = anchorOffsetX + x - anchorFingerX
+        val rawY = anchorOffsetY + y - anchorFingerY
+        if (edgeSpring) {
+            offsetX = stretch(rawX, limitsX(scale), viewWidth)
+            offsetY = stretch(rawY, limitsY(scale), viewHeight)
+        } else {
+            offsetX = rawX.coerceIn(holdX)
+            offsetY = rawY.coerceIn(holdY)
+            // Held at an edge, the page comes back as soon as the finger does, however far past it went.
+            anchorOffsetX += offsetX - rawX
+            anchorOffsetY += offsetY - rawY
+        }
         focusX = x
         focusY = y
     }
@@ -1064,11 +1087,22 @@ class PageTurnController(private val density: Float) {
         if (arrival != null) return
         val s = stretchScale(pinchScale * max(span, 1f) / pinchSpan)
         scale = s
-        offsetX = stretch(fx - pinchContentX * s, limitsX(s), viewWidth)
-        offsetY = stretch(fy - pinchContentY * s, limitsY(s), viewHeight)
+        val x = fx - pinchContentX * s
+        val y = fy - pinchContentY * s
+        if (edgeSpring) {
+            offsetX = stretch(x, limitsX(s), viewWidth)
+            offsetY = stretch(y, limitsY(s), viewHeight)
+        } else {
+            // Its edges go no further in than the screen's; smaller than the screen, it stays on it.
+            val r = contentRect()
+            offsetX = x.coerceIn(between(-r.left * s, viewWidth - r.right * s))
+            offsetY = y.coerceIn(between(-r.top * s, viewHeight - r.bottom * s))
+        }
         focusX = fx
         focusY = fy
     }
+
+    private fun between(a: Float, b: Float) = min(a, b)..max(a, b)
 
     fun endPinch() = settleZoom()
 
@@ -1107,7 +1141,7 @@ class PageTurnController(private val density: Float) {
         return (viewHeight - r.bottom * s)..(-r.top * s)
     }
 
-    /** Past the edge the page moves less and less, up to a quarter of the screen: a rubber band. */
+    /** Past the edge the page moves less and less, up to a tenth of the screen: a rubber band. */
     private fun stretch(raw: Float, limits: ClosedFloatingPointRange<Float>, size: Float): Float {
         if (raw in limits) return raw
         val edge = if (raw < limits.start) limits.start else limits.endInclusive
@@ -1323,9 +1357,15 @@ class PageTurnController(private val density: Float) {
             p += v * dt
             v *= exp(-FLING_FRICTION * dt)
             if (p !in limits) {
-                // Hitting the edge: however hard the throw, the page only bounces a little.
+                // Without the spring it stops at the edge.
+                if (!edgeSpring) return Glide(p.coerceIn(limits), 0f, false)
+                // Hitting the edge: however hard the throw, the page only bounces a little, and no
+                // further past it in that frame than at the speed it keeps.
                 spring = true
-                v = v.coerceIn(-BOUNCE_MAX_SPEED * density, BOUNCE_MAX_SPEED * density)
+                val keep = BOUNCE_MAX_SPEED * density
+                v = v.coerceIn(-keep, keep)
+                val edge = p.coerceIn(limits)
+                p = edge + (p - edge).coerceIn(-keep * dt, keep * dt)
             }
             if (!spring && abs(v) < 20f) v = 0f
         }
@@ -1372,7 +1412,7 @@ class PageTurnController(private val density: Float) {
         private const val GLIDE_DURATION = 0.45f
         private const val GLIDE_PER_SCREEN = 0.22f
         private const val FLING_FRICTION = 4.5f
-        private const val BOUNCE_OMEGA = 14f
+        private const val BOUNCE_OMEGA = 20f
 
         // The closed comic falling onto the table: time to fall, to settle, its turn and tilt in the hand.
         private const val APPEAR_DURATION = 0.22f
@@ -1389,10 +1429,10 @@ class PageTurnController(private val density: Float) {
         private const val MAX_START_SIZE = 2.6f
 
         /** Speed (dp per second) a thrown page keeps when it hits an edge. */
-        private const val BOUNCE_MAX_SPEED = 1400f
+        private const val BOUNCE_MAX_SPEED = 800f
 
         /** How far past an edge the page can be stretched (part of the screen), and how stiffly. */
-        private const val OVERSCROLL = 0.22f
-        private const val RUBBER = 0.55f
+        private const val OVERSCROLL = 0.1f
+        private const val RUBBER = 0.3f
     }
 }

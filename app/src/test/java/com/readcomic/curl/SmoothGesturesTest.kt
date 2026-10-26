@@ -2,6 +2,7 @@ package com.readcomic.curl
 
 import com.readcomic.curl.PageTurnController.ReadingMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -131,7 +132,7 @@ class SmoothGesturesTest {
         c.panTo(5500f, 500f)
         val edge = -c.singleRect(0).left * c.scale
         val stretched = c.offsetX - edge
-        assertTrue("stretched by $stretched", stretched > 0f && stretched < 1080f * 0.22f)
+        assertTrue("stretched by $stretched", stretched > 0f && stretched < 1080f * 0.1f)
         // Pulling further stretches less and less.
         c.panTo(9500f, 500f)
         assertTrue(c.offsetX - edge > stretched)
@@ -161,8 +162,108 @@ class SmoothGesturesTest {
             t += 1f / 60f
             furthest = max(furthest, c.offsetX - edge)
         }
-        assertTrue("overshoots a little: $furthest", furthest > 1f && furthest < 1080f * 0.15f)
+        assertTrue("overshoots a little: $furthest", furthest > 1f && furthest < 1080f * 0.06f)
         assertEquals(edge, c.offsetX, 0.5f)
         assertTrue(abs(c.offsetY) >= 0f)
+    }
+
+    @Test
+    fun withoutTheSpringThePageStopsAtTheEdge() {
+        val c = zoomed().apply { edgeSpring = false }
+        val edge = -c.singleRect(0).left * c.scale
+        c.beginPan(500f, 500f)
+        val toEdge = edge - c.offsetX
+        c.panTo(500f + toEdge + 600f, 500f)
+        assertEquals(edge, c.offsetX, 0.01f)
+        // However far past the edge the finger went, the page comes back with it at once.
+        c.panTo(500f + toEdge + 500f, 500f)
+        assertEquals(edge - 100f, c.offsetX, 0.01f)
+        c.endPan(0f, 0f)
+        assertFalse("nothing to spring back", c.step(1f / 60f))
+        assertEquals(edge - 100f, c.offsetX, 0.01f)
+    }
+
+    @Test
+    fun withoutTheSpringAThrowStopsAtTheEdge() {
+        val c = zoomed().apply { edgeSpring = false }
+        val edge = -c.singleRect(0).left * c.scale
+        c.beginPan(500f, 500f)
+        c.endPan(9000f, 0f)
+        var t = 0f
+        while (c.step(1f / 60f) && t < 3f) {
+            t += 1f / 60f
+            assertTrue("never past the edge", c.offsetX <= edge + 0.01f)
+        }
+        assertEquals(edge, c.offsetX, 0.01f)
+    }
+
+    @Test
+    fun withoutTheSpringAPinchKeepsThePageWithinItsEdges() {
+        val c = zoomed().apply { edgeSpring = false }
+        val page = c.singleRect(0)
+        // Zooming out around a point near the top left corner, down past the size of the screen.
+        c.beginPinch(100f, 150f, 1000f)
+        for (i in 1..100) {
+            c.pinchTo(100f, 150f, 1000f - i * 9f)
+            for ((near, far, size) in listOf(
+                Triple(page.left * c.scale + c.offsetX, page.right * c.scale + c.offsetX, 1080f),
+                Triple(page.top * c.scale + c.offsetY, page.bottom * c.scale + c.offsetY, 2280f),
+            )) {
+                if (far - near > size) {
+                    assertTrue("covers the screen at ${c.scale}", near <= 0.01f && far >= size - 0.01f)
+                } else {
+                    assertTrue("on the screen at ${c.scale}", near >= -0.01f && far <= size + 0.01f)
+                }
+            }
+        }
+        c.endPinch()
+        var t = 0f
+        while (c.step(1f / 60f) && t < 2f) t += 1f / 60f
+        assertEquals(1f, c.scale, 0.001f)
+        assertEquals(0f, c.offsetX, 0.001f)
+        assertEquals(0f, c.offsetY, 0.001f)
+    }
+
+    @Test
+    fun withoutTheSpringAPinchOnTheCoverOfAnOpenBookStartsWithoutAJump() {
+        val c = PageTurnController(density = 2f).apply {
+            setViewSize(2280, 1080)
+            setReadingMode(ReadingMode.SPREAD)
+            setPages(FloatArray(10) { 0.65f }, startImage = 0)
+            edgeSpring = false
+        }
+        // The cover lies alone on the right: the point under the fingers stays under them.
+        c.beginPinch(1700f, 540f, 400f)
+        for (span in listOf(400f, 404f, 440f, 600f)) {
+            c.pinchTo(1700f, 540f, span)
+            assertEquals(1700f, 1700f * c.scale + c.offsetX, 0.01f)
+        }
+    }
+
+    @Test
+    fun withoutTheSpringOneFingerLeftAfterAPinchMovesThePageOnWithoutAJump() {
+        val c = zoomed().apply { edgeSpring = false }
+        val page = c.singleRect(0)
+        // Zoomed out until the page is lower than the screen, and moved down on it.
+        c.beginPinch(540f, 1140f, 900f)
+        c.pinchTo(540f, 1500f, 900f * 1.3f / c.scale)
+        assertTrue(page.height * c.scale < 2280f)
+        val middle = 2280f / 2f - (page.top + page.height / 2f) * c.scale
+        assertTrue("off the middle", c.offsetY > middle + 50f)
+        c.endPinch()
+        val before = c.offsetY
+        c.beginPan(540f, 1500f)
+        c.panTo(540f, 1500f)
+        assertEquals(before, c.offsetY, 0.01f)
+        // Down, past where the pinch left it, the page does not go; up, towards the middle, it does.
+        c.panTo(540f, 1600f)
+        assertEquals(before, c.offsetY, 0.01f)
+        c.panTo(540f, 1550f)
+        assertEquals(before - 50f, c.offsetY, 0.01f)
+        // Let go, it returns to the middle.
+        c.endPan(0f, 0f)
+        var t = 0f
+        while (c.step(1f / 60f) && t < 2f) t += 1f / 60f
+        assertEquals(middle, c.offsetY, 0.5f)
     }
 }
