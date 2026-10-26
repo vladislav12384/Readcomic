@@ -5,10 +5,12 @@ name: Build APK
 #
 # A commit whose message has "[preview]" in it builds a preview instead: "Readcomic β", an app of
 # its own installed next to the main one, published as a pre-release that is not the latest.
+#
+# Each Claude Code chat works on a branch of its own named "ccr-...", so any of them builds.
 
 on:
   push:
-    branches: [ccr-33b43d48-ibef97, main, master]
+    branches: ['ccr-*', main, master]
   workflow_dispatch:
 
 permissions:
